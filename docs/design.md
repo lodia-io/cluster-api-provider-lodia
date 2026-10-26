@@ -1,9 +1,10 @@
 # cluster-api-provider-lodia — design
 
 The first pass, 2026-10-26. Pinned sources: Cluster API [v1.14.3] (825a79d),
-kubeadm and Kubernetes v1.35.0, and Lodia at [lodia-io/lodia@2c79579][lo]
-(main, with the name cap of #22 and the API module of #23); links marked 5f212ed
-point at the Lodia the design study read, before the rename from Brygga.
+kubeadm and Kubernetes v1.35.0, and Lodia at [lodia-io/lodia@853f6a3][lo]
+(main, with the name cap of #22, the API module of #23 and its `k8s.io` floor
+of #27); links marked 5f212ed point at the Lodia the design study read, before
+the rename from Brygga.
 
 **In one paragraph.** `LodiaControlPlane` (`controlplane.lodia.io/v1alpha1`)
 is a Cluster API control plane object that owns exactly one Lodia
@@ -215,7 +216,7 @@ sequenceDiagram
 | 4.2 | an `Available` that survives node outages | done in #22: `Reachable` is about the API; the controller manager hold is `ControllerManagerHeld`, outside `Ready` ([conditions][lo-ref-conditions]) | — |
 | 4.3 | `<cluster>-ca` with `tls.crt`, and for CABPK ≤ v1.14.3 a non-empty `tls.key` | `<cp>-ca-bundle` (`ca.crt`); the key is PKI's alone by design | decided: wait for CAPI v1.15 |
 | 4.4 | names a CAPI `Cluster` can have | done in #22: a DNS-1035 label of at most 32 characters, CEL ([types][lo-name-cap], [field reference][lo-ref-name]) | — |
-| 4.5 | types a provider can import | done in #23: `go.lodia.io/lodia/api`, with the CRDs as `crds.FS`; it requires `k8s.io/api` v0.37, which has no `scheduling/v1alpha2`, while the `client-go` v0.36 that Cluster API v1.14.3 builds on imports it ([go.mod][lo-api-gomod]) | Lodia: require the lowest `k8s.io` its types need |
+| 4.5 | types a provider can import | done in #23 and #27: `go.lodia.io/lodia/api`, with the CRDs as `crds.FS`, requires `k8s.io/api` and `k8s.io/apimachinery` v0.35.0, below the v0.36 Cluster API v1.14.3 builds on ([go.mod][lo-api-gomod]) | — |
 | 4.6 | replica counts, only with `spec.replicas` | none | not now |
 | — | endpoint, kubeconfig, initialized, network | `status.endpoint.apiServer`, `<cp>-admin-kubeconfig`, `Ready`, `spec.network` | none needed |
 
@@ -401,19 +402,19 @@ out; CAPI then leaves the Cluster's control plane counters empty
 [kp-ca]: https://github.com/clastix/cluster-api-control-plane-provider-kamaji/blob/v0.21.0/controllers/kamajicontrolplane_controller_resources.go#L61-L124
 [k0-infra]: https://github.com/k0sproject/k0smotron/blob/v2.3.0/internal/controller/controlplane/k0smotron_controlplane_controller.go#L888-L959
 
-<!-- Lodia at 2c79579 -->
-[lo]: https://github.com/lodia-io/lodia/tree/2c795797cbc2cb1a45ebcb033bed5fa4ae86ef3c
-[lo-name-cap]: https://github.com/lodia-io/lodia/blob/2c795797cbc2cb1a45ebcb033bed5fa4ae86ef3c/api/v1alpha1/controlplane_types.go#L17
-[lo-ref-name]: https://github.com/lodia-io/lodia/blob/2c795797cbc2cb1a45ebcb033bed5fa4ae86ef3c/docs/api/controlplane.md?plain=1#L7-L16
-[lo-ref-conditions]: https://github.com/lodia-io/lodia/blob/2c795797cbc2cb1a45ebcb033bed5fa4ae86ef3c/docs/api/controlplane.md?plain=1#L121-L122
-[lo-ref-kubernetes]: https://github.com/lodia-io/lodia/blob/2c795797cbc2cb1a45ebcb033bed5fa4ae86ef3c/docs/api/controlplane.md?plain=1#L79
-[lo-api-gomod]: https://github.com/lodia-io/lodia/blob/2c795797cbc2cb1a45ebcb033bed5fa4ae86ef3c/api/go.mod#L1-L10
-[lo-version]: https://github.com/lodia-io/lodia/blob/2c795797cbc2cb1a45ebcb033bed5fa4ae86ef3c/api/v1alpha1/controlplane_types.go#L49-L55
-[lo-network]: https://github.com/lodia-io/lodia/blob/2c795797cbc2cb1a45ebcb033bed5fa4ae86ef3c/api/v1alpha1/controlplane_types.go#L272-L293
-[lo-paused]: https://github.com/lodia-io/lodia/blob/2c795797cbc2cb1a45ebcb033bed5fa4ae86ef3c/api/v1alpha1/controlplane_types.go#L124-L126
-[lo-names-ca]: https://github.com/lodia-io/lodia/blob/2c795797cbc2cb1a45ebcb033bed5fa4ae86ef3c/api/v1alpha1/names.go#L21-L29
-[lo-names-kubeconfig]: https://github.com/lodia-io/lodia/blob/2c795797cbc2cb1a45ebcb033bed5fa4ae86ef3c/api/v1alpha1/names.go#L45-L57
-[lo-labels]: https://github.com/lodia-io/lodia/blob/2c795797cbc2cb1a45ebcb033bed5fa4ae86ef3c/api/v1alpha1/labels.go#L17-L20
+<!-- Lodia at 853f6a3 -->
+[lo]: https://github.com/lodia-io/lodia/tree/853f6a3a92a317af45c48fddb919677c1121b8fd
+[lo-name-cap]: https://github.com/lodia-io/lodia/blob/853f6a3a92a317af45c48fddb919677c1121b8fd/api/v1alpha1/controlplane_types.go#L17
+[lo-ref-name]: https://github.com/lodia-io/lodia/blob/853f6a3a92a317af45c48fddb919677c1121b8fd/docs/api/controlplane.md?plain=1#L7-L16
+[lo-ref-conditions]: https://github.com/lodia-io/lodia/blob/853f6a3a92a317af45c48fddb919677c1121b8fd/docs/api/controlplane.md?plain=1#L122-L123
+[lo-ref-kubernetes]: https://github.com/lodia-io/lodia/blob/853f6a3a92a317af45c48fddb919677c1121b8fd/docs/api/controlplane.md?plain=1#L80
+[lo-api-gomod]: https://github.com/lodia-io/lodia/blob/853f6a3a92a317af45c48fddb919677c1121b8fd/api/go.mod#L1-L10
+[lo-version]: https://github.com/lodia-io/lodia/blob/853f6a3a92a317af45c48fddb919677c1121b8fd/api/v1alpha1/controlplane_types.go#L49-L55
+[lo-network]: https://github.com/lodia-io/lodia/blob/853f6a3a92a317af45c48fddb919677c1121b8fd/api/v1alpha1/controlplane_types.go#L272-L293
+[lo-paused]: https://github.com/lodia-io/lodia/blob/853f6a3a92a317af45c48fddb919677c1121b8fd/api/v1alpha1/controlplane_types.go#L124-L126
+[lo-names-ca]: https://github.com/lodia-io/lodia/blob/853f6a3a92a317af45c48fddb919677c1121b8fd/api/v1alpha1/names.go#L21-L29
+[lo-names-kubeconfig]: https://github.com/lodia-io/lodia/blob/853f6a3a92a317af45c48fddb919677c1121b8fd/api/v1alpha1/names.go#L45-L57
+[lo-labels]: https://github.com/lodia-io/lodia/blob/853f6a3a92a317af45c48fddb919677c1121b8fd/api/v1alpha1/labels.go#L17-L20
 
 <!-- Lodia at 5f212ed, as the design study read it -->
 [lo-claude]: https://github.com/lodia-io/lodia/blob/5f212ed9acd71fe2a944e5fe63cad73e3d17812e/CLAUDE.md?plain=1#L53-L54
