@@ -1,0 +1,58 @@
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: cluster-api-provider-lodia
+rules:
+- apiGroups:
+  - ""
+  resources:
+  - secrets
+  verbs:
+  - create
+  - get
+  - list
+  - patch
+  - watch
+- apiGroups:
+  - cluster.x-k8s.io
+  resources:
+  - clusters
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - controlplane.lodia.io
+  resources:
+  - lodiacontrolplanes
+  verbs:
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - controlplane.lodia.io
+  resources:
+  - lodiacontrolplanes/finalizers
+  verbs:
+  - update
+- apiGroups:
+  - controlplane.lodia.io
+  resources:
+  - lodiacontrolplanes/status
+  verbs:
+  - patch
+  - update
+- apiGroups:
+  - lodia.io
+  resources:
+  - controlplanes
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - watch
