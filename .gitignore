@@ -1,0 +1,12 @@
+# IDEs
+.idea
+.vscode
+*.iml
+
+# Go
+*.exe
+*.test
+*.out
+/bin/
+go.work
+go.work.sum
