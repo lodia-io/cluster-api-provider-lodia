@@ -1086,6 +1086,74 @@ func TestInitializationWaitsForBothSecrets(t *testing.T) {
 	initialized(t, lcp)
 }
 
+func TestASourceWithoutItsKeyDoesNotInitialize(t *testing.T) {
+	cluster, lcp := create(t, namespace(t), "keyless")
+	r := direct(t, interceptor.Funcs{})
+	untilBlockMove(t, r, lcp)
+	passes(t, r, lcp)
+	cp := controlPlaneOf(cluster)
+	get(t, cp)
+	setReady(t, cp)
+	lodiaSecrets(t, cluster, ownedBy(cp))
+	admin := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: cluster.Namespace, Name: lodiav1alpha1.AdminKubeconfigSecret.Name(cluster.Name)}}
+	get(t, admin)
+	admin.Data = map[string][]byte{"other": []byte("x")}
+	if err := k8s.Update(t.Context(), admin); err != nil {
+		t.Fatal(err)
+	}
+
+	passes(t, r, lcp)
+	get(t, lcp)
+	if i := lcp.Status.Initialization.ControlPlaneInitialized; i != nil {
+		t.Errorf("initialized with a source without its key: %+v", lcp.Status)
+	}
+}
+
+func TestATargetHeldElsewhereDoesNotInitialize(t *testing.T) {
+	cluster, lcp := create(t, namespace(t), "held")
+	r := direct(t, interceptor.Funcs{})
+	untilBlockMove(t, r, lcp)
+	passes(t, r, lcp)
+	cp := controlPlaneOf(cluster)
+	get(t, cp)
+	setReady(t, cp)
+	lodiaSecrets(t, cluster, ownedBy(cp))
+	held := secretOf(cluster, secret.ClusterCA)
+	held.Data = map[string][]byte{secret.TLSCrtDataName: []byte("another's")}
+	if err := k8s.Create(t.Context(), held); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := pass(t.Context(), r, lcp); err == nil {
+		t.Fatal("the pass returned no error")
+	}
+	get(t, lcp)
+	if i := lcp.Status.Initialization.ControlPlaneInitialized; i != nil {
+		t.Errorf("initialized with a target held elsewhere: %+v", lcp.Status)
+	}
+}
+
+func TestReadyAtAnOlderGenerationInitializes(t *testing.T) {
+	cluster, lcp := create(t, namespace(t), "older-generation")
+	r := direct(t, interceptor.Funcs{})
+	untilBlockMove(t, r, lcp)
+	passes(t, r, lcp)
+	cp := controlPlaneOf(cluster)
+	get(t, cp)
+	setReady(t, cp)
+	updateSpec(t, lcp, func(l *v1alpha1.LodiaControlPlane) { l.Spec.Version = "v1.35.9" })
+	passes(t, r, lcp)
+	get(t, cp)
+	if c := meta.FindStatusCondition(cp.Status.Conditions, lodiav1alpha1.ConditionReady); c == nil || c.ObservedGeneration == cp.Generation {
+		t.Fatalf("Ready %+v at generation %d", c, cp.Generation)
+	}
+
+	lodiaSecrets(t, cluster, ownedBy(cp))
+	passes(t, r, lcp)
+	get(t, lcp)
+	initialized(t, lcp)
+}
+
 func TestAForbiddenWriteIsReportedAsRefused(t *testing.T) {
 	isControlPlane := func(obj runtime.ApplyConfiguration) bool {
 		_, isSecret := obj.(*corev1ac.SecretApplyConfiguration)
