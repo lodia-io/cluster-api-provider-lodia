@@ -267,7 +267,8 @@ func cidrs(blocks []string) []lodiav1alpha1.CIDR {
 
 // copySecrets copies the CA bundle's certificates alone: the CA's key never
 // leaves Lodia's PKI. Only the Secrets of this ControlPlane are copied: a
-// predecessor's may still await the garbage collector.
+// predecessor's may still await the garbage collector. A source without its key
+// counts as missing: applying it would blank the last good copy.
 func (r *Reconciler) copySecrets(ctx context.Context, cluster *clusterv1.Cluster, lcp *v1alpha1.LodiaControlPlane, cp *unstructured.Unstructured) error {
 	for _, c := range []struct {
 		from    lodiav1alpha1.Secret
@@ -284,7 +285,7 @@ func (r *Reconciler) copySecrets(ctx context.Context, cluster *clusterv1.Cluster
 		} else if err != nil {
 			return err
 		}
-		if !metav1.IsControlledBy(source, cp) {
+		if !metav1.IsControlledBy(source, cp) || len(source.Data[c.fromKey]) == 0 {
 			continue
 		}
 		if err := r.applySecret(ctx, cluster, lcp, secret.Name(cluster.Name, c.to), map[string][]byte{c.toKey: source.Data[c.fromKey]}); err != nil {

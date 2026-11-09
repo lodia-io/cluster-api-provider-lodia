@@ -966,6 +966,60 @@ func TestAPredecessorsSecretsAreNotCopied(t *testing.T) {
 	get(t, secretOf(cluster, secret.ClusterCA))
 }
 
+func TestASourceWithoutItsKeyKeepsTheLastGoodCopy(t *testing.T) {
+	cluster, lcp, _, r, issued := readyControlPlane(t, "sigma")
+	admin := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: cluster.Namespace, Name: lodiav1alpha1.AdminKubeconfigSecret.Name(cluster.Name)}}
+	get(t, admin)
+	kubeconfig := admin.Data[lodiav1alpha1.KubeconfigKey]
+	admin.Data = map[string][]byte{"other": []byte("x")}
+	if err := k8s.Update(t.Context(), admin); err != nil {
+		t.Fatal(err)
+	}
+	bundle := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: cluster.Namespace, Name: lodiav1alpha1.CABundleSecret.Name(cluster.Name)}}
+	get(t, bundle)
+	bundle.Data[lodiav1alpha1.CACertKey] = []byte{}
+	if err := k8s.Update(t.Context(), bundle); err != nil {
+		t.Fatal(err)
+	}
+
+	passes(t, r, lcp)
+
+	copied := secretOf(cluster, secret.Kubeconfig)
+	get(t, copied)
+	if !bytes.Equal(copied.Data[secret.KubeconfigDataName], kubeconfig) {
+		t.Errorf("the good kubeconfig was replaced by %q", copied.Data[secret.KubeconfigDataName])
+	}
+	ca := secretOf(cluster, secret.ClusterCA)
+	get(t, ca)
+	if !bytes.Equal(ca.Data[secret.TLSCrtDataName], issued.cert) {
+		t.Errorf("the good certificate was replaced by %q", ca.Data[secret.TLSCrtDataName])
+	}
+}
+
+func TestASourceWithoutItsKeyWritesNoCopy(t *testing.T) {
+	cluster, lcp := create(t, namespace(t), "upsilon")
+	r := direct(t, interceptor.Funcs{})
+	untilBlockMove(t, r, lcp)
+	passes(t, r, lcp)
+	cp := controlPlaneOf(cluster)
+	get(t, cp)
+	for name, data := range map[string]map[string][]byte{
+		lodiav1alpha1.AdminKubeconfigSecret.Name(cluster.Name): {"wrong": []byte("x")},
+		lodiav1alpha1.CABundleSecret.Name(cluster.Name):        {lodiav1alpha1.CACertKey: {}},
+	} {
+		s := &corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{Namespace: cluster.Namespace, Name: name, Labels: map[string]string{lodiav1alpha1.ControlPlaneLabel: cluster.Name}, OwnerReferences: ownedBy(cp)},
+			Data:       data,
+		}
+		if err := k8s.Create(t.Context(), s); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	passes(t, r, lcp)
+	absent(t, secretOf(cluster, secret.Kubeconfig), secretOf(cluster, secret.ClusterCA))
+}
+
 func TestAnInitializedControlPlaneIsNotRecreated(t *testing.T) {
 	cluster, lcp, cp, r, issued := readyControlPlane(t, "xi")
 	if err := k8s.Delete(t.Context(), cp); err != nil {

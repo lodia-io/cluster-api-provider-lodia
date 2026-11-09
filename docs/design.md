@@ -130,7 +130,7 @@ importing `sigs.k8s.io/cluster-api/api` (its own module since v1.14) and
 3. Write the block-move annotation and end the pass, so it is stored before
    anything exists to move.
 4. Apply the `ControlPlane`, unless it is gone and the `LodiaControlPlane`, read past the cache, is initialized: then report `ControlPlaneNotFound` and end the pass, since a new one would start with a new CA and an empty etcd and overwrite `<cluster>-ca` and `<cluster>-kubeconfig`.
-5. Copy the two Secrets from Lodia's, each when its source exists and the `ControlPlane` controls it; then copy the status.
+5. Copy the two Secrets from Lodia's, each when its source exists, holds its key and the `ControlPlane` controls it, so a source without its key leaves the last good copy; then copy the status.
    The `LodiaControlPlane` is patched once, at the end ([patch][patch]).
 
 Deletion: CAPI deletes workers first, then the control plane object, and waits
