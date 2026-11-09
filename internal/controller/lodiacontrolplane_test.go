@@ -1754,6 +1754,30 @@ func TestAResyncRepairsTheProvidersSecrets(t *testing.T) {
 	})
 }
 
+func TestTheCacheHoldsOnlyLodiasSecretsAndOnlyTheirMetadata(t *testing.T) {
+	mgr := startManager(t)
+	ns := namespace(t)
+	other := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "other"}}
+	lodias := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "lodias", Labels: map[string]string{lodiav1alpha1.ControlPlaneLabel: "x"}}}
+	for _, s := range []*corev1.Secret{other, lodias} {
+		if err := k8s.Create(t.Context(), s); err != nil {
+			t.Fatal(err)
+		}
+	}
+	metadata := func() *metav1.PartialObjectMetadata {
+		return &metav1.PartialObjectMetadata{TypeMeta: metav1.TypeMeta{APIVersion: "v1", Kind: "Secret"}}
+	}
+
+	eventually(t, func() error { return mgr.GetCache().Get(t.Context(), client.ObjectKeyFromObject(lodias), metadata()) })
+	if err := mgr.GetCache().Get(t.Context(), client.ObjectKeyFromObject(other), metadata()); !apierrors.IsNotFound(err) {
+		t.Errorf("a Secret without Lodia's label is in the cache: %v", err)
+	}
+	var notCached *cache.ErrResourceNotCached
+	if err := mgr.GetCache().Get(t.Context(), client.ObjectKeyFromObject(lodias), &corev1.Secret{}); !errors.As(err, &notCached) {
+		t.Errorf("reading a Secret's data through the cache returned %v", err)
+	}
+}
+
 func TestTheRoleCoversLeaderElectionAndTheMetricsFilter(t *testing.T) {
 	ns := namespace(t)
 	mgr, err := ctrl.NewManager(asController, ctrl.Options{
