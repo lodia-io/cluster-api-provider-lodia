@@ -442,8 +442,8 @@ func TestAClusterGetsItsControlPlaneAndTheContract(t *testing.T) {
 			return errors.New("not initialized")
 		case !meta.IsStatusConditionTrue(lcp.Status.Conditions, clusterv1.AvailableCondition):
 			return fmt.Errorf("conditions %+v", lcp.Status.Conditions)
-		case lcp.Status.Version != "v1.35.8":
-			return fmt.Errorf("version %q", lcp.Status.Version)
+		case lcp.Status.Version != "v1.35.8" || len(lcp.Status.Versions) != 1 || lcp.Status.Versions[0].Version != "v1.35.8":
+			return fmt.Errorf("version %q, versions %+v", lcp.Status.Version, lcp.Status.Versions)
 		}
 		return ready(lcp, metav1.ConditionTrue, lodiav1alpha1.ReasonReady, "")
 	})

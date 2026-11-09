@@ -113,6 +113,14 @@ type LodiaControlPlaneStatus struct {
 	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:MaxLength=16
 	Version string `json:"version,omitempty"`
+
+	// Versions holds one entry, Version, as the contract prefers.
+	// +optional
+	// +listType=map
+	// +listMapKey=version
+	// +kubebuilder:validation:MinItems=1
+	// +kubebuilder:validation:MaxItems=100
+	Versions []clusterv1.StatusVersion `json:"versions,omitempty"`
 }
 
 // LodiaControlPlaneInitializationStatus is the initialization the Cluster

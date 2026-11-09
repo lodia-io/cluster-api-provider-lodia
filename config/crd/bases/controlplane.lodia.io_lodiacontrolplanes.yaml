@@ -1103,6 +1103,30 @@ spec:
                 maxLength: 16
                 minLength: 1
                 type: string
+              versions:
+                description: Versions holds one entry, Version, as the contract prefers.
+                items:
+                  description: StatusVersion groups version-related status information.
+                  properties:
+                    replicas:
+                      description: replicas is the number of replicas at this version.
+                      format: int32
+                      minimum: 1
+                      type: integer
+                    version:
+                      description: version is the Kubernetes version.
+                      maxLength: 256
+                      minLength: 1
+                      type: string
+                  required:
+                  - version
+                  type: object
+                maxItems: 100
+                minItems: 1
+                type: array
+                x-kubernetes-list-map-keys:
+                - version
+                x-kubernetes-list-type: map
             type: object
         required:
         - spec
