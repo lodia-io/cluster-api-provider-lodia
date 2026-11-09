@@ -206,7 +206,7 @@ Lodia at the pin moves its target within a minor only ([target][lo-target]): a `
 | 4.1 | a control plane version in status | `status.kubernetes.version` ([field reference][lo-ref-kubernetes]) | — |
 | 4.2 | an `Available` that survives node outages | `Reachable` is about the API; the controller manager hold is `ControllerManagerHeld`, outside `Ready` ([conditions][lo-ref-conditions]) | — |
 | 4.3 | `<cluster>-ca` with `tls.crt` | `<cp>-ca-bundle` (`ca.crt`); the key is PKI's alone by design | — |
-| 4.4 | names a CAPI `Cluster` can have | a DNS-1035 label of at most 32 characters, CEL ([types][lo-name-cap], [field reference][lo-ref-name]) | — |
+| 4.4 | names a CAPI `Cluster` can have | a DNS-1035 label of at most 32 characters, CEL ([types][lo-name-cap], [field reference][lo-ref-name]); two Clusters in one namespace can claim one Secret name, as `a-admin-kubeconfig` is Cluster `a-admin`'s kubeconfig and `a`'s `<cp>-admin-kubeconfig` ([names.go][lo-names-kubeconfig]), and whoever comes first keeps the name, and the other reports it | — |
 | 4.5 | types a provider can import | `go.lodia.io/lodia/api`, with the CRDs as `crds.FS`, requires `k8s.io/api` and `k8s.io/apimachinery` v0.35.0, below the v0.37 Cluster API v1.15.0-beta.0 builds on ([go.mod][lo-api-gomod]) | — |
 | 4.6 | replica counts, only with `spec.replicas` | none | not now |
 | — | endpoint, kubeconfig, initialized, network | `status.endpoint.apiServer`, `<cp>-admin-kubeconfig`, `Ready`, `spec.network` | none needed |
