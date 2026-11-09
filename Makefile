@@ -27,10 +27,12 @@ verify: ## the check that says a change is done
 	[ "$$before" = "$$(cat $(GENERATED) | cksum)" ] || { echo "make generate changed the generated files: review and commit them"; exit 1; }
 	$(MAKE) --no-print-directory lint test
 
+# LC_ALL=C: a range in a case pattern follows the locale, and on macOS en_US.UTF-8 puts A in a-z.
 .PHONY: e2e-cluster
 e2e-cluster: ## refuse an E2E_CLUSTER the suite cannot use, before anything is created or removed
-	@name='$(E2E_CLUSTER)'; \
+	@name='$(E2E_CLUSTER)'; LC_ALL=C; \
 	case "$$name" in lodia-e2e*) ;; *) echo "E2E_CLUSTER $$name must start with lodia-e2e, the prefix the suite's guard accepts"; exit 1;; esac; \
+	case "$$name" in *[!a-z0-9-]*) echo "E2E_CLUSTER $$name has a character outside a-z, 0-9 and -: Lodia wants the name of the ControlPlane $$name-w to be a DNS-1035 label"; exit 1;; esac; \
 	case "$$name" in *-w) echo "E2E_CLUSTER $$name must not end in -w: the run named $${name%-w} removes the containers labelled $$name, which are the nodes of this kind cluster"; exit 1;; esac; \
 	[ $${#name} -le 30 ] || { echo "E2E_CLUSTER $$name has more than 30 characters: Lodia caps the name of the ControlPlane $$name-w at 32"; exit 1; }
 
