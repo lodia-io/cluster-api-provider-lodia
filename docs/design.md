@@ -30,7 +30,7 @@ or not built yet.
 | — | clusterctl: `control-plane-components.yaml` | a release artifact, not built yet | [components][cc-components] |
 | — | the manager's `--namespace` flag, a MUST for clusterctl, and `--watch-filter`, a MUST for several instances of a provider | not built yet, with the release artifacts; `todo.md` | [components][cc-components], [multiple instances][cp-multi] |
 | — | `clusterctl move`: moving deletes the source objects | blocked (§5) | [move][cc-move], [block-move][move-ann] |
-| — | `spec.replicas`, scale subresource, `status.selector` and the four counters ("mandatory if control plane has a notion of number of instances") | left out (§4.6) | [replicas][cp-replicas] |
+| — | `spec.replicas`, scale subresource, `status.selector` and the four counters ("mandatory if control plane has a notion of number of instances") | left out (§4.6); a topology must not set `replicas`, `rollout.after`, the machine template's `readinessGates` and `taints`, or the deletion timeouts, which the topology controller then writes and the CRD does not declare | [replicas][cp-replicas], [topology][topo-cp] |
 | — | `machineTemplate`, rollout after, in-place updates, machine placement, metadata propagation, `minReadySeconds` | no Machines | [machines][cp-machines] |
 
 No admission webhooks, as in Lodia ([CLAUDE.md][lo-claude]): the contract asks
@@ -363,6 +363,7 @@ out; CAPI then leaves the Cluster's control plane counters empty
 [move-ann]: https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/cmd/clusterctl/api/v1alpha3/annotations.go#L35-L43
 [move-wait]: https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/cmd/clusterctl/client/cluster/mover.go#L685-L735
 [move-crds]: https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/cmd/clusterctl/client/cluster/objectgraph.go#L420-L431
+[topo-cp]: https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/exp/topology/desiredstate/desired_state.go#L440-L531
 [move-delete]: https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/cmd/clusterctl/client/cluster/mover.go#L1260-L1312
 [paused]: https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/util/annotations/helpers.go#L31-L36
 [paused-cond]: https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/util/paused/paused.go#L44-L91
