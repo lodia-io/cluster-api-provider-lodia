@@ -58,7 +58,6 @@ metadata:
   name: ${CLUSTER_NAME}
   namespace: capi-join
   annotations:
-    cluster.x-k8s.io/managed-by: e2e
 spec:
   backend:
     docker: {}
