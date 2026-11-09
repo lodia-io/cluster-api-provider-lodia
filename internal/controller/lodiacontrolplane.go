@@ -300,7 +300,6 @@ func (r *Reconciler) copySecrets(ctx context.Context, cluster *clusterv1.Cluster
 		toKey   string
 	}{
 		{lodiav1alpha1.AdminKubeconfigSecret, lodiav1alpha1.KubeconfigKey, secret.Kubeconfig, secret.KubeconfigDataName},
-		{lodiav1alpha1.CABundleSecret, lodiav1alpha1.CACertKey, secret.ClusterCA, secret.TLSCrtDataName},
 	}
 	applied := 0
 	var errs []error
