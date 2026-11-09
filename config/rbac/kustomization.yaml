@@ -4,5 +4,3 @@ resources:
 - role.yaml
 - aggregated_role.yaml
 - role_binding.yaml
-- kubeadm_bootstrap_role.yaml
-- kubeadm_bootstrap_role_binding.yaml
