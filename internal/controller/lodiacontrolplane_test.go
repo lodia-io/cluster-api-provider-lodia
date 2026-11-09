@@ -706,6 +706,38 @@ func TestAWriteFailingMidPassIsRetried(t *testing.T) {
 	get(t, secretOf(cluster, secret.ClusterCA))
 }
 
+func TestAFailureOnOneSecretDoesNotStopTheOther(t *testing.T) {
+	cluster, lcp := create(t, namespace(t), "chi")
+	r := direct(t, interceptor.Funcs{})
+	untilBlockMove(t, r, lcp)
+	passes(t, r, lcp)
+	cp := controlPlaneOf(cluster)
+	get(t, cp)
+	lodiaSecrets(t, cluster, ownedBy(cp))
+
+	kubeconfigErr, caErr := errors.New("the kubeconfig write failed"), errors.New("the CA write failed")
+	failing := map[string]error{"chi-kubeconfig": kubeconfigErr}
+	broken := direct(t, interceptor.Funcs{
+		Apply: func(ctx context.Context, c client.WithWatch, obj runtime.ApplyConfiguration, opts ...client.ApplyOption) error {
+			if s, ok := obj.(*corev1ac.SecretApplyConfiguration); ok && failing[*s.Name] != nil {
+				return failing[*s.Name]
+			}
+			return c.Apply(ctx, obj, opts...)
+		},
+	})
+	if err := pass(t.Context(), broken, lcp); !errors.Is(err, kubeconfigErr) {
+		t.Fatalf("the pass returned %v", err)
+	}
+	absent(t, secretOf(cluster, secret.Kubeconfig))
+	get(t, secretOf(cluster, secret.ClusterCA))
+
+	failing["chi-ca"] = caErr
+	err := pass(t.Context(), broken, lcp)
+	if !errors.Is(err, kubeconfigErr) || !errors.Is(err, caErr) {
+		t.Fatalf("the pass returned %v, want both errors", err)
+	}
+}
+
 func TestARestartBetweenWritesResumes(t *testing.T) {
 	cluster, lcp := create(t, namespace(t), "theta")
 	untilBlockMove(t, direct(t, interceptor.Funcs{}), lcp)

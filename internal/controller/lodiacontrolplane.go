@@ -268,8 +268,10 @@ func cidrs(blocks []string) []lodiav1alpha1.CIDR {
 // copySecrets copies the CA bundle's certificates alone: the CA's key never
 // leaves Lodia's PKI. Only the Secrets of this ControlPlane are copied: a
 // predecessor's may still await the garbage collector. A source without its key
-// counts as missing: applying it would blank the last good copy.
+// counts as missing: applying it would blank the last good copy. One Secret's
+// failure does not stop the other's copy.
 func (r *Reconciler) copySecrets(ctx context.Context, cluster *clusterv1.Cluster, lcp *v1alpha1.LodiaControlPlane, cp *unstructured.Unstructured) error {
+	var errs []error
 	for _, c := range []struct {
 		from    lodiav1alpha1.Secret
 		fromKey string
@@ -283,16 +285,17 @@ func (r *Reconciler) copySecrets(ctx context.Context, cluster *clusterv1.Cluster
 		if err := r.APIReader.Get(ctx, client.ObjectKey{Namespace: cluster.Namespace, Name: c.from.Name(cluster.Name)}, source); apierrors.IsNotFound(err) {
 			continue
 		} else if err != nil {
-			return err
+			errs = append(errs, err)
+			continue
 		}
 		if !metav1.IsControlledBy(source, cp) || len(source.Data[c.fromKey]) == 0 {
 			continue
 		}
 		if err := r.applySecret(ctx, cluster, lcp, secret.Name(cluster.Name, c.to), map[string][]byte{c.toKey: source.Data[c.fromKey]}); err != nil {
-			return err
+			errs = append(errs, err)
 		}
 	}
-	return nil
+	return errors.Join(errs...)
 }
 
 func (r *Reconciler) applySecret(ctx context.Context, cluster *clusterv1.Cluster, lcp *v1alpha1.LodiaControlPlane, name string, data map[string][]byte) error {

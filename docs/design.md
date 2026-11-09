@@ -75,7 +75,7 @@ the network, so a field the CRD test makes the two schemas share needs no code.
 | `Paused` | CAPI's pause |
 
 A refused or blocked write, like any other failed one, makes the pass return its error, and the pass is retried with backoff.
-While the `ControlPlane` exists and is the provider's, the pass still copies the Secrets and reports the status.
+While the `ControlPlane` exists and is the provider's, the pass still copies the Secrets and reports the status, and a failure on one Secret does not stop the other.
 
 ### `LodiaControlPlaneTemplate`
 
