@@ -109,8 +109,8 @@ type LodiaControlPlaneStatus struct {
 	// +optional
 	ExternalManagedControlPlane *bool `json:"externalManagedControlPlane,omitempty"`
 
-	// Version is the Kubernetes version every component runs, the
-	// ControlPlane's status.kubernetes.version.
+	// Version is the oldest Kubernetes version any part of the control plane
+	// runs, the ControlPlane's status.kubernetes.version.
 	// +optional
 	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:MaxLength=16

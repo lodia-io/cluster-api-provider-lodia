@@ -1100,8 +1100,8 @@ spec:
                 type: object
               version:
                 description: |-
-                  Version is the Kubernetes version every component runs, the
-                  ControlPlane's status.kubernetes.version.
+                  Version is the oldest Kubernetes version any part of the control plane
+                  runs, the ControlPlane's status.kubernetes.version.
                 maxLength: 16
                 minLength: 1
                 type: string
