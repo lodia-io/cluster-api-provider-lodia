@@ -934,6 +934,7 @@ func TestALeftoverSecretOutsideTheCacheIsLeftAlone(t *testing.T) {
 	if string(leftover.Data[secret.KubeconfigDataName]) != "a predecessor's kubeconfig" || len(leftover.OwnerReferences) != 0 || len(leftover.Labels) != 0 {
 		t.Errorf("the leftover changed: %v, owners %v, labels %v", leftover.Data, leftover.OwnerReferences, leftover.Labels)
 	}
+	get(t, secretOf(cluster, secret.ClusterCA))
 }
 
 func isSecretApply(obj runtime.ApplyConfiguration, name string) bool {
