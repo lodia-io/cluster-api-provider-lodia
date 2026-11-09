@@ -45,6 +45,7 @@ e2e-lodia: ## fetch Lodia at LODIA_COMMIT, the commit go.mod pins, into $(LODIA_
 e2e: e2e-cluster e2e-lodia ## the e2e suite, on a kind cluster of its own that e2e-cluster accepts, that it deletes afterwards with the containers of the Cluster the suite creates
 	mkdir -p $(E2E_DIR)
 	go tool kind create cluster --name $(E2E_CLUSTER) --kubeconfig $(E2E_DIR)/kubeconfig --config test/e2e/testdata/kind.yaml
+	rm -rf $(E2E_DIR)/artifacts
 	$(REMOVE_WORKERS) && E2E_KUBECONFIG=$(E2E_DIR)/kubeconfig go test -v -tags e2e -count=1 -timeout 45m ./test/e2e/...; status=$$?; \
 	$(REMOVE_WORKERS) || status=1; \
 	go tool kind delete cluster --name $(E2E_CLUSTER) --kubeconfig $(E2E_DIR)/kubeconfig; exit $$status

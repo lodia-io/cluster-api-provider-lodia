@@ -37,9 +37,10 @@ var (
 		devMachine,
 		{Group: "bootstrap.cluster.x-k8s.io", Version: "v1beta2", Kind: "KubeadmConfig"},
 		{Group: "lodia.io", Version: "v1alpha1", Kind: "ControlPlane"},
+		{Group: "druid.gardener.cloud", Version: "v1alpha1", Kind: "Etcd"},
 	}
 	datastoreClass = schema.GroupVersionKind{Group: "lodia.io", Version: "v1alpha1", Kind: "DatastoreClass"}
-	managers       = []string{"capi-system", "capi-kubeadm-bootstrap-system", "capd-system", providerNamespace, lodiaNamespace}
+	managers       = []string{"cert-manager", "capi-system", "capi-kubeadm-bootstrap-system", "capd-system", providerNamespace, lodiaNamespace, namespace}
 )
 
 func dump(ctx context.Context, cfg *envconf.Config) {
