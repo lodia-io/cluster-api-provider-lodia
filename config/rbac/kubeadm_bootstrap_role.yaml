@@ -1,4 +1,4 @@
-# @todo: workaround, undo it as the item "Drop the kubeadm bootstrap provider's access" in ../../todo.md says
+# @todo: label it as the item "Ship the kubeadm bootstrap provider's access" in ../../todo.md says
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:

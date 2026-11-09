@@ -15,6 +15,7 @@ How each rule of the contract is met, the life of the objects and the reasons: [
 - **Nothing is released.**
   [`config/default`](config/default) deploys the manager, and ko builds its image: `kustomize build config/default | ko resolve -f -`.
   No image is published and there are no release artifacts.
+- **A clusterctl install does not deliver the grant** that lets the kubeadm bootstrap provider read a `LodiaControlPlane`, which it needs for files with `contentFormat: Template` and, with v1.14.0 to v1.15.0-beta.0, for every join ([why](docs/design.md#what-the-provider-writes)).
 
 ## Build and test
 
