@@ -173,6 +173,16 @@ func (r *Reconciler) reconcileNormal(ctx context.Context, cluster *clusterv1.Clu
 	if err != nil {
 		return reportWriteError(lcp, err)
 	}
+	if current == nil {
+		initialized, err := r.initialized(ctx, lcp)
+		if err != nil {
+			return err
+		}
+		if initialized {
+			reportLost(lcp, cluster.Name)
+			return nil
+		}
+	}
 
 	cp, applyErr := r.applyControlPlane(ctx, cluster, lcp)
 	if applyErr != nil {
@@ -201,6 +211,17 @@ func (r *Reconciler) currentControlPlane(ctx context.Context, cluster *clusterv1
 		return nil, &controlledElsewhereError{kind: "ControlPlane", object: current}
 	}
 	return current, nil
+}
+
+// initialized reads past the cache: a stale LodiaControlPlane would recreate
+// a ControlPlane it has already reported.
+func (r *Reconciler) initialized(ctx context.Context, lcp *v1alpha1.LodiaControlPlane) (bool, error) {
+	fresh := &v1alpha1.LodiaControlPlane{}
+	if err := r.APIReader.Get(ctx, client.ObjectKeyFromObject(lcp), fresh); err != nil {
+		return false, err
+	}
+	initialized := fresh.Status.Initialization.ControlPlaneInitialized
+	return initialized != nil && *initialized, nil
 }
 
 func (r *Reconciler) applyControlPlane(ctx context.Context, cluster *clusterv1.Cluster, lcp *v1alpha1.LodiaControlPlane) (*unstructured.Unstructured, error) {
@@ -307,6 +328,16 @@ func report(lcp *v1alpha1.LodiaControlPlane, u *unstructured.Unstructured) error
 		return err
 	}
 	return conditions.SetMirrorConditionFromUnstructured(u, lcp, lodiav1alpha1.ConditionReady)
+}
+
+// reportLost keeps the verdict of a ControlPlane deleted behind the provider's
+// back: a new one would start with a new CA and an empty etcd.
+func reportLost(lcp *v1alpha1.LodiaControlPlane, name string) {
+	message := fmt.Sprintf("ControlPlane %s is gone and is not recreated: delete the Cluster to start over", name)
+	for _, conditionType := range []string{clusterv1.ReadyCondition, clusterv1.AvailableCondition} {
+		conditions.Set(lcp, metav1.Condition{Type: conditionType, Status: metav1.ConditionFalse,
+			Reason: v1alpha1.ControlPlaneNotFoundReason, Message: message})
+	}
 }
 
 // reportWriteError sets Ready for a write the API server refuses or another

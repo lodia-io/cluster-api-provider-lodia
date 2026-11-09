@@ -912,3 +912,56 @@ func TestAPredecessorsSecretsAreNotCopied(t *testing.T) {
 	get(t, secretOf(cluster, secret.Kubeconfig))
 	get(t, secretOf(cluster, secret.ClusterCA))
 }
+
+func TestAnInitializedControlPlaneIsNotRecreated(t *testing.T) {
+	cluster, lcp, cp, r, issued := readyControlPlane(t, "xi")
+	if err := k8s.Delete(t.Context(), cp); err != nil {
+		t.Fatal(err)
+	}
+
+	stale := direct(t, interceptor.Funcs{
+		Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+			err := c.Get(ctx, key, obj, opts...)
+			if l, ok := obj.(*v1alpha1.LodiaControlPlane); ok {
+				l.Status.Initialization.ControlPlaneInitialized = nil
+			}
+			return err
+		},
+	})
+	stale.APIReader = r.APIReader
+	passes(t, stale, lcp)
+	passes(t, r, lcp)
+
+	absent(t, cp)
+	get(t, lcp)
+	initialized(t, lcp)
+	if err := ready(lcp, metav1.ConditionFalse, v1alpha1.ControlPlaneNotFoundReason, "ControlPlane xi is gone"); err != nil {
+		t.Error(err)
+	}
+	available(t, lcp, metav1.ConditionFalse, v1alpha1.ControlPlaneNotFoundReason)
+	kept := secretOf(cluster, secret.ClusterCA)
+	get(t, kept)
+	if !bytes.Equal(kept.Data[secret.TLSCrtDataName], issued.cert) {
+		t.Error("the CA changed")
+	}
+}
+
+func TestATransientErrorReadingInitializationCreatesNothing(t *testing.T) {
+	cluster, lcp := create(t, namespace(t), "omicron")
+	r := direct(t, interceptor.Funcs{})
+	untilBlockMove(t, r, lcp)
+
+	unavailable := direct(t, interceptor.Funcs{
+		Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+			if _, ok := obj.(*v1alpha1.LodiaControlPlane); ok {
+				return apierrors.NewServiceUnavailable("the API server is restarting")
+			}
+			return c.Get(ctx, key, obj, opts...)
+		},
+	})
+	unavailable.Client = r.Client
+	if err := pass(t.Context(), unavailable, lcp); !apierrors.IsServiceUnavailable(err) {
+		t.Fatalf("the pass returned %v", err)
+	}
+	absent(t, controlPlaneOf(cluster))
+}

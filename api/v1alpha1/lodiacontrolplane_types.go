@@ -23,6 +23,10 @@ const (
 	// provider writes exists with another controller or none, named in the
 	// message; the provider leaves it alone.
 	ObjectsControlledElsewhereReason = "ObjectsControlledElsewhere"
+
+	// ControlPlaneNotFoundReason: the ControlPlane of an initialized
+	// LodiaControlPlane is gone; the provider does not recreate it.
+	ControlPlaneNotFoundReason = "ControlPlaneNotFound"
 )
 
 // LodiaControlPlane is a Cluster API control plane served by one Lodia
