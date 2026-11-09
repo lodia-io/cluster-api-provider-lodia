@@ -96,6 +96,7 @@ The cache resyncs every 10 minutes, Cluster API's default ([--sync-period][capi-
 
 RBAC is generated from markers into [`config/rbac/role.yaml`](../config/rbac/role.yaml).
 The envtest suite runs the controller, and a leader-elected manager, as a user bound to that role.
+Cluster API's kubeadm bootstrap provider reads the object behind `Cluster.spec.controlPlaneRef` on every worker join ([resolveFiles][cabpk-files]) while its ClusterRole grants that only for `kubeadmcontrolplanes` ([RBAC markers][cabpk-rbac]), so [`config/rbac/kubeadm_bootstrap_role.yaml`](../config/rbac/kubeadm_bootstrap_role.yaml) and its binding grant it `get` on `lodiacontrolplanes`.
 Module `go.lodia.io/cluster-api-provider-lodia`, importing `sigs.k8s.io/cluster-api/api` (its own module since v1.14) and `go.lodia.io/lodia/api` ([go.mod][lo-api-gomod]).
 
 ### A pass
@@ -250,6 +251,8 @@ Lodia's availability is a failure tolerance (`highAvailability`) with replica co
 [cabpk-cache]: https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/bootstrap/kubeadm/setup/setup.go#L48-L75
 [cache-infra]: https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/controllers/clustercache/cluster_cache.go#L483-L488
 [cache-rest]: https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/controllers/clustercache/cluster_accessor_client.go#L124-L164
+[cabpk-rbac]: https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/bootstrap/kubeadm/reconcilers/kubeadmconfig/kubeadmconfig_controller.go#L79-L83
+[cabpk-files]: https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/bootstrap/kubeadm/reconcilers/kubeadmconfig/kubeadmconfig_controller.go#L1023-L1027
 [cabpk-gate]: https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/bootstrap/kubeadm/reconcilers/kubeadmconfig/kubeadmconfig_controller.go#L356-L373
 [cabpk-worker]: https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/bootstrap/kubeadm/reconcilers/kubeadmconfig/kubeadmconfig_controller.go#L655-L697
 [cabpk-discovery]: https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/bootstrap/kubeadm/reconcilers/kubeadmconfig/kubeadmconfig_controller.go#L1276-L1363

@@ -1,0 +1,12 @@
+# @todo: workaround, undo it as the item "Drop the kubeadm bootstrap provider's access" in ../../todo.md says
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: capi-kubeadm-bootstrap-lodia-controlplane
+rules:
+- apiGroups:
+  - controlplane.lodia.io
+  resources:
+  - lodiacontrolplanes
+  verbs:
+  - get
