@@ -793,6 +793,7 @@ func TestAWriteFailingMidPassIsRetried(t *testing.T) {
 	passes(t, r, lcp)
 	cp := controlPlaneOf(cluster)
 	get(t, cp)
+	setReady(t, cp)
 	lodiaSecrets(t, cluster, ownedBy(cp))
 
 	if err := pass(t.Context(), r, lcp); !apierrors.IsInternalError(err) {
@@ -801,14 +802,22 @@ func TestAWriteFailingMidPassIsRetried(t *testing.T) {
 	get(t, secretOf(cluster, secret.Kubeconfig))
 	absent(t, secretOf(cluster, secret.ClusterCA))
 	get(t, lcp)
-	if c := meta.FindStatusCondition(lcp.Status.Conditions, clusterv1.ReadyCondition); c != nil && c.Reason == v1alpha1.RefusedReason {
-		t.Errorf("a server error reads as a refusal: %+v", c)
+	if err := ready(lcp, metav1.ConditionTrue, lodiav1alpha1.ReasonReady, ""); err != nil {
+		t.Errorf("a server error reads as a verdict: %v", err)
+	}
+	if lcp.Spec.ControlPlaneEndpoint != (clusterv1.APIEndpoint{Host: "203.0.113.10", Port: 31443}) {
+		t.Errorf("endpoint %+v, want it reported past the failed copy", lcp.Spec.ControlPlaneEndpoint)
+	}
+	if i := lcp.Status.Initialization.ControlPlaneInitialized; i != nil {
+		t.Errorf("initialized before the copy: %+v", lcp.Status)
 	}
 
 	if err := pass(t.Context(), r, lcp); err != nil {
 		t.Fatal(err)
 	}
 	get(t, secretOf(cluster, secret.ClusterCA))
+	get(t, lcp)
+	initialized(t, lcp)
 }
 
 func TestAFailureOnOneSecretDoesNotStopTheOther(t *testing.T) {
