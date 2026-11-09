@@ -70,7 +70,7 @@ the network, so a field the CRD test makes the two schemas share needs no code.
 
 | condition | written as |
 |---|---|
-| `Available` | a mirror of Lodia's `Reachable` at any generation: status, reason, message; `Unknown`, `NotYetReported` while the `ControlPlane` has none. It is not gated, since `Reachable` is a probe of the live endpoint, which a change to the spec does not take down, and the contract asks that `Available` hold through disruption; `False`, `ControlPlaneNotFound` when an initialized `ControlPlane` is gone |
+| `Available` | a mirror of Lodia's `Reachable` at any generation: status, reason, message; `Unknown`, `NotYetReported` while the `ControlPlane` has none. It is not gated, since `Reachable` is a probe of the live endpoint, which a change to the spec does not take down, and the contract asks that `Available` hold through disruption; `False`, `ControlPlaneNotFound` when an initialized `ControlPlane` is gone, and `False`, `Deleting` while the `LodiaControlPlane` is being deleted |
 | `Ready` | a mirror of Lodia's `Ready` at the `ControlPlane`'s current generation ([Lodia's rule][lo-ref-ready]), otherwise `Unknown`, `LatestGenerationNotObserved`, unless the provider cannot write: `Refused` (the API server refuses the `ControlPlane` or a Secret; the message is the server's), `ObjectsControlledElsewhere` (the `ControlPlane`, `<cluster>-kubeconfig` or `<cluster>-ca` exists with another controller, or none, which the message names), `ControlPlaneNotFound` (an initialized `ControlPlane` is gone), `Deleting` (waiting for the `ControlPlane` to go) |
 | `Paused` | CAPI's pause |
 

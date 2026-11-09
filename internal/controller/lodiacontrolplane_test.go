@@ -533,6 +533,7 @@ func TestDeletingWaitsUntilTheControlPlaneIsGone(t *testing.T) {
 		get(t, lcp)
 		return ready(lcp, metav1.ConditionFalse, clusterv1.DeletingReason, "waiting for ControlPlane gamma to be deleted")
 	})
+	available(t, lcp, metav1.ConditionFalse, clusterv1.DeletingReason)
 	if !strings.Contains(strings.Join(lcp.Finalizers, ","), v1alpha1.Finalizer) {
 		t.Errorf("finalizers %v", lcp.Finalizers)
 	}

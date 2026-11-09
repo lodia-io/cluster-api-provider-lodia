@@ -366,10 +366,12 @@ func report(lcp *v1alpha1.LodiaControlPlane, u *unstructured.Unstructured, secre
 // reportLost keeps the verdict of a ControlPlane deleted behind the provider's
 // back; docs/design.md, step 4 of a pass, says why it is not recreated.
 func reportLost(lcp *v1alpha1.LodiaControlPlane, name string) {
-	message := fmt.Sprintf("ControlPlane %s is gone and is not recreated: delete the Cluster to start over", name)
+	setDown(lcp, v1alpha1.ControlPlaneNotFoundReason, fmt.Sprintf("ControlPlane %s is gone and is not recreated: delete the Cluster to start over", name))
+}
+
+func setDown(lcp *v1alpha1.LodiaControlPlane, reason, message string) {
 	for _, conditionType := range []string{clusterv1.ReadyCondition, clusterv1.AvailableCondition} {
-		conditions.Set(lcp, metav1.Condition{Type: conditionType, Status: metav1.ConditionFalse,
-			Reason: v1alpha1.ControlPlaneNotFoundReason, Message: message})
+		conditions.Set(lcp, metav1.Condition{Type: conditionType, Status: metav1.ConditionFalse, Reason: reason, Message: message})
 	}
 }
 
@@ -417,7 +419,6 @@ func (r *Reconciler) reconcileDelete(ctx context.Context, cluster *clusterv1.Clu
 			return err
 		}
 	}
-	conditions.Set(lcp, metav1.Condition{Type: clusterv1.ReadyCondition, Status: metav1.ConditionFalse,
-		Reason: clusterv1.DeletingReason, Message: fmt.Sprintf("waiting for ControlPlane %s to be deleted", cp.Name)})
+	setDown(lcp, clusterv1.DeletingReason, fmt.Sprintf("waiting for ControlPlane %s to be deleted", cp.Name))
 	return nil
 }
