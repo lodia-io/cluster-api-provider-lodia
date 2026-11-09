@@ -8,8 +8,8 @@ Workers are to join through CAPI's kubeadm bootstrap provider (CABPK) with the b
 
 ## 1. The contract, as built
 
-Contract v1beta2 ([rules][cp-rules]). ✓ = built; — = not applicable, left out
-or not built yet.
+Contract v1beta2 ([rules][cp-rules]).
+✓ = built; — = not applicable, left out or not built yet.
 
 | | rule | the provider | source |
 |---|---|---|---|
@@ -33,18 +33,13 @@ or not built yet.
 | — | `spec.replicas`, scale subresource, `status.selector` and the four counters ("mandatory if control plane has a notion of number of instances") | left out (§4.6); a topology must not set `replicas`, `rollout.after`, the machine template's `readinessGates` and `taints`, or the deletion timeouts, which the topology controller then writes and the CRD does not declare | [replicas][cp-replicas], [topology][topo-cp] |
 | — | `machineTemplate`, rollout after, in-place updates, machine placement, metadata propagation, `minReadySeconds` | no Machines | [machines][cp-machines] |
 
-No admission webhooks, as in Lodia ([CLAUDE.md][lo-claude]): the contract asks
-for none, and every rule below is CEL.
+No admission webhooks, as in Lodia ([CLAUDE.md][lo-claude]): the contract asks for none, and every rule below is CEL.
 
 ## 2. The provider's API
 
 ### `LodiaControlPlane`
 
-The pass-through fields reuse the nested types of `go.lodia.io/lodia/api`, so
-their CEL comes along; the rules Lodia puts on `ControlPlaneSpec` and its fields
-(required, immutable, set at creation only, the `Compact` exclusions) are
-repeated, and `api/v1alpha1/crd_test.go` fails when the two schemas drift, as
-Lodia's own [etcddruid_test.go][lo-etcddruid-test] does for etcd-druid's.
+The pass-through fields reuse the nested types of `go.lodia.io/lodia/api`, so their CEL comes along; the rules Lodia puts on `ControlPlaneSpec` and its fields (required, immutable, set at creation only, the `Compact` exclusions) are repeated, and `api/v1alpha1/crd_test.go` fails when the two schemas drift, as Lodia's own [etcddruid_test.go][lo-etcddruid-test] does for etcd-druid's.
 Rules that name `spec.network` stay Lodia's, since the network comes from the `Cluster`: its API server refuses the `ControlPlane`, and the provider reports `Refused`.
 
 | `spec` field | → Lodia `ControlPlane` | rule |
@@ -58,9 +53,7 @@ Rules that name `spec.network` stay Lodia's, since the network comes from the `C
 | — | `paused` | never written: Lodia's own pause stays a break-glass switch on the `ControlPlane` ([paused][lo-paused]) |
 | (`Cluster.spec.clusterNetwork.apiServerPort`) | — | ignored: the port is the endpoint mode's ([api-exposure][lo-exposure]) |
 
-The spec reaches the `ControlPlane` by its JSON field names: the provider
-converts the `LodiaControlPlane`'s spec, drops `controlPlaneEndpoint` and adds
-the network, so a field the CRD test makes the two schemas share needs no code.
+The spec reaches the `ControlPlane` by its JSON field names: the provider converts the `LodiaControlPlane`'s spec, drops `controlPlaneEndpoint` and adds the network, so a field the CRD test makes the two schemas share needs no code.
 
 | `status` field | from Lodia | note |
 |---|---|---|
@@ -79,10 +72,7 @@ While the `ControlPlane` exists and is the provider's, the pass still copies the
 
 ### `LodiaControlPlaneTemplate`
 
-`spec.template.{metadata, spec}`, where `spec` holds the pass-through fields
-without `version`, `controlPlaneEndpoint` and `restoreFrom`, with the same
-rules; per-cluster values such as `endpoint.gateway.hostnames` come from
-ClusterClass variables and patches.
+`spec.template.{metadata, spec}`, where `spec` holds the pass-through fields without `version`, `controlPlaneEndpoint` and `restoreFrom`, with the same rules; per-cluster values such as `endpoint.gateway.hostnames` come from ClusterClass variables and patches.
 
 ### What the provider writes
 
@@ -93,53 +83,34 @@ ClusterClass variables and patches.
 | Secret `<cluster>-ca` | | the same | the same | `tls.crt` = key `ca.crt` of `<cp>-ca-bundle` ([names.go][lo-names-ca]); no `tls.key` (§4.3) |
 | annotation `clusterctl.cluster.x-k8s.io/block-move` | on the `LodiaControlPlane` | | | `"true"`, written before the `ControlPlane` is created (§5) |
 
-All three objects are applied server-side as `cluster-api-provider-lodia`, both
-Secrets with `type: cluster.x-k8s.io/secret` ([common_types.go][api-consts]).
-Before each apply the provider reads the object from the API server, past the
-cache: when it exists with another controller, or none, the provider leaves it
-alone and reports `ObjectsControlledElsewhere`, so it never adopts a
-predecessor's object.
+All three objects are applied server-side as `cluster-api-provider-lodia`, both Secrets with `type: cluster.x-k8s.io/secret` ([common_types.go][api-consts]).
+Before each apply the provider reads the object from the API server, past the cache: when it exists with another controller, or none, the provider leaves it alone and reports `ObjectsControlledElsewhere`, so it never adopts a predecessor's object.
 It copies a source Secret only when the `ControlPlane` controls it, so a predecessor's Secrets awaiting the garbage collector stay out of the contract's.
-The `ControlPlane` sits in the Cluster's namespace
-because owner references never cross namespaces ([owners][k8s-owners]); it is
-named after the Cluster, not after the `LodiaControlPlane`, because a Cluster
-has one `controlPlaneRef`, ClusterClass names that object `<cluster>-<random>`,
-and the name stays when the object is replaced.
+The `ControlPlane` sits in the Cluster's namespace because owner references never cross namespaces ([owners][k8s-owners]); it is named after the Cluster, not after the `LodiaControlPlane`, because a Cluster has one `controlPlaneRef`, ClusterClass names that object `<cluster>-<random>`, and the name stays when the object is replaced.
 
-The cache holds no Secret data. The provider watches the metadata of Secrets
-labelled `lodia.io/control-plane` ([labels][lo-labels]), maps
-`<cp>-admin-kubeconfig` and `<cp>-ca-bundle` to the `LodiaControlPlane` of the
-Cluster of that name, and reads both, and its own two, from the API server on
-every pass. `ControlPlane` and `Cluster` events map the same way, through the
-Cluster's `controlPlaneRef`, so a leftover `ControlPlane` of another owner
-wakes the provider when it goes.
+The cache holds no Secret data.
+The provider watches the metadata of Secrets labelled `lodia.io/control-plane` ([labels][lo-labels]), maps `<cp>-admin-kubeconfig` and `<cp>-ca-bundle` to the `LodiaControlPlane` of the Cluster of that name, and reads both, and its own two, from the API server on every pass.
+`ControlPlane` and `Cluster` events map the same way, through the Cluster's `controlPlaneRef`, so a leftover `ControlPlane` of another owner wakes the provider when it goes.
 A pass has a minute ([ReconciliationTimeout][cr-timeout]), and ten passes run at once, as in Lodia's controllers ([workers][lo-workers]), so one tenant's blocked write does not hold up another's.
 The cache resyncs every 10 minutes, Cluster API's default ([--sync-period][capi-sync]), which repairs the provider's own Secrets, which no watch covers, and a missed delete event.
 
 RBAC is generated from markers into [`config/rbac/role.yaml`](../config/rbac/role.yaml).
-The envtest suite runs the controller, and a leader-elected manager, as a user bound to that role. Module `go.lodia.io/cluster-api-provider-lodia`,
-importing `sigs.k8s.io/cluster-api/api` (its own module since v1.14) and
-`go.lodia.io/lodia/api` ([go.mod][lo-api-gomod]).
+The envtest suite runs the controller, and a leader-elected manager, as a user bound to that role.
+Module `go.lodia.io/cluster-api-provider-lodia`, importing `sigs.k8s.io/cluster-api/api` (its own module since v1.14) and `go.lodia.io/lodia/api` ([go.mod][lo-api-gomod]).
 
 ### A pass
 
-1. Wait for the owner reference the Cluster controller writes
-   ([ensureOwnerRefAndLabel][cl-ownerref]), as both reference providers do.
-2. Add the finalizer `controlplane.lodia.io/lodiacontrolplane`
-   ([EnsureFinalizer][finalizers]); then pause ([EnsurePausedCondition][paused-cond]).
-3. Write the block-move annotation and end the pass, so it is stored before
-   anything exists to move.
+1. Wait for the owner reference the Cluster controller writes ([ensureOwnerRefAndLabel][cl-ownerref]), as both reference providers do.
+2. Add the finalizer `controlplane.lodia.io/lodiacontrolplane` ([EnsureFinalizer][finalizers]); then pause ([EnsurePausedCondition][paused-cond]).
+3. Write the block-move annotation and end the pass, so it is stored before anything exists to move.
 4. Apply the `ControlPlane`, unless it is gone and the `LodiaControlPlane`, read past the cache, is initialized: then report `ControlPlaneNotFound` and end the pass, since a new one would start with a new CA and an empty etcd and overwrite `<cluster>-ca` and `<cluster>-kubeconfig`.
    The apply carries the UID the read found, so a `ControlPlane` gone in between fails the apply, and the next pass reports it.
 5. Copy the two Secrets from Lodia's, each when its source exists, holds its key and the `ControlPlane` controls it, so a source without its key leaves the last good copy; then copy the status.
    The `LodiaControlPlane` is patched once, at the end ([patch][patch]).
 
-Deletion: CAPI deletes workers first, then the control plane object, and waits
-for it ([deletion order][cl-delete]). The provider deletes the `ControlPlane`
-and keeps its finalizer until a read past the cache finds the `ControlPlane`
-gone, which Lodia's `lodia.io/datastore` finalizer decides once the etcd is
-released (a paused `ControlPlane` waits for unpause); the Secrets go with
-their owner. A `ControlPlane` of another controller is left alone.
+Deletion: CAPI deletes workers first, then the control plane object, and waits for it ([deletion order][cl-delete]).
+The provider deletes the `ControlPlane` and keeps its finalizer until a read past the cache finds the `ControlPlane` gone, which Lodia's `lodia.io/datastore` finalizer decides once the etcd is released (a paused `ControlPlane` waits for unpause); the Secrets go with their owner.
+A `ControlPlane` of another controller is left alone.
 Once the `Cluster` or the owner reference is gone, nothing is left to wait for: the provider removes its finalizer, and the garbage collector deletes the `ControlPlane` and the copies, which the `LodiaControlPlane` owns.
 
 ## 3. The flow
@@ -164,37 +135,12 @@ sequenceDiagram
   B->>T: bootstrap token Secret, through <cluster>-kubeconfig
 ```
 
-1. Lodia builds the `ControlPlane`: Workloads publishes `status.endpoint`, PKI
-   writes the admin kubeconfig against it ([pki/secrets.go][lo-admin]) and the
-   CA bundle, Tenant writes `cluster-info`, `kubeadm-config`, `kubelet-config`
-   and the RBAC for the group `system:bootstrappers:kubeadm:default-node-token`
-   ([bootstrap.yaml][lo-bootstrap-rbac]), Lifecycle sets `Ready`
-   ([README][lo-readme-lifecycle]).
-2. The provider does not wait for `Cluster.spec.controlPlaneEndpoint`: CAPI
-   copies the control plane's endpoint only once the control plane reports
-   initialized, and only while the Cluster's is empty
-   ([cluster_controller_phases.go][cl-cp-endpoint]). A Cluster without
-   `infrastructureRef` counts as provisioned ([no infra][cl-noinfra]); with an
-   InfraCluster, that one must leave the endpoint empty.
-3. CAPI sets `ControlPlaneInitialized` on the Cluster ([status][cs-init]); its
-   ClusterCache connects with `<cluster>-kubeconfig` once the infrastructure is
-   provisioned, and refuses exec or auth-provider credentials
-   ([cluster_cache.go][cache-infra], [REST config][cache-rest]); Lodia's admin
-   kubeconfig carries client certificates.
-4. The MachineSet controller creates Machines only while the control plane is
-   neither provisioning (no reported version) nor upgrading (`spec.version` above
-   it), and, with `KubeadmConfigTemplate`, only for the control plane's minor
-   ([preflight][ms-preflight], [kubeadm skew][ms-kubeadm], gate on by default:
-   [feature.go][feature], [contract state][ct-state]).
-5. CABPK waits for `ControlPlaneInitialized` ([gate][cabpk-gate]), reads
-   `<cluster>-ca`, pins every certificate in `tls.crt`, takes
-   `apiServerEndpoint` from the Cluster, and creates a bootstrap token in the
-   tenant through the ClusterCache ([joinWorker][cabpk-worker],
-   [reconcileDiscovery][cabpk-discovery], [token.go][cabpk-token]); kubeadm
-   join reads `cluster-info`, waits for its JWS signature from Lodia's
-   bootstrap signer, checks any CA against the pins and bootstraps against the
-   server `cluster-info` names ([discovery][kubeadm-discovery],
-   [pins][kubeadm-pins], [JWS wait][kubeadm-jws]).
+1. Lodia builds the `ControlPlane`: Workloads publishes `status.endpoint`, PKI writes the admin kubeconfig against it ([pki/secrets.go][lo-admin]) and the CA bundle, Tenant writes `cluster-info`, `kubeadm-config`, `kubelet-config` and the RBAC for the group `system:bootstrappers:kubeadm:default-node-token` ([bootstrap.yaml][lo-bootstrap-rbac]), Lifecycle sets `Ready` ([README][lo-readme-lifecycle]).
+2. The provider does not wait for `Cluster.spec.controlPlaneEndpoint`: CAPI copies the control plane's endpoint only once the control plane reports initialized, and only while the Cluster's is empty ([cluster_controller_phases.go][cl-cp-endpoint]).
+   A Cluster without `infrastructureRef` counts as provisioned ([no infra][cl-noinfra]); with an InfraCluster, that one must leave the endpoint empty.
+3. CAPI sets `ControlPlaneInitialized` on the Cluster ([status][cs-init]); its ClusterCache connects with `<cluster>-kubeconfig` once the infrastructure is provisioned, and refuses exec or auth-provider credentials ([cluster_cache.go][cache-infra], [REST config][cache-rest]); Lodia's admin kubeconfig carries client certificates.
+4. The MachineSet controller creates Machines only while the control plane is neither provisioning (no reported version) nor upgrading (`spec.version` above it), and, with `KubeadmConfigTemplate`, only for the control plane's minor ([preflight][ms-preflight], [kubeadm skew][ms-kubeadm], gate on by default: [feature.go][feature], [contract state][ct-state]).
+5. CABPK waits for `ControlPlaneInitialized` ([gate][cabpk-gate]), reads `<cluster>-ca`, pins every certificate in `tls.crt`, takes `apiServerEndpoint` from the Cluster, and creates a bootstrap token in the tenant through the ClusterCache ([joinWorker][cabpk-worker], [reconcileDiscovery][cabpk-discovery], [token.go][cabpk-token]); kubeadm join reads `cluster-info`, waits for its JWS signature from Lodia's bootstrap signer, checks any CA against the pins and bootstraps against the server `cluster-info` names ([discovery][kubeadm-discovery], [pins][kubeadm-pins], [JWS wait][kubeadm-jws]).
 
 **Upgrade.** A new `spec.version` within a minor reaches Lodia, and `status.version` moves when Lodia's version does, so CAPI holds new workers as "upgrading" until then and then lets the MachineDeployment follow.
 Lodia at the pin moves its target within a minor only ([target][lo-target]): a `spec.version` of another minor leaves the target where it is, `Progressing` `False`, `Unsupported`, so `status.kubernetes.version` stays behind and CAPI holds new workers ([contract state][ct-state]) until Lodia builds minor upgrades.
@@ -213,13 +159,9 @@ Lodia at the pin moves its target within a minor only ([target][lo-target]): a `
 
 ### 4.1 A version in status
 
-With no `status.versions` and no `status.version`, the contract reads the
-control plane as provisioning; with `spec.version` above the reported one, as
-upgrading ([contract state][ct-state]). Either holds every new Machine in the
-MachineSet preflight `ControlPlaneIsStable`, which runs by default
-([preflight][ms-preflight], [feature.go][feature]), and the topology controller
-uses the same checks for ClusterClass upgrades. Without a version, no worker is
-ever created.
+With no `status.versions` and no `status.version`, the contract reads the control plane as provisioning; with `spec.version` above the reported one, as upgrading ([contract state][ct-state]).
+Either holds every new Machine in the MachineSet preflight `ControlPlaneIsStable`, which runs by default ([preflight][ms-preflight], [feature.go][feature]), and the topology controller uses the same checks for ClusterClass upgrades.
+Without a version, no worker is ever created.
 Lodia's `status.kubernetes.version` is what the provider copies: the oldest version any part of the control plane runs ([field reference][lo-ref-kubernetes]).
 
 ### 4.3 The CA Secret
@@ -228,76 +170,39 @@ CABPK looks up `<cluster>-ca` for a worker as a set holding the cluster CA alone
 The worker path never uses the key: it hashes the certificates in `tls.crt` ([Hashes][sec-hashes], [discovery][cabpk-discovery]).
 A test calls `NewCertificatesForWorker`, `Lookup` and `EnsureAllExist` on the Secret the provider writes.
 
-Lodia's `<cp>-ca-bundle` has the cluster CA under `ca.crt`, two during a trust
-anchor rotation; the key lives in `<cp>-cakey-cluster`, PKI's alone, never
-mounted ([README][lo-readme-secrets]). The provider copies `ca.crt` into
-`tls.crt`; during a rotation both CAs travel, CABPK pins both and kubeadm
-accepts any ([pins][kubeadm-pins]). It never copies the key: CABPK's cache
-keeps the data of every labelled `-ca` Secret ([CABPK cache][cabpk-cache]), and
-the trust anchor's key would sit in another controller's memory and in a Secret
-every reader of the namespace's Secrets can read. Decided: no placeholder `tls.key`.
+Lodia's `<cp>-ca-bundle` has the cluster CA under `ca.crt`, two during a trust anchor rotation; the key lives in `<cp>-cakey-cluster`, PKI's alone, never mounted ([README][lo-readme-secrets]).
+The provider copies `ca.crt` into `tls.crt`; during a rotation both CAs travel, CABPK pins both and kubeadm accepts any ([pins][kubeadm-pins]).
+It never copies the key: CABPK's cache keeps the data of every labelled `-ca` Secret ([CABPK cache][cabpk-cache]), and the trust anchor's key would sit in another controller's memory and in a Secret every reader of the namespace's Secrets can read.
+Decided: no placeholder `tls.key`.
 
 ### 4.6 Replica counts: not now
 
-They belong to the contract only together with `spec.replicas`, the scale
-subresource, `status.selector`, the four counters and a replica count per
-version entry ([replicas][cp-replicas], [version][cp-version]). Lodia's
-availability is a failure tolerance (`highAvailability`) with replica counts
-derived from it, not one number of instances, so the provider leaves `replicas`
-out; CAPI then leaves the Cluster's control plane counters empty
-([setControlPlaneReplicas][cs-replicas]).
+They belong to the contract only together with `spec.replicas`, the scale subresource, `status.selector`, the four counters and a replica count per version entry ([replicas][cp-replicas], [version][cp-version]).
+Lodia's availability is a failure tolerance (`highAvailability`) with replica counts derived from it, not one number of instances, so the provider leaves `replicas` out; CAPI then leaves the Cluster's control plane counters empty ([setControlPlaneReplicas][cs-replicas]).
 
 ## 5. Risks and open questions
 
 **Risks**
 
-1. *`clusterctl move`* re-creates the objects elsewhere and deletes the source
-   ones ([deleteSourceObject][move-delete]); the `ControlPlane` would follow its
-   owner into garbage collection. Every `LodiaControlPlane` carries
-   `clusterctl.cluster.x-k8s.io/block-move`, which makes move wait and fail
-   before it creates anything ([annotation][move-ann], [wait][move-wait]): a
-   hosted control plane does not move.
+1. *`clusterctl move`* re-creates the objects elsewhere and deletes the source ones ([deleteSourceObject][move-delete]); the `ControlPlane` would follow its owner into garbage collection.
+   Every `LodiaControlPlane` carries `clusterctl.cluster.x-k8s.io/block-move`, which makes move wait and fail before it creates anything ([annotation][move-ann], [wait][move-wait]): a hosted control plane does not move.
    Both CRDs carry `clusterctl.cluster.x-k8s.io`, the label move finds CRDs by ([discovery][move-crds]), so the annotation is seen on an installation made by hand too.
    The Clusters and ClusterClasses stay paused after that failure ([move][move-pause]): set each Cluster's `spec.paused` back to `false` and remove each ClusterClass's `cluster.x-k8s.io/paused` annotation.
-2. *The endpoint is copied once* ([Cluster controller][cl-cp-endpoint]): a
-   LoadBalancer Service recreated with a new address, or in node port mode the
-   loss of the node the endpoint names ([field reference][lo-ref-nodeport]),
-   leaves the Cluster, and every later join, on the old address.
-3. *MachineHealthCheck against the controller manager hold.* When nodes are cut
-   off from the control plane, Lodia holds the controller manager so nothing
-   evicts their pods ([README][lo-readme-health]); an MHC sees the same nodes
-   NotReady and replaces the Machines. Recommend
-   `remediation.triggerIf.unhealthyLessThanOrEqualTo` below Lodia's hold
-   fraction, 0.6 ([MHC][mhc], [configuration][lo-readme-config]).
-4. *Hibernation (Lodia's phase 3).* The API is down by design: the ClusterCache
-   probe fails, the Cluster reports unavailable, and an MHC replaces every node.
-5. *The management cluster reaches the tenant through the public endpoint*,
-   the address in `<cluster>-kubeconfig`: gateway mode needs in-cluster DNS and
-   a hairpin through the Gateway, and a NetworkPolicy on the API server has to
-   admit CAPI's controllers from inside the management cluster
-   ([README][lo-readme-netpol]).
-6. *One credential for two uses.* CAPI's kubeconfig "MUST not be shared with
-   other users or applications" ([kubeconfig][cp-kubeconfig]); Lodia's admin
-   kubeconfig is also the platform's automation credential
-   ([short-lived-kubeconfigs][lo-shortlived]), so revoking one revokes both.
-7. *Stricter skew for CAPI workers.* The kubeadm preflight creates workers only
-   on the control plane's minor ([kubeadm skew][ms-kubeadm]), while Lodia lets
-   nodes lag three minors; existing workers keep running.
+2. *The endpoint is copied once* ([Cluster controller][cl-cp-endpoint]): a LoadBalancer Service recreated with a new address, or in node port mode the loss of the node the endpoint names ([field reference][lo-ref-nodeport]), leaves the Cluster, and every later join, on the old address.
+3. *MachineHealthCheck against the controller manager hold.* When nodes are cut off from the control plane, Lodia holds the controller manager so nothing evicts their pods ([README][lo-readme-health]); an MHC sees the same nodes NotReady and replaces the Machines.
+   Recommend `remediation.triggerIf.unhealthyLessThanOrEqualTo` below Lodia's hold fraction, 0.6 ([MHC][mhc], [configuration][lo-readme-config]).
+4. *Hibernation (Lodia's phase 3).* The API is down by design: the ClusterCache probe fails, the Cluster reports unavailable, and an MHC replaces every node.
+5. *The management cluster reaches the tenant through the public endpoint*, the address in `<cluster>-kubeconfig`: gateway mode needs in-cluster DNS and a hairpin through the Gateway, and a NetworkPolicy on the API server has to admit CAPI's controllers from inside the management cluster ([README][lo-readme-netpol]).
+6. *One credential for two uses.* CAPI's kubeconfig "MUST not be shared with other users or applications" ([kubeconfig][cp-kubeconfig]); Lodia's admin kubeconfig is also the platform's automation credential ([short-lived-kubeconfigs][lo-shortlived]), so revoking one revokes both.
+7. *Stricter skew for CAPI workers.* The kubeadm preflight creates workers only on the control plane's minor ([kubeadm skew][ms-kubeadm]), while Lodia lets nodes lag three minors; existing workers keep running.
 8. *Contract window.* v1beta2 since CAPI v1.11; `status.version` goes with the next contract version ([version][cp-version]); the v1beta1 contract is on track to go in v1.16 ([v1.14 notes][mig-removals]); Lodia's minors 1.35–1.37 are all supported by v1.15 ([support matrix][capi-versions]).
 
 **Open questions**
 
 1. InfraClusters: who marks a `KubevirtCluster` provisioned for Segla's KubeVirt pools: Segla's `cluster` service, or an opt-in in the provider, as k0smotron does ([k0smotron][k0-infra]); Kamaji does it by default ([Kamaji][kp-patchcluster], [its feature gate][kp-gate])?
-2. A dedicated CAPI identity (risk 6): a second standing kubeconfig from PKI, or
-   accept the shared one.
-3. Hibernation and MHC (risks 3, 4): document, or have the provider surface the
-   state to CAPI, which has no contract for pausing remediation.
-4. The cut-over from Kamaji ([roadmap][lo-roadmap-cutover]) is more than a
-   `controlPlaneRef` swap, which CAPI allows ([webhook][wh-cpref]): the Cluster
-   keeps its endpoint; the old object owns `<cluster>-kubeconfig` and
-   `<cluster>-ca` ([Kamaji][kp-ca]), which this provider then reports as
-   `ObjectsControlledElsewhere` until they go; and Lodia's cluster CA is not the
-   one the nodes trust.
+2. A dedicated CAPI identity (risk 6): a second standing kubeconfig from PKI, or accept the shared one.
+3. Hibernation and MHC (risks 3, 4): document, or have the provider surface the state to CAPI, which has no contract for pausing remediation.
+4. The cut-over from Kamaji ([roadmap][lo-roadmap-cutover]) is more than a `controlPlaneRef` swap, which CAPI allows ([webhook][wh-cpref]): the Cluster keeps its endpoint; the old object owns `<cluster>-kubeconfig` and `<cluster>-ca` ([Kamaji][kp-ca]), which this provider then reports as `ObjectsControlledElsewhere` until they go; and Lodia's cluster CA is not the one the nodes trust.
 
 <!-- Cluster API v1.15.0-beta.0 -->
 [v1.15.0-beta.0]: https://github.com/kubernetes-sigs/cluster-api/tree/v1.15.0-beta.0
