@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 
@@ -17,7 +18,24 @@ import (
 
 const lodiaAPI = "go.lodia.io/lodia/api"
 
-var lodiaCommit = regexp.MustCompile(`(?m)^LODIA_COMMIT\s*[:?]?=\s*(\S+)\s*$`)
+var (
+	lodiaCommit = regexp.MustCompile(`(?m)^LODIA_COMMIT\s*[:?]?=\s*(\S+)\s*$`)
+	imageLine   = regexp.MustCompile(`(?m)^([ \t]*(?:-[ \t]+)?image:[ \t]+)"?([^"\s]+)"?[ \t]*$`)
+)
+
+func pinImages(manifest []byte, digests map[string]string) ([]byte, []string) {
+	var unpinned []string
+	pinned := imageLine.ReplaceAllFunc(manifest, func(line []byte) []byte {
+		match := imageLine.FindSubmatch(line)
+		digest, ok := digests[string(match[2])]
+		if !ok {
+			unpinned = append(unpinned, string(match[2]))
+			return line
+		}
+		return fmt.Appendf(nil, "%s%s@%s", match[1], match[2], digest)
+	})
+	return pinned, unpinned
+}
 
 func lodiaPin(gomod, makefile []byte) error {
 	file, err := modfile.Parse("go.mod", gomod, nil)
@@ -78,6 +96,28 @@ func TestLodiaCommitIsThePinnedAPI(t *testing.T) {
 				t.Fatalf("want accepted, got %v", err)
 			case c.want != "" && (err == nil || !strings.Contains(err.Error(), c.want)):
 				t.Fatalf("want an error with %q, got %v", c.want, err)
+			}
+		})
+	}
+}
+
+func TestEveryImageLineIsPinned(t *testing.T) {
+	digests := map[string]string{"example.io/a:v1": "sha256:aa", "example.io/b:v1": "sha256:bb"}
+	cases := []struct {
+		name, manifest, want string
+		unpinned             []string
+	}{
+		{"a key", "        image: example.io/a:v1\n", "        image: example.io/a:v1@sha256:aa\n", nil},
+		{"a quoted value", "image: \"example.io/a:v1\"\n", "image: example.io/a:v1@sha256:aa\n", nil},
+		{"the first key of a list item", "      - image: example.io/b:v1\n", "      - image: example.io/b:v1@sha256:bb\n", nil},
+		{"a list item with an image outside the table", "      - image: example.io/c:v1\n", "      - image: example.io/c:v1\n", []string{"example.io/c:v1"}},
+		{"a key that only ends in image", "      - myimage: example.io/a:v1\n", "      - myimage: example.io/a:v1\n", nil},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got, unpinned := pinImages([]byte(c.manifest), digests)
+			if string(got) != c.want || !slices.Equal(unpinned, c.unpinned) {
+				t.Fatalf("got %q and unpinned %v, want %q and %v", got, unpinned, c.want, c.unpinned)
 			}
 		})
 	}

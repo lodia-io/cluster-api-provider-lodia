@@ -18,7 +18,6 @@ import (
 	"os/exec"
 	"path"
 	"path/filepath"
-	"regexp"
 	goruntime "runtime"
 	"slices"
 	"strings"
@@ -81,8 +80,6 @@ var (
 	}
 )
 
-var imageLine = regexp.MustCompile(`(?m)^([ \t]*image:[ \t]+)"?([^"\s]+)"?[ \t]*$`)
-
 func (r release) manifest(ctx context.Context, dir string) ([]byte, error) {
 	cached := filepath.Join(dir, path.Base(r.url))
 	raw, err := os.ReadFile(cached)
@@ -106,16 +103,7 @@ func (r release) manifest(ctx context.Context, dir string) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("render %s: %w", r.url, err)
 	}
-	var unpinned []string
-	pinned := imageLine.ReplaceAllFunc(rendered, func(line []byte) []byte {
-		match := imageLine.FindSubmatch(line)
-		digest, ok := r.images[string(match[2])]
-		if !ok {
-			unpinned = append(unpinned, string(match[2]))
-			return line
-		}
-		return fmt.Appendf(nil, "%s%s@%s", match[1], match[2], digest)
-	})
+	pinned, unpinned := pinImages(rendered, r.images)
 	if len(unpinned) > 0 {
 		return nil, fmt.Errorf("%s runs images without a digest in the suite: %s", r.url, strings.Join(unpinned, ", "))
 	}
