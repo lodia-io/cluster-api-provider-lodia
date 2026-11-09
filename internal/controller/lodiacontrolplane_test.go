@@ -1193,6 +1193,7 @@ func TestATargetHeldElsewhereDoesNotInitialize(t *testing.T) {
 	setReady(t, cp)
 	lodiaSecrets(t, cluster, ownedBy(cp))
 	held := secretOf(cluster, secret.ClusterCA)
+	held.Type = clusterv1.ClusterSecretType
 	held.Data = map[string][]byte{secret.TLSCrtDataName: []byte("another's")}
 	if err := k8s.Create(t.Context(), held); err != nil {
 		t.Fatal(err)
