@@ -112,6 +112,7 @@ Deletion: CAPI deletes workers first, then the control plane object, and waits f
 The provider deletes the `ControlPlane` and keeps its finalizer until a read past the cache finds the `ControlPlane` gone, which Lodia's `lodia.io/datastore` finalizer decides once the etcd is released (a paused `ControlPlane` waits for unpause); the Secrets go with their owner.
 A `ControlPlane` of another controller is left alone.
 Once the `Cluster` or the owner reference is gone, nothing is left to wait for: the provider removes its finalizer, and the garbage collector deletes the `ControlPlane` and the copies, which the `LodiaControlPlane` owns.
+The `cluster.x-k8s.io/paused` annotation on the `LodiaControlPlane` holds this removal too; with the owner reference gone the `Cluster`'s `spec.paused` cannot be read, so it does not hold it.
 
 ## 3. The flow
 

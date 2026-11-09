@@ -761,6 +761,27 @@ func TestDeletionWaitsWhilePaused(t *testing.T) {
 	}
 }
 
+func TestThePausedAnnotationHoldsDeletionOnceTheClusterIsGone(t *testing.T) {
+	cluster, lcp, _, r, _ := readyControlPlane(t, "phi-paused")
+	updateSpec(t, lcp, func(l *v1alpha1.LodiaControlPlane) {
+		metav1.SetMetaDataAnnotation(&l.ObjectMeta, clusterv1.PausedAnnotation, "")
+	})
+	deleteTheCluster(t, cluster)
+	if err := k8s.Delete(t.Context(), lcp); err != nil {
+		t.Fatal(err)
+	}
+
+	passes(t, r, lcp)
+	get(t, lcp)
+	if !strings.Contains(strings.Join(lcp.Finalizers, ","), v1alpha1.Finalizer) {
+		t.Errorf("finalizers %v", lcp.Finalizers)
+	}
+
+	updateSpec(t, lcp, func(l *v1alpha1.LodiaControlPlane) { delete(l.Annotations, clusterv1.PausedAnnotation) })
+	passes(t, r, lcp)
+	absent(t, lcp)
+}
+
 func TestNoOwnerReferenceAndNoDeletionWaits(t *testing.T) {
 	cluster, lcp := create(t, namespace(t), "no-owner")
 	updateSpec(t, lcp, func(l *v1alpha1.LodiaControlPlane) { l.OwnerReferences = nil })
