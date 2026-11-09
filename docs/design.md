@@ -1,7 +1,7 @@
 # cluster-api-provider-lodia — design
 
 Pinned sources: Cluster API [v1.15.0-beta.0] (a3b7b6f), which moves to v1.15.0 when that is released; kubeadm and Kubernetes v1.35.0; and Lodia's API module at [lodia-io/lodia@5737583][lo].
-Links marked 5f212ed point at the Lodia the design study read, before the rename from Brygga.
+Links marked 5f212ed point at that older commit of Lodia.
 
 **In one paragraph.** `LodiaControlPlane` (`controlplane.lodia.io/v1alpha1`)
 is a Cluster API control plane object that owns exactly one Lodia
@@ -205,15 +205,15 @@ sequenceDiagram
 `status.version` moves when Lodia's version does, so CAPI holds new workers as
 "upgrading" until then and then lets the MachineDeployment follow.
 
-## 4. What Lodia's API needed, and where it stands
+## 4. What Cluster API needs from Lodia's API
 
-| # | Cluster API needs | Lodia now | where |
+| # | Cluster API needs | Lodia | where |
 |---|---|---|---|
-| 4.1 | a control plane version in status | `status.kubernetes.version`, written since [#64][lo-64] | — |
-| 4.2 | an `Available` that survives node outages | done in #22: `Reachable` is about the API; the controller manager hold is `ControllerManagerHeld`, outside `Ready` ([conditions][lo-ref-conditions]) | — |
+| 4.1 | a control plane version in status | `status.kubernetes.version` ([field reference][lo-ref-kubernetes]) | — |
+| 4.2 | an `Available` that survives node outages | `Reachable` is about the API; the controller manager hold is `ControllerManagerHeld`, outside `Ready` ([conditions][lo-ref-conditions]) | — |
 | 4.3 | `<cluster>-ca` with `tls.crt` | `<cp>-ca-bundle` (`ca.crt`); the key is PKI's alone by design | — |
-| 4.4 | names a CAPI `Cluster` can have | done in #22: a DNS-1035 label of at most 32 characters, CEL ([types][lo-name-cap], [field reference][lo-ref-name]) | — |
-| 4.5 | types a provider can import | done in #23 and #27: `go.lodia.io/lodia/api`, with the CRDs as `crds.FS`, requires `k8s.io/api` and `k8s.io/apimachinery` v0.35.0, below the v0.37 Cluster API v1.15.0-beta.0 builds on ([go.mod][lo-api-gomod]) | — |
+| 4.4 | names a CAPI `Cluster` can have | a DNS-1035 label of at most 32 characters, CEL ([types][lo-name-cap], [field reference][lo-ref-name]) | — |
+| 4.5 | types a provider can import | `go.lodia.io/lodia/api`, with the CRDs as `crds.FS`, requires `k8s.io/api` and `k8s.io/apimachinery` v0.35.0, below the v0.37 Cluster API v1.15.0-beta.0 builds on ([go.mod][lo-api-gomod]) | — |
 | 4.6 | replica counts, only with `spec.replicas` | none | not now |
 | — | endpoint, kubeconfig, initialized, network | `status.endpoint.apiServer`, `<cp>-admin-kubeconfig`, `Ready`, `spec.network` | none needed |
 
@@ -230,7 +230,7 @@ Lodia's `status.kubernetes.version` is what the provider copies: the oldest vers
 
 ### 4.3 The CA Secret
 
-CABPK looks up `<cluster>-ca` for a worker as a set holding the cluster CA alone ([NewCertificatesForWorker][sec-worker], [joinWorker][cabpk-worker]) and requires key data only for a certificate that names a key file, which the worker's does not ([EnsureAllExist][sec-ensure], [#14389][capi-14389], issue [#14388][capi-14388]).
+CABPK looks up `<cluster>-ca` for a worker as a set holding the cluster CA alone ([NewCertificatesForWorker][sec-worker], [joinWorker][cabpk-worker]) and requires key data only for a certificate that names a key file, which the worker's does not ([EnsureAllExist][sec-ensure]).
 The worker path never uses the key: it hashes the certificates in `tls.crt` ([Hashes][sec-hashes], [discovery][cabpk-discovery]).
 A test calls `NewCertificatesForWorker`, `Lookup` and `EnsureAllExist` on the Secret the provider writes.
 
@@ -375,8 +375,6 @@ out; CAPI then leaves the Cluster's control plane counters empty
 [finalizers]: https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/util/finalizers/finalizers.go#L27-L49
 [patch]: https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/util/patch/patch.go#L82-L83
 [rbac-agg]: https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/core/config/rbac/aggregated_role.yaml#L8
-[capi-14388]: https://github.com/kubernetes-sigs/cluster-api/issues/14388
-[capi-14389]: https://github.com/kubernetes-sigs/cluster-api/pull/14389
 
 <!-- controller-runtime, kubeadm, Kubernetes -->
 [cr-timeout]: https://github.com/kubernetes-sigs/controller-runtime/blob/v0.25.2/pkg/config/controller.go#L96-L98
@@ -391,7 +389,6 @@ out; CAPI then leaves the Cluster's control plane counters empty
 [k0-infra]: https://github.com/k0sproject/k0smotron/blob/v2.3.0/internal/controller/controlplane/k0smotron_controlplane_controller.go#L888-L959
 
 <!-- Lodia at 5737583 -->
-[lo-64]: https://github.com/lodia-io/lodia/pull/64
 [lo-ref-ready]: https://github.com/lodia-io/lodia/blob/57375832e7fe8b3a06374613797eb4c544fe7612/docs/api/controlplane.md?plain=1#L131
 [lo]: https://github.com/lodia-io/lodia/tree/57375832e7fe8b3a06374613797eb4c544fe7612
 [lo-name-cap]: https://github.com/lodia-io/lodia/blob/57375832e7fe8b3a06374613797eb4c544fe7612/api/v1alpha1/controlplane_types.go#L17
@@ -406,7 +403,7 @@ out; CAPI then leaves the Cluster's control plane counters empty
 [lo-names-kubeconfig]: https://github.com/lodia-io/lodia/blob/57375832e7fe8b3a06374613797eb4c544fe7612/api/v1alpha1/names.go#L59-L71
 [lo-labels]: https://github.com/lodia-io/lodia/blob/57375832e7fe8b3a06374613797eb4c544fe7612/api/v1alpha1/labels.go#L17-L20
 
-<!-- Lodia at 5f212ed, as the design study read it -->
+<!-- Lodia at 5f212ed -->
 [lo-claude]: https://github.com/lodia-io/lodia/blob/5f212ed9acd71fe2a944e5fe63cad73e3d17812e/CLAUDE.md?plain=1#L53-L54
 [lo-etcddruid-test]: https://github.com/lodia-io/lodia/blob/5f212ed9acd71fe2a944e5fe63cad73e3d17812e/api/v1alpha1/etcddruid_test.go
 [lo-readme-secrets]: https://github.com/lodia-io/lodia/blob/5f212ed9acd71fe2a944e5fe63cad73e3d17812e/docs/README.md?plain=1#L151-L163

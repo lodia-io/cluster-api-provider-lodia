@@ -51,7 +51,7 @@ The provider builds on Cluster API `v1.15.0-beta.0`, and moves to v1.15.0 when t
 ## What does not work yet
 
 - **No worker has joined in a test.**
-  The two conditions are met on paper: the kubeadm bootstrap provider takes a `<cluster>-ca` with `tls.crt` alone ([EnsureAllExist][cabpk-ensure], [#14389][pr-14389]), and Lodia reports the version that the MachineSet preflight check `ControlPlaneIsStable` waits for ([IsProvisioning][ct-provisioning], [preflight][ms-preflight]).
+  The two conditions are met on paper: the kubeadm bootstrap provider takes a `<cluster>-ca` with `tls.crt` alone ([EnsureAllExist][cabpk-ensure]), and Lodia reports the version that the MachineSet preflight check `ControlPlaneIsStable` waits for ([IsProvisioning][ct-provisioning], [preflight][ms-preflight]).
   `make test` calls that bootstrap provider's certificate check on the Secret the provider writes, and nothing beyond it.
 - **No end-to-end suite.**
   Lodia's Helm chart exists, and the suite is not written; `make test` runs envtest only.
@@ -86,7 +86,6 @@ Licensed under the [Apache License 2.0](LICENSE).
 [c-pause]: https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/docs/book/src/developer/providers/contracts/control-plane.md?plain=1#L928-L932
 [m-allowed]: https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/core/reconcilers/machine/machine_controller.go#L827-L877
 [move-pause]: https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/cmd/clusterctl/client/cluster/mover.go#L355-L377
-[pr-14389]: https://github.com/kubernetes-sigs/cluster-api/pull/14389
 [release-plan]: https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/docs/release/releases/release-1.15.md?plain=1#L24
 [move-ann]: https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/cmd/clusterctl/api/v1alpha3/annotations.go#L35-L43
 [cabpk-ensure]: https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/util/secret/certificates.go#L271-L288
