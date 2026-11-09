@@ -61,13 +61,13 @@ type LodiaControlPlaneList struct {
 
 // LodiaControlPlaneSpec is the ControlPlane's spec but its network, which
 // comes from the Cluster, and its pause, which stays the ControlPlane's.
-// +kubebuilder:validation:XValidation:rule="!has(self.restoreFrom) || (has(oldSelf.restoreFrom) && oldSelf.restoreFrom == self.restoreFrom)",message="restoreFrom can only be set when the ControlPlane is created"
+// +kubebuilder:validation:XValidation:rule="has(self.restoreFrom) == has(oldSelf.restoreFrom)",message="restoreFrom can be set only when the ControlPlane is created, and never removed"
 type LodiaControlPlaneSpec struct {
 	// Version is the Kubernetes version, vMAJOR.MINOR.PATCH. The minor never
 	// decreases; Lodia upgrades one minor at a time towards it.
 	// +required
 	// +kubebuilder:validation:MaxLength=16
-	// +kubebuilder:validation:Pattern=`^v1\.[0-9]+\.[0-9]+$`
+	// +kubebuilder:validation:Pattern=`^v1\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$`
 	// +kubebuilder:validation:XValidation:rule="int(self.split('.')[1]) >= int(oldSelf.split('.')[1])",message="the Kubernetes minor version cannot decrease"
 	Version string `json:"version"`
 

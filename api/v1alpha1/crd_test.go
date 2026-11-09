@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
@@ -62,7 +63,10 @@ func TestTheSpecPassesLodiasSchemaThrough(t *testing.T) {
 	if diff := cmp.Diff(required, ours.Required, ignore...); diff != "" {
 		t.Errorf("spec required (-Lodia +ours):\n%s", diff)
 	}
-	if diff := cmp.Diff(lodias.XValidations, ours.XValidations, ignore...); diff != "" {
+	shared := slices.DeleteFunc(slices.Clone(lodias.XValidations), func(rule apiextensionsv1.ValidationRule) bool {
+		return strings.Contains(rule.Rule, "self.network")
+	})
+	if diff := cmp.Diff(shared, ours.XValidations, ignore...); diff != "" {
 		t.Errorf("spec rules (-Lodia +ours):\n%s", diff)
 	}
 }

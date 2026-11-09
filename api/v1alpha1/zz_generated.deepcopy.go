@@ -257,11 +257,6 @@ func (in *LodiaControlPlaneTemplateResourceSpec) DeepCopyInto(out *LodiaControlP
 		*out = new(apiv1alpha1.Maintenance)
 		(*in).DeepCopyInto(*out)
 	}
-	if in.Hibernation != nil {
-		in, out := &in.Hibernation, &out.Hibernation
-		*out = new(apiv1alpha1.Hibernation)
-		(*in).DeepCopyInto(*out)
-	}
 	if in.Health != nil {
 		in, out := &in.Health, &out.Health
 		*out = new(apiv1alpha1.Health)

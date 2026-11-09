@@ -327,6 +327,7 @@ func setReady(t *testing.T, cp *lodiav1alpha1.ControlPlane) {
 		Endpoint: &lodiav1alpha1.EndpointStatus{
 			APIServer:    lodiav1alpha1.HostPort{Host: "203.0.113.10", Port: 31443},
 			Konnectivity: lodiav1alpha1.HostPort{Host: "203.0.113.10", Port: 31132},
+			InCluster:    lodiav1alpha1.HostPort{Host: "203.0.113.10", Port: 31643},
 		},
 		Kubernetes: &lodiav1alpha1.KubernetesStatus{Version: "v1.35.8"},
 		Conditions: []metav1.Condition{

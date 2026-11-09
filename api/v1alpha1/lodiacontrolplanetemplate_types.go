@@ -53,6 +53,9 @@ type LodiaControlPlaneTemplateResource struct {
 // sets, the endpoint and restoreFrom.
 // +kubebuilder:validation:XValidation:rule="self.layout != 'Compact' || !has(self.highAvailability)",message="the Compact layout runs one replica of everything: remove highAvailability"
 // +kubebuilder:validation:XValidation:rule="self.layout != 'Compact' || !has(self.apiServer) || !has(self.apiServer.replicas) || self.apiServer.replicas == 1",message="the Compact layout runs one API server"
+// +kubebuilder:validation:XValidation:rule="!has(self.highAvailability) || !has(self.apiServer) || !has(self.apiServer.replicas) || self.apiServer.replicas >= 2",message="highAvailability runs at least two API servers"
+// +kubebuilder:validation:XValidation:rule="!has(self.apiServer) || !has(self.apiServer.advertiseAddress) || has(self.endpoint.gateway)",message="apiServer.advertiseAddress is set only with endpoint.gateway"
+// +kubebuilder:validation:XValidation:rule="!has(self.endpoint.gateway) || (has(self.apiServer) && has(self.apiServer.advertiseAddress) ? has(oldSelf.apiServer) && has(oldSelf.apiServer.advertiseAddress) && oldSelf.apiServer.advertiseAddress == self.apiServer.advertiseAddress : !has(oldSelf.apiServer) || !has(oldSelf.apiServer.advertiseAddress))",message="apiServer.advertiseAddress is immutable"
 type LodiaControlPlaneTemplateResourceSpec struct {
 	// Layout is Split, a Deployment per component, or Compact, every
 	// component in one pod.
@@ -99,10 +102,6 @@ type LodiaControlPlaneTemplateResourceSpec struct {
 	// Maintenance is when Lodia may roll changes it initiates.
 	// +optional
 	Maintenance *lodiav1alpha1.Maintenance `json:"maintenance,omitempty"`
-
-	// Hibernation puts the control plane to sleep, keeping its data.
-	// +optional
-	Hibernation *lodiav1alpha1.Hibernation `json:"hibernation,omitempty"`
 
 	// Health configures how Lodia protects the tenant's workloads.
 	// +optional
