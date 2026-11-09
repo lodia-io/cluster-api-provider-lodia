@@ -258,7 +258,7 @@ out; CAPI then leaves the Cluster's control plane counters empty
    before it creates anything ([annotation][move-ann], [wait][move-wait]): a
    hosted control plane does not move.
    Both CRDs carry `clusterctl.cluster.x-k8s.io`, the label move finds CRDs by ([discovery][move-crds]), so the annotation is seen on an installation made by hand too.
-   The Clusters stay paused after that failure ([move][move-pause]): set each one's `spec.paused` back to `false`.
+   The Clusters and ClusterClasses stay paused after that failure ([move][move-pause]): set each Cluster's `spec.paused` back to `false` and remove each ClusterClass's `cluster.x-k8s.io/paused` annotation.
 2. *The endpoint is copied once* ([Cluster controller][cl-cp-endpoint]): a
    LoadBalancer Service recreated with a new address, or in node port mode the
    loss of the node the endpoint names ([field reference][lo-ref-nodeport]),
