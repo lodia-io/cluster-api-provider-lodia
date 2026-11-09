@@ -17,8 +17,9 @@ How each rule of the contract is met, the life of the objects and the reasons: [
   `make test` calls that bootstrap provider's certificate check on the Secret the provider writes, and nothing beyond it.
 - **No end-to-end suite.**
   Lodia's Helm chart exists, and the suite is not written; `make test` runs envtest only.
-- **Nothing can be deployed yet.**
-  The repository has no image build and no manifests: no Dockerfile or ko config, no Deployment, ServiceAccount or ClusterRoleBinding, and no `kustomization.yaml`.
+- **Nothing is released.**
+  [`config/default`](config/default) deploys the manager, and ko builds its image: `kustomize build config/default | ko resolve -f -`.
+  No image is published and there are no release artifacts.
 
 ## Build and test
 

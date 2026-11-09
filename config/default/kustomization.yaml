@@ -1,0 +1,8 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: cluster-api-provider-lodia-system
+namePrefix: cluster-api-provider-lodia-
+resources:
+- ../crd
+- ../rbac
+- ../manager
