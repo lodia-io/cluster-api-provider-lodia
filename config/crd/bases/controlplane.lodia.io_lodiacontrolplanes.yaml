@@ -1019,8 +1019,8 @@ spec:
               conditions:
                 description: |-
                   Conditions are Available, the ControlPlane's Reachable; Ready, the
-                  ControlPlane's Ready unless the provider cannot write its objects; and
-                  Paused.
+                  ControlPlane's Ready at its current generation unless the provider cannot
+                  write its objects; and Paused.
                 items:
                   description: Condition contains details for one aspect of the current
                     state of this API Resource.

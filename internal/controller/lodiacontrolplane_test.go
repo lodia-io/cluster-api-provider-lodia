@@ -831,6 +831,15 @@ func initialized(t *testing.T, lcp *v1alpha1.LodiaControlPlane) {
 	}
 }
 
+func updateSpec(t *testing.T, lcp *v1alpha1.LodiaControlPlane, change func(*v1alpha1.LodiaControlPlane)) {
+	t.Helper()
+	before := lcp.DeepCopy()
+	change(lcp)
+	if err := k8s.Patch(t.Context(), lcp, client.MergeFrom(before)); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func readyControlPlane(t *testing.T, name string) (*clusterv1.Cluster, *v1alpha1.LodiaControlPlane, *lodiav1alpha1.ControlPlane, *controller.Reconciler, ca) {
 	t.Helper()
 	cluster, lcp := create(t, namespace(t), name)
@@ -845,6 +854,44 @@ func readyControlPlane(t *testing.T, name string) (*clusterv1.Cluster, *v1alpha1
 	get(t, lcp)
 	initialized(t, lcp)
 	return cluster, lcp, cp, r, issued
+}
+
+func TestReadyIsMirroredOnlyAtTheCurrentGeneration(t *testing.T) {
+	_, lcp, cp, r, _ := readyControlPlane(t, "lambda")
+	if err := ready(lcp, metav1.ConditionTrue, lodiav1alpha1.ReasonReady, ""); err != nil {
+		t.Fatal(err)
+	}
+
+	updateSpec(t, lcp, func(l *v1alpha1.LodiaControlPlane) { l.Spec.Version = "v1.35.9" })
+	passes(t, r, lcp)
+	get(t, cp)
+	if cp.Generation != 2 || cp.Spec.Version != "v1.35.9" {
+		t.Fatalf("generation %d, version %s", cp.Generation, cp.Spec.Version)
+	}
+	get(t, lcp)
+	if err := ready(lcp, metav1.ConditionUnknown, lodiav1alpha1.ReasonLatestGenerationNotObserved, "generation 1 of 2"); err != nil {
+		t.Error(err)
+	}
+	available(t, lcp, metav1.ConditionTrue, lodiav1alpha1.ReasonReachable)
+	initialized(t, lcp)
+
+	meta.SetStatusCondition(&cp.Status.Conditions, metav1.Condition{
+		Type: lodiav1alpha1.ConditionReachable, Status: metav1.ConditionFalse, Reason: lodiav1alpha1.ReasonExternalProbeFailed,
+		Message: "the public endpoint does not answer", ObservedGeneration: 1,
+	})
+	if err := k8s.Status().Update(t.Context(), cp); err != nil {
+		t.Fatal(err)
+	}
+	passes(t, r, lcp)
+	get(t, lcp)
+	available(t, lcp, metav1.ConditionFalse, lodiav1alpha1.ReasonExternalProbeFailed)
+
+	setReady(t, cp)
+	passes(t, r, lcp)
+	get(t, lcp)
+	if err := ready(lcp, metav1.ConditionTrue, lodiav1alpha1.ReasonReady, ""); err != nil {
+		t.Error(err)
+	}
 }
 
 func TestARefusedChangeStillCopiesAndReports(t *testing.T) {

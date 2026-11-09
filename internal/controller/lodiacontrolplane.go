@@ -327,6 +327,12 @@ func report(lcp *v1alpha1.LodiaControlPlane, u *unstructured.Unstructured) error
 		conditions.TargetConditionType(clusterv1.AvailableCondition)); err != nil {
 		return err
 	}
+	if ready := meta.FindStatusCondition(cp.Status.Conditions, lodiav1alpha1.ConditionReady); ready != nil && ready.ObservedGeneration != cp.Generation {
+		conditions.Set(lcp, metav1.Condition{Type: clusterv1.ReadyCondition, Status: metav1.ConditionUnknown,
+			Reason:  lodiav1alpha1.ReasonLatestGenerationNotObserved,
+			Message: fmt.Sprintf("ControlPlane %s reports Ready for generation %d of %d", cp.Name, ready.ObservedGeneration, cp.Generation)})
+		return nil
+	}
 	return conditions.SetMirrorConditionFromUnstructured(u, lcp, lodiav1alpha1.ConditionReady)
 }
 

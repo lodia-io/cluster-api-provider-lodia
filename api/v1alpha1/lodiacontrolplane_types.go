@@ -90,8 +90,8 @@ type LodiaControlPlaneSpec struct {
 // LodiaControlPlaneStatus is what the provider reports to Cluster API.
 type LodiaControlPlaneStatus struct {
 	// Conditions are Available, the ControlPlane's Reachable; Ready, the
-	// ControlPlane's Ready unless the provider cannot write its objects; and
-	// Paused.
+	// ControlPlane's Ready at its current generation unless the provider cannot
+	// write its objects; and Paused.
 	// +optional
 	// +listType=map
 	// +listMapKey=type
