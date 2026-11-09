@@ -173,7 +173,7 @@ func (r *Reconciler) reconcileNormal(ctx context.Context, cluster *clusterv1.Clu
 	if err != nil {
 		return reportWriteError(lcp, err)
 	}
-	if err := r.copySecrets(ctx, cluster, lcp); err != nil {
+	if err := r.copySecrets(ctx, cluster, lcp, cp); err != nil {
 		return reportWriteError(lcp, err)
 	}
 	return report(lcp, cp)
@@ -222,8 +222,9 @@ func cidrs(blocks []string) []lodiav1alpha1.CIDR {
 }
 
 // copySecrets copies the CA bundle's certificates alone: the CA's key never
-// leaves Lodia's PKI.
-func (r *Reconciler) copySecrets(ctx context.Context, cluster *clusterv1.Cluster, lcp *v1alpha1.LodiaControlPlane) error {
+// leaves Lodia's PKI. Only the Secrets of this ControlPlane are copied: a
+// predecessor's may still await the garbage collector.
+func (r *Reconciler) copySecrets(ctx context.Context, cluster *clusterv1.Cluster, lcp *v1alpha1.LodiaControlPlane, cp *unstructured.Unstructured) error {
 	for _, c := range []struct {
 		from    lodiav1alpha1.Secret
 		fromKey string
@@ -238,6 +239,9 @@ func (r *Reconciler) copySecrets(ctx context.Context, cluster *clusterv1.Cluster
 			continue
 		} else if err != nil {
 			return err
+		}
+		if !metav1.IsControlledBy(source, cp) {
+			continue
 		}
 		if err := r.applySecret(ctx, cluster, lcp, secret.Name(cluster.Name, c.to), map[string][]byte{c.toKey: source.Data[c.fromKey]}); err != nil {
 			return err

@@ -205,6 +205,13 @@ func pass(ctx context.Context, r *controller.Reconciler, lcp *v1alpha1.LodiaCont
 	return err
 }
 
+func passes(t *testing.T, r *controller.Reconciler, lcp *v1alpha1.LodiaControlPlane) {
+	t.Helper()
+	if err := pass(t.Context(), r, lcp); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func untilBlockMove(t *testing.T, r *controller.Reconciler, lcp *v1alpha1.LodiaControlPlane) {
 	t.Helper()
 	for range 5 {
@@ -284,7 +291,11 @@ func create(t *testing.T, ns, name string, mutate ...func(*clusterv1.Cluster)) (
 
 type ca struct{ cert, key []byte }
 
-func lodiaSecrets(t *testing.T, cluster *clusterv1.Cluster) ca {
+func ownedBy(cp *lodiav1alpha1.ControlPlane) []metav1.OwnerReference {
+	return []metav1.OwnerReference{*metav1.NewControllerRef(cp, lodiav1alpha1.GroupVersion.WithKind("ControlPlane"))}
+}
+
+func lodiaSecrets(t *testing.T, cluster *clusterv1.Cluster, owners []metav1.OwnerReference) ca {
 	t.Helper()
 	certificate := &secret.Certificate{Purpose: secret.ClusterCA}
 	if err := certificate.Generate(); err != nil {
@@ -306,9 +317,10 @@ func lodiaSecrets(t *testing.T, cluster *clusterv1.Cluster) ca {
 	} {
 		s := &corev1.Secret{
 			ObjectMeta: metav1.ObjectMeta{
-				Namespace: cluster.Namespace,
-				Name:      name,
-				Labels:    map[string]string{lodiav1alpha1.ControlPlaneLabel: cluster.Name},
+				Namespace:       cluster.Namespace,
+				Name:            name,
+				Labels:          map[string]string{lodiav1alpha1.ControlPlaneLabel: cluster.Name},
+				OwnerReferences: owners,
 			},
 			Data: data,
 		}
@@ -418,7 +430,7 @@ func TestAClusterGetsItsControlPlaneAndTheContract(t *testing.T) {
 	}
 
 	setReady(t, cp)
-	issued := lodiaSecrets(t, cluster)
+	issued := lodiaSecrets(t, cluster, ownedBy(cp))
 
 	eventually(t, func() error {
 		get(t, lcp)
@@ -482,7 +494,7 @@ func TestANameLodiaRefusesIsReportedAndNothingIsCreated(t *testing.T) {
 	startManager(t)
 	name := strings.Repeat("a", 33)
 	cluster, lcp := create(t, namespace(t), name)
-	lodiaSecrets(t, cluster)
+	lodiaSecrets(t, cluster, nil)
 
 	eventually(t, func() error {
 		get(t, lcp)
@@ -634,7 +646,9 @@ func TestALeftoverSecretOutsideTheCacheIsLeftAlone(t *testing.T) {
 		t.Fatal(err)
 	}
 	cluster, lcp := create(t, ns, "zeta")
-	lodiaSecrets(t, cluster)
+	cp := controlPlaneOf(cluster)
+	eventually(t, func() error { return k8s.Get(t.Context(), client.ObjectKeyFromObject(cp), cp) })
+	lodiaSecrets(t, cluster, ownedBy(cp))
 
 	eventually(t, func() error {
 		get(t, lcp)
@@ -653,7 +667,6 @@ func isSecretApply(obj runtime.ApplyConfiguration, name string) bool {
 
 func TestAWriteFailingMidPassIsRetried(t *testing.T) {
 	cluster, lcp := create(t, namespace(t), "eta")
-	lodiaSecrets(t, cluster)
 	failed := false
 	r := direct(t, interceptor.Funcs{
 		Apply: func(ctx context.Context, c client.WithWatch, obj runtime.ApplyConfiguration, opts ...client.ApplyOption) error {
@@ -665,11 +678,14 @@ func TestAWriteFailingMidPassIsRetried(t *testing.T) {
 		},
 	})
 	untilBlockMove(t, r, lcp)
+	passes(t, r, lcp)
+	cp := controlPlaneOf(cluster)
+	get(t, cp)
+	lodiaSecrets(t, cluster, ownedBy(cp))
 
 	if err := pass(t.Context(), r, lcp); !apierrors.IsInternalError(err) {
 		t.Fatalf("the pass returned %v, want the failed write's error", err)
 	}
-	get(t, controlPlaneOf(cluster))
 	get(t, secretOf(cluster, secret.Kubeconfig))
 	absent(t, secretOf(cluster, secret.ClusterCA))
 	get(t, lcp)
@@ -685,7 +701,6 @@ func TestAWriteFailingMidPassIsRetried(t *testing.T) {
 
 func TestARestartBetweenWritesResumes(t *testing.T) {
 	cluster, lcp := create(t, namespace(t), "theta")
-	lodiaSecrets(t, cluster)
 	untilBlockMove(t, direct(t, interceptor.Funcs{}), lcp)
 
 	killed := errors.New("the process was killed")
@@ -708,6 +723,10 @@ func TestARestartBetweenWritesResumes(t *testing.T) {
 	}
 	cp := controlPlaneOf(cluster)
 	get(t, cp)
+	lodiaSecrets(t, cluster, ownedBy(cp))
+	if err := pass(t.Context(), crashing, lcp); !errors.Is(err, killed) {
+		t.Fatalf("the pass returned %v", err)
+	}
 	absent(t, secretOf(cluster, secret.Kubeconfig), secretOf(cluster, secret.ClusterCA))
 	get(t, lcp)
 	if lcp.Status.Initialization.ControlPlaneInitialized != nil || meta.FindStatusCondition(lcp.Status.Conditions, clusterv1.ReadyCondition) != nil {
@@ -763,7 +782,6 @@ func TestATransientErrorIsRetriedWithoutAVerdict(t *testing.T) {
 
 func TestAnExpiredDeadlineStopsThePassAndTheNextOneFinishes(t *testing.T) {
 	cluster, lcp := create(t, namespace(t), "kappa")
-	lodiaSecrets(t, cluster)
 	slow := true
 	r := direct(t, interceptor.Funcs{
 		Apply: func(ctx context.Context, c client.WithWatch, obj runtime.ApplyConfiguration, opts ...client.ApplyOption) error {
@@ -775,18 +793,49 @@ func TestAnExpiredDeadlineStopsThePassAndTheNextOneFinishes(t *testing.T) {
 		},
 	})
 	untilBlockMove(t, r, lcp)
+	passes(t, r, lcp)
+	cp := controlPlaneOf(cluster)
+	get(t, cp)
+	lodiaSecrets(t, cluster, ownedBy(cp))
 
 	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
 	defer cancel()
 	if err := pass(ctx, r, lcp); !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("the pass returned %v", err)
 	}
-	get(t, controlPlaneOf(cluster))
 	absent(t, secretOf(cluster, secret.Kubeconfig), secretOf(cluster, secret.ClusterCA))
 
 	if err := pass(t.Context(), r, lcp); err != nil {
 		t.Fatal(err)
 	}
+	get(t, secretOf(cluster, secret.Kubeconfig))
+	get(t, secretOf(cluster, secret.ClusterCA))
+}
+
+func TestAPredecessorsSecretsAreNotCopied(t *testing.T) {
+	cluster, lcp := create(t, namespace(t), "nu")
+	r := direct(t, interceptor.Funcs{})
+	untilBlockMove(t, r, lcp)
+	passes(t, r, lcp)
+	predecessor := []metav1.OwnerReference{{
+		APIVersion: lodiav1alpha1.GroupVersion.String(), Kind: "ControlPlane", Name: cluster.Name, UID: "the-predecessor", Controller: new(true),
+	}}
+	lodiaSecrets(t, cluster, predecessor)
+
+	passes(t, r, lcp)
+	absent(t, secretOf(cluster, secret.Kubeconfig), secretOf(cluster, secret.ClusterCA))
+
+	for _, name := range []string{
+		lodiav1alpha1.CABundleSecret.Name(cluster.Name), lodiav1alpha1.AdminKubeconfigSecret.Name(cluster.Name), cluster.Name + "-cakey-cluster",
+	} {
+		if err := k8s.Delete(t.Context(), &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: cluster.Namespace, Name: name}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cp := controlPlaneOf(cluster)
+	get(t, cp)
+	lodiaSecrets(t, cluster, ownedBy(cp))
+	passes(t, r, lcp)
 	get(t, secretOf(cluster, secret.Kubeconfig))
 	get(t, secretOf(cluster, secret.ClusterCA))
 }
