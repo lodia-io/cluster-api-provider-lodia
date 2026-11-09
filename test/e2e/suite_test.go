@@ -7,6 +7,7 @@ package e2e
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -29,7 +30,7 @@ var (
 
 func TestMain(m *testing.M) {
 	path := os.Getenv("E2E_KUBECONFIG")
-	if err := RequireNamedCluster(path); err != nil {
+	if err := errors.Join(RequireNamedCluster(path), refuseHelmKubeEnv(os.Environ())); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}

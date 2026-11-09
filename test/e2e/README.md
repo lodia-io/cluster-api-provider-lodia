@@ -1,6 +1,7 @@
 # End-to-end test
 
 The suite runs only against a kind cluster whose kubeconfig is named on the command line, in `E2E_KUBECONFIG`, and refuses any other: [`guard.go`](guard.go) wants a single context whose name starts with `kind-lodia-e2e`, so it never reaches a cluster through the current kube context.
+It also refuses to start while a `HELM_KUBE*` variable is set, since helm [lays them over](https://github.com/helm/helm/blob/v4.3.1/pkg/cli/environment.go#L97-L130) `--kubeconfig`.
 
 `make e2e` creates the kind cluster `lodia-e2e-capi`, runs the suite and deletes the cluster.
 `E2E_CLUSTER` changes the name.
