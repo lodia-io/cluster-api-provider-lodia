@@ -698,6 +698,47 @@ func TestPauseStopsTheProvider(t *testing.T) {
 	})
 }
 
+func settled(t *testing.T, lcp *v1alpha1.LodiaControlPlane) {
+	t.Helper()
+	var version string
+	var since time.Time
+	eventually(t, func() error {
+		get(t, lcp)
+		if condition(lcp, clusterv1.PausedCondition) == nil {
+			return errors.New("no Paused condition yet")
+		}
+		if lcp.ResourceVersion != version {
+			version, since = lcp.ResourceVersion, time.Now()
+			return errors.New("still being written")
+		}
+		if time.Since(since) < 2*time.Second {
+			return errors.New("not settled yet")
+		}
+		return nil
+	})
+}
+
+func TestAClusterEventAloneReachesARunningManager(t *testing.T) {
+	startManager(t)
+	cluster, lcp := create(t, namespace(t), "delta-event")
+	eventually(t, func() error { return k8s.Get(t.Context(), client.ObjectKeyFromObject(cluster), controlPlaneOf(cluster)) })
+	settled(t, lcp)
+
+	paused := cluster.DeepCopy()
+	paused.Spec.Paused = new(true)
+	if err := k8s.Patch(t.Context(), paused, client.MergeFrom(cluster)); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, func() error {
+		get(t, lcp)
+		c := condition(lcp, clusterv1.PausedCondition)
+		if c == nil || c.Status != metav1.ConditionTrue || c.Message != "Cluster spec.paused is set to true" {
+			return fmt.Errorf("Paused is %+v", c)
+		}
+		return nil
+	})
+}
+
 func TestALeftoverControlPlaneOfAnotherOwnerIsLeftAlone(t *testing.T) {
 	startManager(t)
 	ns := namespace(t)
