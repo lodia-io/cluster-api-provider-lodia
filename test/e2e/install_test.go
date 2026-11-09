@@ -250,11 +250,9 @@ func installLodia(ctx context.Context, cfg *envconf.Config) error {
 func installProvider(ctx context.Context, cfg *envconf.Config) error {
 	kustomize := exec.CommandContext(ctx, "go", "run", "sigs.k8s.io/kustomize/kustomize/v5@v5.7.0", "build", "config/default")
 	kustomize.Dir = root
-	var stderr bytes.Buffer
-	kustomize.Stderr = &stderr
-	built, err := kustomize.Output()
+	built, err := toolOutput(kustomize)
 	if err != nil {
-		return fmt.Errorf("build config/default: %w\n%s", err, stderr.String())
+		return fmt.Errorf("build config/default: %w", err)
 	}
 	resolved, err := ko(ctx, cfg, root, bytes.NewReader(built), "resolve", "-f", "-")
 	if err != nil {
@@ -278,11 +276,9 @@ func ko(ctx context.Context, cfg *envconf.Config, dir string, stdin io.Reader, v
 	cmd.Env = append(slices.DeleteFunc(os.Environ(), func(env string) bool { return strings.HasPrefix(env, "GOARCH=") }),
 		"KO_DOCKER_REPO=kind.local", "KIND_CLUSTER_NAME="+cluster)
 	cmd.Stdin = stdin
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-	out, err := cmd.Output()
+	out, err := toolOutput(cmd)
 	if err != nil {
-		return nil, fmt.Errorf("ko %s into kind: %w\n%s", verb, err, stderr.String())
+		return nil, fmt.Errorf("ko %s into kind: %w", verb, err)
 	}
 	return out, nil
 }
