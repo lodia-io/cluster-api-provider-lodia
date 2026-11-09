@@ -228,7 +228,7 @@ func installClusterAPI(ctx context.Context, cfg *envconf.Config) error {
 		return fmt.Errorf("the manifest does not run %s", released)
 	}
 	fmt.Printf("the kubeadm bootstrap provider runs %s, built from source\n", bytes.TrimSpace(built))
-	if err := apply(ctx, cfg, bytes.ReplaceAll(manifest, released, bytes.TrimSpace(built))); err != nil {
+	if err := apply(ctx, cfg, bytes.ReplaceAll(bytes.ReplaceAll(manifest, released, bytes.TrimSpace(built)), []byte("- /manager\n"), []byte("- /ko-app/kubeadm\n"))); err != nil {
 		return err
 	}
 	return available(ctx, cfg, "capi-kubeadm-bootstrap-system", "capi-kubeadm-bootstrap-controller-manager")
