@@ -266,7 +266,7 @@ func spec() v1alpha1.LodiaControlPlaneSpec {
 	}
 }
 
-func create(t *testing.T, ns, name string, mutate ...func(*clusterv1.Cluster)) (*clusterv1.Cluster, *v1alpha1.LodiaControlPlane) {
+func create(t *testing.T, ns, name string, mutate ...func(*clusterv1.Cluster, *v1alpha1.LodiaControlPlane)) (*clusterv1.Cluster, *v1alpha1.LodiaControlPlane) {
 	t.Helper()
 	cluster := &clusterv1.Cluster{
 		ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: name},
@@ -281,23 +281,23 @@ func create(t *testing.T, ns, name string, mutate ...func(*clusterv1.Cluster)) (
 			},
 		},
 	}
-	for _, m := range mutate {
-		m(cluster)
-	}
-	if err := k8s.Create(t.Context(), cluster); err != nil {
-		t.Fatal(err)
-	}
 	lcp := &v1alpha1.LodiaControlPlane{
 		ObjectMeta: metav1.ObjectMeta{
 			Namespace: ns,
 			Name:      name + "-cp",
 			Labels:    map[string]string{clusterv1.ClusterNameLabel: name},
-			OwnerReferences: []metav1.OwnerReference{{
-				APIVersion: clusterv1.GroupVersion.String(), Kind: "Cluster", Name: cluster.Name, UID: cluster.UID,
-			}},
 		},
 		Spec: spec(),
 	}
+	for _, m := range mutate {
+		m(cluster, lcp)
+	}
+	if err := k8s.Create(t.Context(), cluster); err != nil {
+		t.Fatal(err)
+	}
+	lcp.OwnerReferences = []metav1.OwnerReference{{
+		APIVersion: clusterv1.GroupVersion.String(), Kind: "Cluster", Name: cluster.Name, UID: cluster.UID,
+	}}
 	if err := k8s.Create(t.Context(), lcp); err != nil {
 		t.Fatal(err)
 	}
@@ -775,7 +775,7 @@ func TestNoOwnerReferenceAndNoDeletionWaits(t *testing.T) {
 
 func TestPauseStopsTheProvider(t *testing.T) {
 	startManager(t)
-	cluster, lcp := create(t, namespace(t), "delta", func(c *clusterv1.Cluster) { c.Spec.Paused = new(true) })
+	cluster, lcp := create(t, namespace(t), "delta", func(c *clusterv1.Cluster, _ *v1alpha1.LodiaControlPlane) { c.Spec.Paused = new(true) })
 	paused := func(message string) func() error {
 		return func() error {
 			get(t, lcp)
@@ -1248,6 +1248,56 @@ func readyControlPlane(t *testing.T, name string) (*clusterv1.Cluster, *v1alpha1
 	get(t, lcp)
 	initialized(t, lcp)
 	return cluster, lcp, cp, r, issued
+}
+
+func TestEveryOptionalFieldReachesTheControlPlane(t *testing.T) {
+	cluster, lcp := create(t, namespace(t), "full", func(_ *clusterv1.Cluster, l *v1alpha1.LodiaControlPlane) {
+		l.Spec.Layout = lodiav1alpha1.LayoutSplit
+		l.Spec.HighAvailability = &lodiav1alpha1.HighAvailability{FailureTolerance: "Node"}
+		l.Spec.APIServer = &lodiav1alpha1.APIServer{Replicas: new(int32(2))}
+		l.Spec.ControllerManager = &lodiav1alpha1.Component{ExtraArgs: map[string]string{"concurrent-deployment-syncs": "3"}}
+		l.Spec.Scheduler = &lodiav1alpha1.Scheduler{ExtraArgs: map[string]string{"kube-api-qps": "100"}}
+		l.Spec.Addons = &lodiav1alpha1.Addons{CoreDNS: &lodiav1alpha1.CoreDNS{Replicas: new(int32(3))}}
+		l.Spec.ServiceAccount = &lodiav1alpha1.ServiceAccount{Issuer: "https://issuer.example.com"}
+		l.Spec.RestoreFrom = &lodiav1alpha1.RestoreFrom{BackupRef: lodiav1alpha1.LocalReference{Name: "backup"}}
+	})
+	r := direct(t, interceptor.Funcs{})
+	untilBlockMove(t, r, lcp)
+	passes(t, r, lcp)
+	get(t, lcp)
+	cp := controlPlaneOf(cluster)
+	get(t, cp)
+	want := lodiav1alpha1.ControlPlaneSpec{
+		Version:           lcp.Spec.Version,
+		Layout:            lcp.Spec.Layout,
+		HighAvailability:  lcp.Spec.HighAvailability,
+		Datastore:         lcp.Spec.Datastore,
+		Endpoint:          lcp.Spec.Endpoint,
+		APIServer:         lcp.Spec.APIServer,
+		ControllerManager: lcp.Spec.ControllerManager,
+		Scheduler:         lcp.Spec.Scheduler,
+		Addons:            lcp.Spec.Addons,
+		Placement:         lcp.Spec.Placement,
+		Maintenance:       lcp.Spec.Maintenance,
+		Health:            lcp.Spec.Health,
+		ServiceAccount:    lcp.Spec.ServiceAccount,
+		RestoreFrom:       lcp.Spec.RestoreFrom,
+		Network: lodiav1alpha1.Network{
+			ServiceCIDRs:  []lodiav1alpha1.CIDR{"10.128.0.0/12"},
+			PodCIDRs:      []lodiav1alpha1.CIDR{"192.168.0.0/16"},
+			ClusterDomain: "tenant.local",
+		},
+	}
+	if diff := cmp.Diff(want, cp.Spec); diff != "" {
+		t.Errorf("ControlPlane spec (-want +got):\n%s", diff)
+	}
+
+	updateSpec(t, lcp, func(l *v1alpha1.LodiaControlPlane) { l.Spec.Placement = nil; l.Spec.ServiceAccount = nil })
+	passes(t, r, lcp)
+	get(t, cp)
+	if cp.Spec.Placement != nil || cp.Spec.ServiceAccount != nil {
+		t.Errorf("removed fields stayed: placement %+v, service account %+v", cp.Spec.Placement, cp.Spec.ServiceAccount)
+	}
 }
 
 func TestAControlPlaneWithNoStatusIsNotYetReported(t *testing.T) {
