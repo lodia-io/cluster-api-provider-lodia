@@ -169,26 +169,41 @@ func (r *Reconciler) reconcileNormal(ctx context.Context, cluster *clusterv1.Clu
 	}
 	lcp.Status.ExternalManagedControlPlane = new(true)
 
-	cp, err := r.applyControlPlane(ctx, cluster, lcp)
+	current, err := r.currentControlPlane(ctx, cluster, lcp)
 	if err != nil {
 		return reportWriteError(lcp, err)
 	}
-	if err := r.copySecrets(ctx, cluster, lcp, cp); err != nil {
-		return reportWriteError(lcp, err)
+
+	cp, applyErr := r.applyControlPlane(ctx, cluster, lcp)
+	if applyErr != nil {
+		cp = current
 	}
-	return report(lcp, cp)
+	if cp == nil {
+		return reportWriteError(lcp, applyErr)
+	}
+	copyErr := r.copySecrets(ctx, cluster, lcp, cp)
+	if err := report(lcp, cp); err != nil {
+		return errors.Join(err, applyErr, copyErr)
+	}
+	return errors.Join(reportWriteError(lcp, copyErr), reportWriteError(lcp, applyErr))
+}
+
+// currentControlPlane returns nil when the ControlPlane does not exist.
+func (r *Reconciler) currentControlPlane(ctx context.Context, cluster *clusterv1.Cluster, lcp *v1alpha1.LodiaControlPlane) (*unstructured.Unstructured, error) {
+	current := &unstructured.Unstructured{}
+	current.SetGroupVersionKind(lodiav1alpha1.GroupVersion.WithKind("ControlPlane"))
+	switch err := r.APIReader.Get(ctx, client.ObjectKey{Namespace: cluster.Namespace, Name: cluster.Name}, current); {
+	case apierrors.IsNotFound(err):
+		return nil, nil
+	case err != nil:
+		return nil, err
+	case !metav1.IsControlledBy(current, lcp):
+		return nil, &controlledElsewhereError{kind: "ControlPlane", object: current}
+	}
+	return current, nil
 }
 
 func (r *Reconciler) applyControlPlane(ctx context.Context, cluster *clusterv1.Cluster, lcp *v1alpha1.LodiaControlPlane) (*unstructured.Unstructured, error) {
-	current := &lodiav1alpha1.ControlPlane{}
-	if err := r.APIReader.Get(ctx, client.ObjectKey{Namespace: cluster.Namespace, Name: cluster.Name}, current); err == nil {
-		if !metav1.IsControlledBy(current, lcp) {
-			return nil, &controlledElsewhereError{kind: "ControlPlane", object: current}
-		}
-	} else if !apierrors.IsNotFound(err) {
-		return nil, err
-	}
-
 	spec, err := runtime.DefaultUnstructuredConverter.ToUnstructured(&lcp.Spec)
 	if err != nil {
 		return nil, err
@@ -210,7 +225,10 @@ func (r *Reconciler) applyControlPlane(ctx context.Context, cluster *clusterv1.C
 	cp.SetName(cluster.Name)
 	cp.SetLabels(map[string]string{clusterv1.ClusterNameLabel: cluster.Name})
 	cp.SetOwnerReferences([]metav1.OwnerReference{*metav1.NewControllerRef(lcp, v1alpha1.GroupVersion.WithKind("LodiaControlPlane"))})
-	return cp, r.Apply(ctx, client.ApplyConfigurationFromUnstructured(cp), client.FieldOwner(FieldManager), client.ForceOwnership)
+	if err := r.Apply(ctx, client.ApplyConfigurationFromUnstructured(cp), client.FieldOwner(FieldManager), client.ForceOwnership); err != nil {
+		return nil, err
+	}
+	return cp, nil
 }
 
 func cidrs(blocks []string) []lodiav1alpha1.CIDR {

@@ -26,6 +26,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/wait"
 	corev1ac "k8s.io/client-go/applyconfigurations/core/v1"
@@ -756,7 +757,7 @@ func TestATransientErrorIsRetriedWithoutAVerdict(t *testing.T) {
 	unavailable := true
 	r := direct(t, interceptor.Funcs{
 		Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
-			if _, ok := obj.(*lodiav1alpha1.ControlPlane); ok && unavailable {
+			if u, ok := obj.(*unstructured.Unstructured); ok && u.GetKind() == "ControlPlane" && unavailable {
 				unavailable = false
 				return apierrors.NewServiceUnavailable("the API server is restarting")
 			}
@@ -810,6 +811,78 @@ func TestAnExpiredDeadlineStopsThePassAndTheNextOneFinishes(t *testing.T) {
 	}
 	get(t, secretOf(cluster, secret.Kubeconfig))
 	get(t, secretOf(cluster, secret.ClusterCA))
+}
+
+func condition(lcp *v1alpha1.LodiaControlPlane, conditionType string) *metav1.Condition {
+	return meta.FindStatusCondition(lcp.Status.Conditions, conditionType)
+}
+
+func available(t *testing.T, lcp *v1alpha1.LodiaControlPlane, status metav1.ConditionStatus, reason string) {
+	t.Helper()
+	if c := condition(lcp, clusterv1.AvailableCondition); c == nil || c.Status != status || c.Reason != reason {
+		t.Errorf("Available is %+v, want %s %s", c, status, reason)
+	}
+}
+
+func initialized(t *testing.T, lcp *v1alpha1.LodiaControlPlane) {
+	t.Helper()
+	if i := lcp.Status.Initialization.ControlPlaneInitialized; i == nil || !*i {
+		t.Errorf("not initialized: %+v", lcp.Status.Initialization)
+	}
+}
+
+func readyControlPlane(t *testing.T, name string) (*clusterv1.Cluster, *v1alpha1.LodiaControlPlane, *lodiav1alpha1.ControlPlane, *controller.Reconciler, ca) {
+	t.Helper()
+	cluster, lcp := create(t, namespace(t), name)
+	r := direct(t, interceptor.Funcs{})
+	untilBlockMove(t, r, lcp)
+	passes(t, r, lcp)
+	cp := controlPlaneOf(cluster)
+	get(t, cp)
+	setReady(t, cp)
+	issued := lodiaSecrets(t, cluster, ownedBy(cp))
+	passes(t, r, lcp)
+	get(t, lcp)
+	initialized(t, lcp)
+	return cluster, lcp, cp, r, issued
+}
+
+func TestARefusedChangeStillCopiesAndReports(t *testing.T) {
+	cluster, lcp, cp, r, _ := readyControlPlane(t, "mu")
+
+	before := cluster.DeepCopy()
+	cluster.Spec.ClusterNetwork.Services.CIDRBlocks = []string{"10.200.0.0/16"}
+	if err := k8s.Patch(t.Context(), cluster, client.MergeFrom(before)); err != nil {
+		t.Fatal(err)
+	}
+	get(t, cp)
+	meta.SetStatusCondition(&cp.Status.Conditions, metav1.Condition{
+		Type: lodiav1alpha1.ConditionReachable, Status: metav1.ConditionFalse, Reason: lodiav1alpha1.ReasonExternalProbeFailed,
+		Message: "the public endpoint does not answer", ObservedGeneration: cp.Generation,
+	})
+	if err := k8s.Status().Update(t.Context(), cp); err != nil {
+		t.Fatal(err)
+	}
+	renewed := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: cluster.Namespace, Name: lodiav1alpha1.AdminKubeconfigSecret.Name(cluster.Name)}}
+	get(t, renewed)
+	renewed.Data[lodiav1alpha1.KubeconfigKey] = []byte("a renewed kubeconfig")
+	if err := k8s.Update(t.Context(), renewed); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := pass(t.Context(), r, lcp); !apierrors.IsInvalid(err) {
+		t.Fatalf("the pass returned %v, want the refusal", err)
+	}
+	get(t, lcp)
+	if err := ready(lcp, metav1.ConditionFalse, v1alpha1.RefusedReason, "network is immutable"); err != nil {
+		t.Error(err)
+	}
+	available(t, lcp, metav1.ConditionFalse, lodiav1alpha1.ReasonExternalProbeFailed)
+	copied := secretOf(cluster, secret.Kubeconfig)
+	get(t, copied)
+	if string(copied.Data[secret.KubeconfigDataName]) != "a renewed kubeconfig" {
+		t.Errorf("the kubeconfig did not follow the renewal: %s", copied.Data[secret.KubeconfigDataName])
+	}
 }
 
 func TestAPredecessorsSecretsAreNotCopied(t *testing.T) {
