@@ -9,6 +9,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -18,6 +19,8 @@ import (
 	"sigs.k8s.io/e2e-framework/pkg/env"
 	"sigs.k8s.io/e2e-framework/pkg/envconf"
 )
+
+const clusterLabel = "io.x-k8s.kind.cluster"
 
 var (
 	testenv env.Environment
@@ -48,6 +51,7 @@ func install(ctx context.Context, cfg *envconf.Config) (context.Context, error) 
 	} {
 		start := time.Now()
 		if err := component.install(ctx, cfg); err != nil {
+			dump(ctx, cfg)
 			return ctx, fmt.Errorf("install %s: %w", component.name, err)
 		}
 		fmt.Printf("installed %s after %s\n", component.name, time.Since(start).Round(time.Second))
@@ -57,6 +61,21 @@ func install(ctx context.Context, cfg *envconf.Config) (context.Context, error) 
 
 func workDir(cfg *envconf.Config) string {
 	return filepath.Dir(cfg.KubeconfigFile())
+}
+
+// The Cluster is not named as the kind cluster: CAPD labels its containers
+// with kind's own label, so kind counts them as its nodes.
+func clusterName(cfg *envconf.Config) (string, error) {
+	kind, err := kindCluster(cfg.KubeconfigFile())
+	return kind + "-w", err
+}
+
+func docker(ctx context.Context, args ...string) (string, error) {
+	out, err := exec.CommandContext(ctx, "docker", args...).CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("docker %s: %w\n%s", args[0], err, out)
+	}
+	return string(out), nil
 }
 
 func kindCluster(kubeconfig string) (string, error) {

@@ -28,6 +28,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"sigs.k8s.io/cluster-api/cmd/clusterctl/client/yamlprocessor"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/e2e-framework/klient/decoder"
 	"sigs.k8s.io/e2e-framework/klient/k8s"
 	"sigs.k8s.io/e2e-framework/klient/wait/conditions"
@@ -161,6 +162,12 @@ func createWhenWebhooksAnswer(cfg *envconf.Config) decoder.HandlerFunc {
 			return last
 		}
 		return err
+	}
+}
+
+func ignoreExisting(create decoder.HandlerFunc) decoder.HandlerFunc {
+	return func(ctx context.Context, obj k8s.Object) error {
+		return client.IgnoreAlreadyExists(create(ctx, obj))
 	}
 }
 
