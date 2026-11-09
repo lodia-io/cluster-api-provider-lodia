@@ -11,7 +11,7 @@ passes the `LodiaControlPlane`'s spec through to it, takes the network from
 Cluster API's [control plane contract][contract] v1beta2 reads. It creates no
 Machines and never writes to the `Cluster` or the InfraCluster.
 Workers are to join through Cluster API's kubeadm bootstrap provider; no test has shown that yet ([below](#what-does-not-work-yet)).
-`LodiaControlPlaneTemplate` holds the same spec, but the version, the endpoint and `restoreFrom`, for ClusterClasses.
+`LodiaControlPlaneTemplate` holds the same spec, but the version, `controlPlaneEndpoint` and `restoreFrom`, for ClusterClasses.
 
 How each rule of the contract is met, the life of the objects and the reasons: [`docs/design.md`](docs/design.md).
 

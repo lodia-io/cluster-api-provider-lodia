@@ -51,7 +51,7 @@ type LodiaControlPlaneTemplateResource struct {
 
 // LodiaControlPlaneTemplateResourceSpec is the part of a LodiaControlPlane's
 // spec clusters can share: all but the version, which the Cluster's topology
-// sets, the endpoint and restoreFrom.
+// sets, controlPlaneEndpoint and restoreFrom.
 // +kubebuilder:validation:XValidation:rule="self.layout != 'Compact' || !has(self.highAvailability)",message="the Compact layout runs one replica of everything: remove highAvailability"
 // +kubebuilder:validation:XValidation:rule="self.layout != 'Compact' || !has(self.apiServer) || !has(self.apiServer.replicas) || self.apiServer.replicas == 1",message="the Compact layout runs one API server"
 // +kubebuilder:validation:XValidation:rule="!has(self.highAvailability) || !has(self.apiServer) || !has(self.apiServer.replicas) || self.apiServer.replicas >= 2",message="highAvailability runs at least two API servers"

@@ -97,7 +97,7 @@ spec:
                     description: |-
                       LodiaControlPlaneTemplateResourceSpec is the part of a LodiaControlPlane's
                       spec clusters can share: all but the version, which the Cluster's topology
-                      sets, the endpoint and restoreFrom.
+                      sets, controlPlaneEndpoint and restoreFrom.
                     properties:
                       addons:
                         description: Addons configures what Lodia runs inside the
