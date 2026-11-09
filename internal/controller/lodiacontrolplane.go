@@ -196,8 +196,8 @@ func (r *Reconciler) reconcileNormal(ctx context.Context, cluster *clusterv1.Clu
 	if cp == nil {
 		return reportWriteError(lcp, applyErr)
 	}
-	copyErr := r.copySecrets(ctx, cluster, lcp, cp)
-	if err := report(lcp, cp); err != nil {
+	copied, copyErr := r.copySecrets(ctx, cluster, lcp, cp)
+	if err := report(lcp, cp, copied); err != nil {
 		return errors.Join(err, applyErr, copyErr)
 	}
 	return errors.Join(reportWriteError(lcp, copyErr), reportWriteError(lcp, applyErr))
@@ -269,10 +269,10 @@ func cidrs(blocks []string) []lodiav1alpha1.CIDR {
 // leaves Lodia's PKI. Only the Secrets of this ControlPlane are copied: a
 // predecessor's may still await the garbage collector. A source without its key
 // counts as missing: applying it would blank the last good copy. One Secret's
-// failure does not stop the other's copy.
-func (r *Reconciler) copySecrets(ctx context.Context, cluster *clusterv1.Cluster, lcp *v1alpha1.LodiaControlPlane, cp *unstructured.Unstructured) error {
-	var errs []error
-	for _, c := range []struct {
+// failure does not stop the other's copy. It returns whether both sources
+// existed and were applied.
+func (r *Reconciler) copySecrets(ctx context.Context, cluster *clusterv1.Cluster, lcp *v1alpha1.LodiaControlPlane, cp *unstructured.Unstructured) (bool, error) {
+	copies := []struct {
 		from    lodiav1alpha1.Secret
 		fromKey string
 		to      secret.Purpose
@@ -280,7 +280,10 @@ func (r *Reconciler) copySecrets(ctx context.Context, cluster *clusterv1.Cluster
 	}{
 		{lodiav1alpha1.AdminKubeconfigSecret, lodiav1alpha1.KubeconfigKey, secret.Kubeconfig, secret.KubeconfigDataName},
 		{lodiav1alpha1.CABundleSecret, lodiav1alpha1.CACertKey, secret.ClusterCA, secret.TLSCrtDataName},
-	} {
+	}
+	applied := 0
+	var errs []error
+	for _, c := range copies {
 		source := &corev1.Secret{}
 		if err := r.APIReader.Get(ctx, client.ObjectKey{Namespace: cluster.Namespace, Name: c.from.Name(cluster.Name)}, source); apierrors.IsNotFound(err) {
 			continue
@@ -293,9 +296,11 @@ func (r *Reconciler) copySecrets(ctx context.Context, cluster *clusterv1.Cluster
 		}
 		if err := r.applySecret(ctx, cluster, lcp, secret.Name(cluster.Name, c.to), map[string][]byte{c.toKey: source.Data[c.fromKey]}); err != nil {
 			errs = append(errs, err)
+			continue
 		}
+		applied++
 	}
-	return errors.Join(errs...)
+	return applied == len(copies), errors.Join(errs...)
 }
 
 func (r *Reconciler) applySecret(ctx context.Context, cluster *clusterv1.Cluster, lcp *v1alpha1.LodiaControlPlane, name string, data map[string][]byte) error {
@@ -318,7 +323,7 @@ func (r *Reconciler) applySecret(ctx context.Context, cluster *clusterv1.Cluster
 		client.FieldOwner(FieldManager), client.ForceOwnership)
 }
 
-func report(lcp *v1alpha1.LodiaControlPlane, u *unstructured.Unstructured) error {
+func report(lcp *v1alpha1.LodiaControlPlane, u *unstructured.Unstructured, secretsCopied bool) error {
 	cp := &lodiav1alpha1.ControlPlane{}
 	if err := runtime.DefaultUnstructuredConverter.FromUnstructured(u.Object, cp); err != nil {
 		return err
@@ -326,7 +331,7 @@ func report(lcp *v1alpha1.LodiaControlPlane, u *unstructured.Unstructured) error
 	if e := cp.Status.Endpoint; e != nil {
 		lcp.Spec.ControlPlaneEndpoint = clusterv1.APIEndpoint{Host: e.APIServer.Host, Port: e.APIServer.Port}
 	}
-	if meta.IsStatusConditionTrue(cp.Status.Conditions, lodiav1alpha1.ConditionReady) {
+	if secretsCopied && meta.IsStatusConditionTrue(cp.Status.Conditions, lodiav1alpha1.ConditionReady) {
 		lcp.Status.Initialization.ControlPlaneInitialized = new(true)
 	}
 	if k := cp.Status.Kubernetes; k != nil && k.Version != "" {

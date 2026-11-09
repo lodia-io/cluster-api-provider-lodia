@@ -18,7 +18,7 @@ or not built yet.
 | ✓ | a group other than `controlplane.cluster.x-k8s.io` grants CAPI core full access by an aggregated ClusterRole | `config/rbac/aggregated_role.yaml`, labelled `cluster.x-k8s.io/aggregate-to-manager: "true"` | [group][cp-group], [aggregated_role.yaml][rbac-agg] |
 | ✓ | `spec.controlPlaneEndpoint`; the Cluster takes it together with initialization, and only while its own endpoint is empty | from `status.endpoint.apiServer`; never waits for the Cluster's endpoint | [endpoint][cp-endpoint], [cluster_controller_phases.go][cl-cp-endpoint] |
 | ✓ | `spec.version`; the version in `status.versions` (preferred) or `status.version` (read when `versions` is absent, dropped by the next contract version) | both, from `status.kubernetes.version`; `versions` holds that one entry | [version][cp-version], [CurrentStatusVersion][ct-current] |
-| ✓ | `status.initialization.controlPlaneInitialized` | set the first time Lodia's `Ready` is True, and kept, as CAPI keeps the Cluster's ([Cluster controller][cl-cp]) | [initialization][cp-init] |
+| ✓ | `status.initialization.controlPlaneInitialized` | set the first time Lodia's `Ready` is True and both Secrets are copied, and kept, as CAPI keeps the Cluster's ([Cluster controller][cl-cp]) | [initialization][cp-init] |
 | ✓ | `status.externalManagedControlPlane` (written for managed control planes with Machines, but the Machine controller reads it before it drains and deletes any worker's Node; with no control plane Machines and the flag unset, a deleted worker is neither drained nor its Node deleted) | always `true` | [rule][cp-extmanaged], [isDeleteNodeAllowed][m-allowed], [util.go][util-extmanaged] |
 | ✓ | conditions: `Available` is mirrored into the Cluster's `ControlPlaneAvailable` and must hold through disruption | `Available` mirrors Lodia's `Reachable`; `Ready` and `Paused` beside it (§2) | [conditions][cp-conditions], [mirror][cs-available] |
 | ✓ | no terminal failure fields | none | [terminal failures][cp-failures] |
@@ -64,7 +64,7 @@ the network, so a field the CRD test makes the two schemas share needs no code.
 
 | `status` field | from Lodia | note |
 |---|---|---|
-| `initialization.controlPlaneInitialized` | `Ready` True, at any generation | set once, never cleared |
+| `initialization.controlPlaneInitialized` | `Ready` True, at any generation, on a pass that has copied both Secrets | set once, never cleared |
 | `externalManagedControlPlane` | — | always `true` |
 | `versions`, `version` | `status.kubernetes.version` | set once Lodia reports one (§4.1); `versions` holds that one entry |
 

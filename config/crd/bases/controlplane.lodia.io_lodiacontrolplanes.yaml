@@ -1086,14 +1086,15 @@ spec:
                   and no Nodes.
                 type: boolean
               initialization:
-                description: Initialization is set once the ControlPlane is first
-                  Ready.
+                description: |-
+                  Initialization is set once the ControlPlane is Ready and both Secrets are
+                  copied.
                 minProperties: 1
                 properties:
                   controlPlaneInitialized:
                     description: |-
                       ControlPlaneInitialized is true from the first time the ControlPlane is
-                      Ready.
+                      Ready and both Secrets are copied.
                     type: boolean
                 type: object
               version:

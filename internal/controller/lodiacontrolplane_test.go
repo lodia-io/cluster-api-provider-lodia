@@ -738,6 +738,54 @@ func TestAFailureOnOneSecretDoesNotStopTheOther(t *testing.T) {
 	}
 }
 
+func TestInitializationWaitsForBothSecrets(t *testing.T) {
+	cluster, lcp := create(t, namespace(t), "omega")
+	r := direct(t, interceptor.Funcs{})
+	untilBlockMove(t, r, lcp)
+	passes(t, r, lcp)
+	cp := controlPlaneOf(cluster)
+	get(t, cp)
+	setReady(t, cp)
+	notInitialized := func() {
+		t.Helper()
+		passes(t, r, lcp)
+		get(t, lcp)
+		if i := lcp.Status.Initialization.ControlPlaneInitialized; i != nil {
+			t.Errorf("initialized without both Secrets: %+v", lcp.Status)
+		}
+		if err := ready(lcp, metav1.ConditionTrue, lodiav1alpha1.ReasonReady, ""); err != nil {
+			t.Error(err)
+		}
+	}
+	notInitialized()
+
+	issued := lodiaSecrets(t, cluster, ownedBy(cp))
+	bundle := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: cluster.Namespace, Name: lodiav1alpha1.CABundleSecret.Name(cluster.Name)}}
+	if err := k8s.Delete(t.Context(), bundle); err != nil {
+		t.Fatal(err)
+	}
+	notInitialized()
+	get(t, secretOf(cluster, secret.Kubeconfig))
+
+	restored := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Namespace: cluster.Namespace, Name: bundle.Name, Labels: map[string]string{lodiav1alpha1.ControlPlaneLabel: cluster.Name}, OwnerReferences: ownedBy(cp)},
+		Data:       map[string][]byte{lodiav1alpha1.CACertKey: issued.cert},
+	}
+	if err := k8s.Create(t.Context(), restored); err != nil {
+		t.Fatal(err)
+	}
+	passes(t, r, lcp)
+	get(t, lcp)
+	initialized(t, lcp)
+
+	if err := k8s.Delete(t.Context(), restored); err != nil {
+		t.Fatal(err)
+	}
+	passes(t, r, lcp)
+	get(t, lcp)
+	initialized(t, lcp)
+}
+
 func TestARestartBetweenWritesResumes(t *testing.T) {
 	cluster, lcp := create(t, namespace(t), "theta")
 	untilBlockMove(t, direct(t, interceptor.Funcs{}), lcp)
@@ -979,9 +1027,16 @@ func TestAPredecessorsSecretsAreNotCopied(t *testing.T) {
 		APIVersion: lodiav1alpha1.GroupVersion.String(), Kind: "ControlPlane", Name: cluster.Name, UID: "the-predecessor", Controller: new(true),
 	}}
 	lodiaSecrets(t, cluster, predecessor)
+	cp := controlPlaneOf(cluster)
+	get(t, cp)
+	setReady(t, cp)
 
 	passes(t, r, lcp)
 	absent(t, secretOf(cluster, secret.Kubeconfig), secretOf(cluster, secret.ClusterCA))
+	get(t, lcp)
+	if i := lcp.Status.Initialization.ControlPlaneInitialized; i != nil {
+		t.Errorf("initialized from a predecessor's Secrets: %+v", lcp.Status)
+	}
 
 	for _, name := range []string{
 		lodiav1alpha1.CABundleSecret.Name(cluster.Name), lodiav1alpha1.AdminKubeconfigSecret.Name(cluster.Name), cluster.Name + "-cakey-cluster",
@@ -990,8 +1045,6 @@ func TestAPredecessorsSecretsAreNotCopied(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	cp := controlPlaneOf(cluster)
-	get(t, cp)
 	lodiaSecrets(t, cluster, ownedBy(cp))
 	passes(t, r, lcp)
 	get(t, secretOf(cluster, secret.Kubeconfig))

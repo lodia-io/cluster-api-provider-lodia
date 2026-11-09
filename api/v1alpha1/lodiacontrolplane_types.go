@@ -98,7 +98,8 @@ type LodiaControlPlaneStatus struct {
 	// +kubebuilder:validation:MaxItems=32
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
 
-	// Initialization is set once the ControlPlane is first Ready.
+	// Initialization is set once the ControlPlane is Ready and both Secrets are
+	// copied.
 	// +optional
 	Initialization LodiaControlPlaneInitializationStatus `json:"initialization,omitempty,omitzero"`
 
@@ -128,7 +129,7 @@ type LodiaControlPlaneStatus struct {
 // +kubebuilder:validation:MinProperties=1
 type LodiaControlPlaneInitializationStatus struct {
 	// ControlPlaneInitialized is true from the first time the ControlPlane is
-	// Ready.
+	// Ready and both Secrets are copied.
 	// +optional
 	ControlPlaneInitialized *bool `json:"controlPlaneInitialized,omitempty"`
 }
