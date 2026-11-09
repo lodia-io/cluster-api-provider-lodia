@@ -1412,6 +1412,68 @@ func TestASourceWithoutItsKeyWritesNoCopy(t *testing.T) {
 	absent(t, secretOf(cluster, secret.Kubeconfig), secretOf(cluster, secret.ClusterCA))
 }
 
+func unavailableSecret(name string) func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+	return func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+		if _, ok := obj.(*corev1.Secret); ok && key.Name == name {
+			return apierrors.NewServiceUnavailable("the API server is restarting")
+		}
+		return c.Get(ctx, key, obj, opts...)
+	}
+}
+
+func TestATransientReadOfASourceSecretIsReturned(t *testing.T) {
+	cluster, lcp, _, _, _ := readyControlPlane(t, "source-read")
+	copied := secretOf(cluster, secret.Kubeconfig)
+	get(t, copied)
+	kubeconfig := copied.Data[secret.KubeconfigDataName]
+	bundle := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: cluster.Namespace, Name: lodiav1alpha1.CABundleSecret.Name(cluster.Name)}}
+	get(t, bundle)
+	bundle.Data[lodiav1alpha1.CACertKey] = []byte("a renewed CA")
+	if err := k8s.Update(t.Context(), bundle); err != nil {
+		t.Fatal(err)
+	}
+
+	unavailable := direct(t, interceptor.Funcs{Get: unavailableSecret(lodiav1alpha1.AdminKubeconfigSecret.Name(cluster.Name))})
+	if err := pass(t.Context(), unavailable, lcp); !apierrors.IsServiceUnavailable(err) {
+		t.Fatalf("the pass returned %v", err)
+	}
+	get(t, copied)
+	if !bytes.Equal(copied.Data[secret.KubeconfigDataName], kubeconfig) {
+		t.Errorf("the copy changed to %q", copied.Data[secret.KubeconfigDataName])
+	}
+	ca := secretOf(cluster, secret.ClusterCA)
+	get(t, ca)
+	if string(ca.Data[secret.TLSCrtDataName]) != "a renewed CA" {
+		t.Errorf("the other copy did not follow its source: %q", ca.Data[secret.TLSCrtDataName])
+	}
+}
+
+func TestATransientReadOfATargetSecretLeavesTheLeftoverAlone(t *testing.T) {
+	cluster, lcp := create(t, namespace(t), "target-read")
+	r := direct(t, interceptor.Funcs{})
+	untilBlockMove(t, r, lcp)
+	passes(t, r, lcp)
+	cp := controlPlaneOf(cluster)
+	get(t, cp)
+	lodiaSecrets(t, cluster, ownedBy(cp))
+	leftover := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Namespace: cluster.Namespace, Name: secret.Name(cluster.Name, secret.Kubeconfig)},
+		Data:       map[string][]byte{secret.KubeconfigDataName: []byte("a predecessor's kubeconfig")},
+	}
+	if err := k8s.Create(t.Context(), leftover); err != nil {
+		t.Fatal(err)
+	}
+
+	unavailable := direct(t, interceptor.Funcs{Get: unavailableSecret(leftover.Name)})
+	if err := pass(t.Context(), unavailable, lcp); !apierrors.IsServiceUnavailable(err) {
+		t.Fatalf("the pass returned %v", err)
+	}
+	get(t, leftover)
+	if string(leftover.Data[secret.KubeconfigDataName]) != "a predecessor's kubeconfig" || len(leftover.OwnerReferences) != 0 {
+		t.Errorf("the leftover changed: %v, owners %v", leftover.Data, leftover.OwnerReferences)
+	}
+}
+
 func TestAnInitializedControlPlaneIsNotRecreated(t *testing.T) {
 	cluster, lcp, cp, r, issued := readyControlPlane(t, "xi")
 	if err := k8s.Delete(t.Context(), cp); err != nil {
