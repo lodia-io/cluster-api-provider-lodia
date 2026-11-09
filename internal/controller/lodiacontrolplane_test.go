@@ -569,7 +569,7 @@ func deleteTheCluster(t *testing.T, cluster *clusterv1.Cluster) {
 	}
 	eventually(t, func() error {
 		if err := k8s.Get(t.Context(), client.ObjectKeyFromObject(cluster), cluster); !apierrors.IsNotFound(err) {
-			return fmt.Errorf("the Cluster: %v", err)
+			return fmt.Errorf("the Cluster: %w", err)
 		}
 		return nil
 	})
@@ -706,7 +706,7 @@ func TestAReadErrorWhileDeletingKeepsTheFinalizer(t *testing.T) {
 	passes(t, r, lcp)
 	eventually(t, func() error {
 		if err := k8s.Get(t.Context(), client.ObjectKeyFromObject(cp), cp); !apierrors.IsNotFound(err) {
-			return fmt.Errorf("the ControlPlane: %v", err)
+			return fmt.Errorf("the ControlPlane: %w", err)
 		}
 		return nil
 	})
@@ -835,7 +835,9 @@ func settled(t *testing.T, lcp *v1alpha1.LodiaControlPlane) {
 func TestAClusterEventAloneReachesARunningManager(t *testing.T) {
 	startManager(t)
 	cluster, lcp := create(t, namespace(t), "delta-event")
-	eventually(t, func() error { return k8s.Get(t.Context(), client.ObjectKeyFromObject(cluster), controlPlaneOf(cluster)) })
+	eventually(t, func() error {
+		return k8s.Get(t.Context(), client.ObjectKeyFromObject(cluster), controlPlaneOf(cluster))
+	})
 	settled(t, lcp)
 
 	paused := cluster.DeepCopy()
