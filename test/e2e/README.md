@@ -6,11 +6,12 @@ The suite runs only against a kind cluster whose kubeconfig is named on the comm
 `E2E_CLUSTER` changes the name, to at most 30 characters.
 The Cluster is named `<E2E_CLUSTER>-w`: CAPD [labels](https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/test/infrastructure/docker/internal/docker/util.go#L31) its containers with the Cluster's name in kind's own [label](https://github.com/kubernetes-sigs/kind/blob/v0.33.0/pkg/cluster/internal/providers/docker/constants.go#L21) for the nodes of a cluster, so that name must not be the kind cluster's, and Lodia [caps](https://github.com/lodia-io/lodia/blob/57375832e7fe8b3a06374613797eb4c544fe7612/api/v1alpha1/controlplane_types.go#L17) the name of the `ControlPlane`, the Cluster's, at 32 characters.
 The cluster has one node of kind's default image, with the Docker socket that CAPD needs and the admission plugin `OwnerReferencesPermissionEnforcement`, which [refuses](https://github.com/kubernetes/kubernetes/blob/v1.37.0/plugin/pkg/admission/gc/gc_admission.go#L149) an owner reference with `blockOwnerDeletion` to an object whose finalizers the writer cannot set.
-After it creates the cluster and again at the end, `make e2e` removes the containers labelled for the Cluster, with their volumes; on a Linux host, delete the cluster of a killed run first: `go tool kind delete cluster --name lodia-e2e-capi --kubeconfig work/e2e/kubeconfig`.
+After it creates the cluster and again at the end, `make e2e` removes the containers labelled for the Cluster, with their volumes; on a Linux host, delete the cluster of a killed run first: `go tool kind delete cluster --name lodia-e2e-capi --kubeconfig work/e2e/lodia-e2e-capi/kubeconfig`.
 
 The suite needs Docker and helm on the `PATH`, and runs where the Docker network `kind` is routable from the test process, as on GitHub's Linux runners: it dials the tenant's API server at a kind node's address on that network.
 Docker Desktop does not route it, so the suite does not run on macOS.
-Its files are in `work/e2e`: the kubeconfig, the clone of Lodia, the release YAMLs and, after a failure, the artifacts.
+Its files are in `work/e2e/<E2E_CLUSTER>`, one directory for each cluster, so that two runs in one checkout share no kubeconfig: the kubeconfig, the release YAMLs and, after a failure, the artifacts.
+The clone of Lodia is `work/lodia`.
 
 ## What it installs
 
@@ -21,7 +22,7 @@ In this order, each Deployment waited on until `Available`:
 | cert-manager v1.21.3 | its release YAML |
 | Cluster API and its kubeadm bootstrap provider v1.15.0-beta.0 | their release YAMLs |
 | Cluster API provider Docker v1.15.0-beta.0 | the release's `infrastructure-components-development.yaml`, whose image is built for the [staging registry](https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/Makefile#L1071-L1074) |
-| Lodia and etcd-druid | the chart of the [Lodia commit](https://github.com/lodia-io/lodia/tree/57375832e7fe8b3a06374613797eb4c544fe7612) that `go.mod` pins, fetched by `make e2e-lodia` into `work/e2e/lodia`, with images built by ko into the kind cluster |
+| Lodia and etcd-druid | the chart of the [Lodia commit](https://github.com/lodia-io/lodia/tree/57375832e7fe8b3a06374613797eb4c544fe7612) that `go.mod` pins, fetched by `make e2e-lodia` into `work/lodia`, with images built by ko into the kind cluster |
 | this provider | `config/default`, built by kustomize and ko into the kind cluster |
 
 A release YAML is checked against a sha256 kept in [`install_test.go`](install_test.go), rendered with Cluster API's `yamlprocessor`, and every `image:` in it gets a digest from the same file; an `image:` without one fails the install.
@@ -52,5 +53,5 @@ No assertion reads it.
 
 ## On failure
 
-The suite writes to `work/e2e/artifacts`, and CI uploads it: the objects above with their conditions, the pods and logs of the managers of Cluster API, CAPD, Lodia and the provider, and from the worker container `journalctl -u kubelet -u containerd` and `crictl ps -a`.
+The suite writes to `work/e2e/<E2E_CLUSTER>/artifacts`, and CI uploads it: the objects above with their conditions, the pods and logs of the managers of Cluster API, CAPD, Lodia and the provider, and from the worker container `journalctl -u kubelet -u containerd` and `crictl ps -a`.
 CAPD does not retry a failed bootstrap; the output of `kubeadm join` is in the `BootstrapCompleted` condition of the `DevMachine`.

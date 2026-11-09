@@ -229,7 +229,7 @@ func installCAPD(ctx context.Context, cfg *envconf.Config) error {
 }
 
 func installLodia(ctx context.Context, cfg *envconf.Config) error {
-	lodia := filepath.Join(workDir(cfg), "lodia")
+	lodia := filepath.Join(root, "work", "lodia")
 	chart := filepath.Join(lodia, "charts", "lodia")
 	args := []string{"--install", "--create-namespace"}
 	for _, build := range []struct{ values, command string }{{"image", "./cmd/lodia"}, {"signerImage", "./cmd/lodia-signer"}, {"tunnelImage", "./cmd/lodia-tunnel"}} {
