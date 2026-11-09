@@ -20,15 +20,15 @@ How each rule of the contract is met, the life of the objects and the reasons: [
 ## Build and test
 
 You need Go (the version in `go.mod`) and [golangci-lint](https://golangci-lint.run/) v2.13.2.
-Every other tool runs through `go tool` or `go run`; `make e2e` also needs Docker and helm.
+Every other tool runs through `go tool` or `go run`.
 
 | command | does |
 |---|---|
 | `make generate` | deepcopy functions, the CRDs in `config/crd/bases` and the controller's ClusterRole in `config/rbac/role.yaml`; commit the result |
 | `make verify` | the check that says a change is done: generated files current, lint, unit and envtest tests |
-| `make e2e` | the [end-to-end suite](test/e2e/README.md) on a kind cluster of its own; CI runs it, and it needs a route to Docker's network `kind` |
+| `make e2e` | the [end-to-end suite](test/e2e/README.md) on a kind cluster of its own; CI runs it |
 
-The envtest suite starts its own API server and etcd; nothing in it reads a kubeconfig, and the e2e suite reads only the kubeconfig of its own kind cluster.
+The envtest suite starts its own API server and etcd; nothing in it reads a kubeconfig.
 
 Licensed under the [Apache License 2.0](LICENSE).
 

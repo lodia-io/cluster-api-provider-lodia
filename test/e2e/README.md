@@ -32,7 +32,7 @@ A release YAML is checked against a sha256 kept in [`install_test.go`](install_t
 Every create is retried for a minute on a webhook or x509 error, since a webhook can be `Available` before its certificate is in place, which clusterctl [guards](https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/cmd/clusterctl/client/cluster/cert_manager.go#L565-L571) against with a throwaway Issuer and Certificate.
 kind is a `go tool`; ko and kustomize run through `go run` at pinned versions, which keeps them out of `go.mod`; helm v4.3.1 comes from the workflow.
 
-To move a pin, change the version, the sum and the digests together.
+To move a pin, change the version, the sum and the digests together, and the version in the table above.
 Read a digest with `go run github.com/google/go-containerregistry/cmd/crane@v0.22.1 digest <image>` and a sum from the release asset.
 Lodia's commit is in two places, the pseudo-version of `go.lodia.io/lodia/api` in `go.mod` and `LODIA_COMMIT` in the `Makefile`; `TestLodiaCommitIsThePinnedAPI` fails when they differ.
 
