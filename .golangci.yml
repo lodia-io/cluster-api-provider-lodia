@@ -1,6 +1,5 @@
-# Every Segla Go repository carries this file as .golangci.yml, unchanged: the
-# lint job fails on any difference. An exception goes at its site as
-# //nolint:<linter> // <why>, never as a rule switched off for one repository.
+# An exception goes at its site as //nolint:<linter> // <why>, never as a rule
+# switched off for one repository.
 version: "2"
 
 linters:
