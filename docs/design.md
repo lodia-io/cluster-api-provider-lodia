@@ -1,17 +1,10 @@
 # cluster-api-provider-lodia — design
 
-Pinned sources: Cluster API [v1.15.0-beta.0] (a3b7b6f), which moves to v1.15.0 when that is released; kubeadm and Kubernetes v1.35.0; and Lodia's API module at [lodia-io/lodia@5737583][lo].
+Pinned sources: Cluster API [v1.15.0-beta.0] (a3b7b6f); kubeadm and Kubernetes v1.35.0; and Lodia's API module at [lodia-io/lodia@5737583][lo].
 Links marked 5f212ed point at that older commit of Lodia.
 
-**In one paragraph.** `LodiaControlPlane` (`controlplane.lodia.io/v1alpha1`)
-is a Cluster API control plane object that owns exactly one Lodia
-`ControlPlane`, named after the `Cluster` and in its namespace. The provider
-passes Lodia's spec through, takes the network from
-`Cluster.spec.clusterNetwork`, and turns Lodia's status into the contract: the
-endpoint, `controlPlaneInitialized`, the version, `Available`, and the two
-Secrets Cluster API reads, `<cluster>-kubeconfig` and `<cluster>-ca`. It creates
-no Machines, touches no InfraCluster and no `Cluster`.
-Workers are to join through CAPI's kubeadm bootstrap provider (CABPK) with the bootstrap objects Lodia's Tenant controller already writes ([nodes-join-with-kubeadm][lo-kubeadm]); no test has shown a join yet.
+What the provider is and does: the [README](../README.md).
+Workers are to join through CAPI's kubeadm bootstrap provider (CABPK) with the bootstrap objects Lodia's Tenant controller already writes ([nodes-join-with-kubeadm][lo-kubeadm]).
 
 ## 1. The contract, as built
 
@@ -123,7 +116,7 @@ wakes the provider when it goes.
 A pass has a minute ([ReconciliationTimeout][cr-timeout]).
 The cache resyncs every 10 minutes, Cluster API's default ([--sync-period][capi-sync]), which repairs the provider's own Secrets, which no watch covers, and a missed delete event.
 
-RBAC, generated from markers into `config/rbac/role.yaml`: `lodiacontrolplanes` get/list/watch/patch, `/status` patch, `/finalizers` update; `lodia.io` `controlplanes` get/list/watch/create/patch/delete; `cluster.x-k8s.io` `clusters` get/list/watch; `secrets` get/list/watch/create/patch; and for leader election and the metrics filter, `leases` get/create/update, `events` create/patch, `tokenreviews` create and `subjectaccessreviews` create.
+RBAC is generated from markers into [`config/rbac/role.yaml`](../config/rbac/role.yaml).
 The envtest suite runs the controller, and a leader-elected manager, as a user bound to that role. Module `go.lodia.io/cluster-api-provider-lodia`,
 importing `sigs.k8s.io/cluster-api/api` (its own module since v1.14) and
 `go.lodia.io/lodia/api` ([go.mod][lo-api-gomod]).

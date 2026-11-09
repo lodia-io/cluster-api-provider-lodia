@@ -343,7 +343,7 @@ func report(lcp *v1alpha1.LodiaControlPlane, u *unstructured.Unstructured) error
 }
 
 // reportLost keeps the verdict of a ControlPlane deleted behind the provider's
-// back: a new one would start with a new CA and an empty etcd.
+// back; docs/design.md, step 4 of a pass, says why it is not recreated.
 func reportLost(lcp *v1alpha1.LodiaControlPlane, name string) {
 	message := fmt.Sprintf("ControlPlane %s is gone and is not recreated: delete the Cluster to start over", name)
 	for _, conditionType := range []string{clusterv1.ReadyCondition, clusterv1.AvailableCondition} {
