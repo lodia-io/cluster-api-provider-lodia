@@ -299,26 +299,37 @@ func TestAWorkerJoinsAClusterOfLodiasControlPlane(t *testing.T) {
 			return ctx
 		}).
 		Assess("deleting the Cluster removes the LodiaControlPlane, the ControlPlane, the etcd claim and the worker's container", func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
+			etcd := lodiav1alpha1.EtcdName(key.Name)
+			claim := &corev1.PersistentVolumeClaim{ObjectMeta: metav1.ObjectMeta{Namespace: key.Namespace, Name: etcd + "-" + etcd + "-0"}}
+			if err := k8s.Get(ctx, client.ObjectKeyFromObject(claim), claim); err != nil {
+				t.Fatalf("the etcd claim, whose removal this step checks: %v", err)
+			}
+			containers, err := clusterContainers(ctx, key.Name)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(containers) != 1 {
+				t.Fatalf("%d containers are labelled for the Cluster, want the worker's alone: %v", len(containers), containers)
+			}
 			if err := k8s.Delete(ctx, &clusterv1.Cluster{ObjectMeta: metav1.ObjectMeta{Namespace: key.Namespace, Name: key.Name}}); err != nil {
 				t.Fatal(err)
 			}
-			etcd := lodiav1alpha1.EtcdName(key.Name)
 			until(ctx, t, 10*time.Minute, "everything the Cluster made is gone", func(ctx context.Context) error {
 				for _, obj := range []client.Object{
 					&clusterv1.Cluster{ObjectMeta: metav1.ObjectMeta{Namespace: key.Namespace, Name: key.Name}},
 					&v1alpha1.LodiaControlPlane{ObjectMeta: metav1.ObjectMeta{Namespace: key.Namespace, Name: key.Name}},
 					&lodiav1alpha1.ControlPlane{ObjectMeta: metav1.ObjectMeta{Namespace: key.Namespace, Name: key.Name}},
-					&corev1.PersistentVolumeClaim{ObjectMeta: metav1.ObjectMeta{Namespace: key.Namespace, Name: etcd + "-" + etcd + "-0"}},
+					claim,
 				} {
 					if err := gone(k8s.Get(ctx, client.ObjectKeyFromObject(obj), obj)); err != nil {
 						return fmt.Errorf("%T %s: %w", obj, obj.GetName(), err)
 					}
 				}
-				containers, err := docker(ctx, "ps", "--all", "--quiet", "--filter", "label="+clusterLabel+"="+key.Name)
+				left, err := clusterContainers(ctx, key.Name)
 				if err != nil {
 					return err
 				}
-				if left := strings.Fields(containers); len(left) > 0 {
+				if len(left) > 0 {
 					return fmt.Errorf("containers %s are left", strings.Join(left, ", "))
 				}
 				return nil
@@ -412,6 +423,11 @@ func running(pod *corev1.Pod) error {
 		}
 	}
 	return nil
+}
+
+func clusterContainers(ctx context.Context, cluster string) ([]string, error) {
+	out, err := docker(ctx, "ps", "--all", "--quiet", "--filter", "label="+clusterLabel+"="+cluster)
+	return strings.Fields(out), err
 }
 
 func gone(err error) error {
