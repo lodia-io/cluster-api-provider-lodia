@@ -196,9 +196,8 @@ sequenceDiagram
    server `cluster-info` names ([discovery][kubeadm-discovery],
    [pins][kubeadm-pins], [JWS wait][kubeadm-jws]).
 
-**Upgrade.** A new `spec.version` reaches Lodia, which steps one minor at a time;
-`status.version` moves when Lodia's version does, so CAPI holds new workers as
-"upgrading" until then and then lets the MachineDeployment follow.
+**Upgrade.** A new `spec.version` within a minor reaches Lodia, and `status.version` moves when Lodia's version does, so CAPI holds new workers as "upgrading" until then and then lets the MachineDeployment follow.
+Lodia at the pin moves its target within a minor only ([target][lo-target]): a `spec.version` of another minor leaves the target where it is, `Progressing` `False`, `Unsupported`, so `status.kubernetes.version` stays behind and CAPI holds new workers ([contract state][ct-state]) until Lodia builds minor upgrades.
 
 ## 4. What Cluster API needs from Lodia's API
 
@@ -398,6 +397,7 @@ out; CAPI then leaves the Cluster's control plane counters empty
 [lo-paused]: https://github.com/lodia-io/lodia/blob/57375832e7fe8b3a06374613797eb4c544fe7612/api/v1alpha1/controlplane_types.go#L124-L132
 [lo-names-ca]: https://github.com/lodia-io/lodia/blob/57375832e7fe8b3a06374613797eb4c544fe7612/api/v1alpha1/names.go#L23-L31
 [lo-names-kubeconfig]: https://github.com/lodia-io/lodia/blob/57375832e7fe8b3a06374613797eb4c544fe7612/api/v1alpha1/names.go#L59-L71
+[lo-target]: https://github.com/lodia-io/lodia/blob/57375832e7fe8b3a06374613797eb4c544fe7612/internal/controller/lifecycle/lifecycle.go#L138-L152
 [lo-workers]: https://github.com/lodia-io/lodia/blob/57375832e7fe8b3a06374613797eb4c544fe7612/internal/operator/operator.go#L40-L42
 [lo-labels]: https://github.com/lodia-io/lodia/blob/57375832e7fe8b3a06374613797eb4c544fe7612/api/v1alpha1/labels.go#L17-L20
 
