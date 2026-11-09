@@ -140,6 +140,7 @@ and keeps its finalizer until a read past the cache finds the `ControlPlane`
 gone, which Lodia's `lodia.io/datastore` finalizer decides once the etcd is
 released (a paused `ControlPlane` waits for unpause); the Secrets go with
 their owner. A `ControlPlane` of another controller is left alone.
+Once the `Cluster` or the owner reference is gone, nothing is left to wait for: the provider removes its finalizer, and the garbage collector deletes the `ControlPlane` and the copies, which the `LodiaControlPlane` owns.
 
 ## 3. The flow
 

@@ -142,6 +142,13 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (_ ctrl.Re
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 	cluster, err := util.GetOwnerCluster(ctx, r.Client, lcp.ObjectMeta)
+	if !lcp.DeletionTimestamp.IsZero() && (apierrors.IsNotFound(err) || err == nil && cluster == nil) {
+		// Nothing is left to wait for: the garbage collector deletes the
+		// ControlPlane and the copies, which this object owns.
+		before := lcp.DeepCopy()
+		controllerutil.RemoveFinalizer(lcp, v1alpha1.Finalizer)
+		return ctrl.Result{}, r.Patch(ctx, lcp, client.MergeFrom(before))
+	}
 	if err != nil || cluster == nil {
 		return ctrl.Result{}, err
 	}
