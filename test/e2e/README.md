@@ -28,7 +28,7 @@ In this order, each Deployment waited on until `Available`:
 | Lodia and etcd-druid | the chart of the [Lodia commit](https://github.com/lodia-io/lodia/tree/57375832e7fe8b3a06374613797eb4c544fe7612) that `go.mod` pins, fetched by `make e2e-lodia` into `work/lodia`, with images built by ko into the kind cluster |
 | this provider | `config/default`, built by kustomize and ko into the kind cluster |
 
-A release YAML is checked against a sha256 kept in [`install_test.go`](install_test.go), rendered with Cluster API's `yamlprocessor`, and every `image:` in it gets a digest from the same file; an `image:` without one fails the install.
+A release YAML is checked against a sha256 kept in [`install_test.go`](install_test.go), rendered with Cluster API's `yamlprocessor`, and every `image:` in it gets a digest from the same file; an `image:` without one fails the install, and so does any container or init container image of the decoded documents that has none, whatever the shape of its line.
 Every create is retried for a minute on a webhook or x509 error, since a webhook can be `Available` before its certificate is in place, which clusterctl [guards](https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/cmd/clusterctl/client/cluster/cert_manager.go#L565-L571) against with a throwaway Issuer and Certificate.
 kind is a `go tool`; ko and kustomize run through `go run` at pinned versions, which keeps them out of `go.mod`; helm v4.3.1 comes from the workflow.
 

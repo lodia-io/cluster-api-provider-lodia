@@ -103,9 +103,9 @@ func (r release) manifest(ctx context.Context, dir string) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("render %s: %w", r.url, err)
 	}
-	pinned, unpinned := pinImages(rendered, r.images)
-	if len(unpinned) > 0 {
-		return nil, fmt.Errorf("%s runs images without a digest in the suite: %s", r.url, strings.Join(unpinned, ", "))
+	pinned, err := requireDigests(rendered, r.images)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", r.url, err)
 	}
 	return pinned, nil
 }
