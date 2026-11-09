@@ -659,6 +659,119 @@ func TestAGoneClusterKeepsTheFinalizerUntilDeletion(t *testing.T) {
 	}
 }
 
+func TestDeletionLeavesAForeignControlPlaneAlone(t *testing.T) {
+	ns := namespace(t)
+	previous, foreign := leftoverOfAnotherOwner(t, ns, "foreign")
+	_, lcp := create(t, ns, "foreign")
+	r := direct(t, interceptor.Funcs{})
+	untilBlockMove(t, r, lcp)
+	if err := k8s.Delete(t.Context(), lcp); err != nil {
+		t.Fatal(err)
+	}
+
+	passes(t, r, lcp)
+	absent(t, lcp)
+	get(t, foreign)
+	if !foreign.DeletionTimestamp.IsZero() || !metav1.IsControlledBy(foreign, previous) {
+		t.Errorf("the foreign ControlPlane changed: deletion %v, owners %v", foreign.DeletionTimestamp, foreign.OwnerReferences)
+	}
+}
+
+func TestAReadErrorWhileDeletingKeepsTheFinalizer(t *testing.T) {
+	_, lcp, cp, r, _ := readyControlPlane(t, "read-error")
+	if err := k8s.Delete(t.Context(), lcp); err != nil {
+		t.Fatal(err)
+	}
+	unavailable := direct(t, interceptor.Funcs{
+		Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+			if _, ok := obj.(*lodiav1alpha1.ControlPlane); ok {
+				return apierrors.NewServiceUnavailable("the API server is restarting")
+			}
+			return c.Get(ctx, key, obj, opts...)
+		},
+	})
+	if err := pass(t.Context(), unavailable, lcp); !apierrors.IsServiceUnavailable(err) {
+		t.Fatalf("the pass returned %v", err)
+	}
+	get(t, lcp)
+	if !strings.Contains(strings.Join(lcp.Finalizers, ","), v1alpha1.Finalizer) {
+		t.Errorf("finalizers %v", lcp.Finalizers)
+	}
+	get(t, cp)
+	if !cp.DeletionTimestamp.IsZero() {
+		t.Error("the ControlPlane is being deleted")
+	}
+
+	passes(t, r, lcp)
+	eventually(t, func() error {
+		if err := k8s.Get(t.Context(), client.ObjectKeyFromObject(cp), cp); !apierrors.IsNotFound(err) {
+			return fmt.Errorf("the ControlPlane: %v", err)
+		}
+		return nil
+	})
+	passes(t, r, lcp)
+	absent(t, lcp)
+}
+
+func TestAFailedDeleteIsReturnedAndKeepsTheFinalizer(t *testing.T) {
+	_, lcp, cp, _, _ := readyControlPlane(t, "delete-error")
+	if err := k8s.Delete(t.Context(), lcp); err != nil {
+		t.Fatal(err)
+	}
+	failure := errors.New("the API server refused the delete")
+	failing := direct(t, interceptor.Funcs{
+		Delete: func(context.Context, client.WithWatch, client.Object, ...client.DeleteOption) error {
+			return failure
+		},
+	})
+
+	if err := pass(t.Context(), failing, lcp); !errors.Is(err, failure) {
+		t.Fatalf("the pass returned %v", err)
+	}
+	get(t, lcp)
+	if !strings.Contains(strings.Join(lcp.Finalizers, ","), v1alpha1.Finalizer) {
+		t.Errorf("finalizers %v", lcp.Finalizers)
+	}
+	get(t, cp)
+	if !cp.DeletionTimestamp.IsZero() {
+		t.Error("the ControlPlane is being deleted")
+	}
+}
+
+func TestDeletionWaitsWhilePaused(t *testing.T) {
+	cluster, lcp, cp, r, _ := readyControlPlane(t, "paused-delete")
+	unpaused := cluster.DeepCopy()
+	cluster.Spec.Paused = new(true)
+	if err := k8s.Patch(t.Context(), cluster, client.MergeFrom(unpaused)); err != nil {
+		t.Fatal(err)
+	}
+	if err := k8s.Delete(t.Context(), lcp); err != nil {
+		t.Fatal(err)
+	}
+
+	passes(t, r, lcp)
+	get(t, cp)
+	if !cp.DeletionTimestamp.IsZero() {
+		t.Error("the ControlPlane was deleted while paused")
+	}
+	get(t, lcp)
+	if !strings.Contains(strings.Join(lcp.Finalizers, ","), v1alpha1.Finalizer) {
+		t.Errorf("finalizers %v", lcp.Finalizers)
+	}
+}
+
+func TestNoOwnerReferenceAndNoDeletionWaits(t *testing.T) {
+	cluster, lcp := create(t, namespace(t), "no-owner")
+	updateSpec(t, lcp, func(l *v1alpha1.LodiaControlPlane) { l.OwnerReferences = nil })
+
+	passes(t, direct(t, interceptor.Funcs{}), lcp)
+	get(t, lcp)
+	if len(lcp.Finalizers) != 0 {
+		t.Errorf("finalizers %v, want none before an owner reference", lcp.Finalizers)
+	}
+	absent(t, controlPlaneOf(cluster))
+}
+
 func TestPauseStopsTheProvider(t *testing.T) {
 	startManager(t)
 	cluster, lcp := create(t, namespace(t), "delta", func(c *clusterv1.Cluster) { c.Spec.Paused = new(true) })
@@ -739,9 +852,8 @@ func TestAClusterEventAloneReachesARunningManager(t *testing.T) {
 	})
 }
 
-func TestALeftoverControlPlaneOfAnotherOwnerIsLeftAlone(t *testing.T) {
-	startManager(t)
-	ns := namespace(t)
+func leftoverOfAnotherOwner(t *testing.T, ns, name string) (*corev1.ConfigMap, *lodiav1alpha1.ControlPlane) {
+	t.Helper()
 	previous := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "previous"}}
 	if err := k8s.Create(t.Context(), previous); err != nil {
 		t.Fatal(err)
@@ -749,7 +861,7 @@ func TestALeftoverControlPlaneOfAnotherOwnerIsLeftAlone(t *testing.T) {
 	leftover := &lodiav1alpha1.ControlPlane{
 		ObjectMeta: metav1.ObjectMeta{
 			Namespace:       ns,
-			Name:            "epsilon",
+			Name:            name,
 			OwnerReferences: []metav1.OwnerReference{*metav1.NewControllerRef(previous, corev1.SchemeGroupVersion.WithKind("ConfigMap"))},
 		},
 		Spec: lodiav1alpha1.ControlPlaneSpec{
@@ -762,6 +874,13 @@ func TestALeftoverControlPlaneOfAnotherOwnerIsLeftAlone(t *testing.T) {
 	if err := k8s.Create(t.Context(), leftover); err != nil {
 		t.Fatal(err)
 	}
+	return previous, leftover
+}
+
+func TestALeftoverControlPlaneOfAnotherOwnerIsLeftAlone(t *testing.T) {
+	startManager(t)
+	ns := namespace(t)
+	previous, leftover := leftoverOfAnotherOwner(t, ns, "epsilon")
 	cluster, lcp := create(t, ns, "epsilon")
 
 	eventually(t, func() error {
