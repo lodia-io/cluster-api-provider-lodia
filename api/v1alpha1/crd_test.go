@@ -77,8 +77,12 @@ func TestTheCRDsCarryTheContractLabel(t *testing.T) {
 		t.Fatalf("CRDs %v: %v", files, err)
 	}
 	for _, f := range files {
-		if v := crd(t, bases, f).Labels["cluster.x-k8s.io/v1beta2"]; v != "v1alpha1" {
+		labels := crd(t, bases, f).Labels
+		if v := labels["cluster.x-k8s.io/v1beta2"]; v != "v1alpha1" {
 			t.Errorf("%s: cluster.x-k8s.io/v1beta2 is %q", f, v)
+		}
+		if _, ok := labels["clusterctl.cluster.x-k8s.io"]; !ok {
+			t.Errorf("%s: no clusterctl.cluster.x-k8s.io label, labels %v", f, labels)
 		}
 	}
 }

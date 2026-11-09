@@ -14,6 +14,7 @@ import (
 // +kubebuilder:resource:path=lodiacontrolplanetemplates,scope=Namespaced,categories=cluster-api
 // +kubebuilder:storageversion
 // +kubebuilder:metadata:labels="cluster.x-k8s.io/v1beta2=v1alpha1"
+// +kubebuilder:metadata:labels="clusterctl.cluster.x-k8s.io="
 type LodiaControlPlaneTemplate struct {
 	metav1.TypeMeta `json:",inline"`
 

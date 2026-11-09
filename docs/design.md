@@ -258,6 +258,7 @@ out; CAPI then leaves the Cluster's control plane counters empty
    `clusterctl.cluster.x-k8s.io/block-move`, which makes move wait and fail
    before it creates anything ([annotation][move-ann], [wait][move-wait]): a
    hosted control plane does not move.
+   Both CRDs carry `clusterctl.cluster.x-k8s.io`, the label move finds CRDs by ([discovery][move-crds]), so the annotation is seen on an installation made by hand too.
    The Clusters stay paused after that failure ([move][move-pause]): set each one's `spec.paused` back to `false`.
 2. *The endpoint is copied once* ([Cluster controller][cl-cp-endpoint]): a
    LoadBalancer Service recreated with a new address, or in node port mode the
@@ -364,6 +365,7 @@ out; CAPI then leaves the Cluster's control plane counters empty
 [capi-sync]: https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/core/main.go#L246-L247
 [move-ann]: https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/cmd/clusterctl/api/v1alpha3/annotations.go#L35-L43
 [move-wait]: https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/cmd/clusterctl/client/cluster/mover.go#L685-L735
+[move-crds]: https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/cmd/clusterctl/client/cluster/objectgraph.go#L420-L431
 [move-delete]: https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/cmd/clusterctl/client/cluster/mover.go#L1260-L1312
 [paused]: https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/util/annotations/helpers.go#L31-L36
 [paused-cond]: https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/util/paused/paused.go#L44-L91

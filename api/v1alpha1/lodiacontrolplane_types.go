@@ -36,6 +36,7 @@ const (
 // +kubebuilder:resource:path=lodiacontrolplanes,scope=Namespaced,categories=cluster-api
 // +kubebuilder:storageversion
 // +kubebuilder:metadata:labels="cluster.x-k8s.io/v1beta2=v1alpha1"
+// +kubebuilder:metadata:labels="clusterctl.cluster.x-k8s.io="
 // +kubebuilder:printcolumn:name="Cluster",type=string,JSONPath=".metadata.labels['cluster\\.x-k8s\\.io/cluster-name']"
 // +kubebuilder:printcolumn:name="Version",type=string,JSONPath=".status.version"
 // +kubebuilder:printcolumn:name="Initialized",type=boolean,JSONPath=".status.initialization.controlPlaneInitialized"
