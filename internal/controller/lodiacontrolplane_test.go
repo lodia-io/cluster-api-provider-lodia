@@ -1778,6 +1778,20 @@ func TestTheCacheHoldsOnlyLodiasSecretsAndOnlyTheirMetadata(t *testing.T) {
 	}
 }
 
+func TestAnEditOfAFieldTheProviderOwnsIsReverted(t *testing.T) {
+	_, lcp, cp, r, _ := readyControlPlane(t, "edited")
+	before := cp.DeepCopy()
+	cp.Spec.Version = "v1.35.9"
+	if err := k8s.Patch(t.Context(), cp, client.MergeFrom(before)); err != nil {
+		t.Fatal(err)
+	}
+	passes(t, r, lcp)
+	get(t, cp)
+	if cp.Spec.Version != "v1.35.8" {
+		t.Errorf("version %s, want it reverted", cp.Spec.Version)
+	}
+}
+
 func TestTheRoleCoversLeaderElectionAndTheMetricsFilter(t *testing.T) {
 	ns := namespace(t)
 	mgr, err := ctrl.NewManager(asController, ctrl.Options{
