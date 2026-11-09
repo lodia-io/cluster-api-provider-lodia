@@ -1138,6 +1138,82 @@ func TestAnInitializedControlPlaneIsNotRecreated(t *testing.T) {
 	}
 }
 
+func TestAControlPlaneVanishingBeforeTheApplyIsNotRecreated(t *testing.T) {
+	cluster, lcp, cp, r, _ := readyControlPlane(t, "tau")
+	racing := direct(t, interceptor.Funcs{
+		Apply: func(ctx context.Context, c client.WithWatch, obj runtime.ApplyConfiguration, opts ...client.ApplyOption) error {
+			if _, ok := obj.(*corev1ac.SecretApplyConfiguration); !ok {
+				if err := k8s.Delete(ctx, controlPlaneOf(cluster)); err != nil {
+					return err
+				}
+			}
+			return c.Apply(ctx, obj, opts...)
+		},
+	})
+	if err := pass(t.Context(), racing, lcp); !apierrors.IsConflict(err) {
+		t.Fatalf("the pass returned %v, want a conflict on the UID", err)
+	}
+	absent(t, cp)
+
+	passes(t, r, lcp)
+	absent(t, cp)
+	get(t, lcp)
+	if err := ready(lcp, metav1.ConditionFalse, v1alpha1.ControlPlaneNotFoundReason, "ControlPlane tau is gone"); err != nil {
+		t.Error(err)
+	}
+	available(t, lcp, metav1.ConditionFalse, v1alpha1.ControlPlaneNotFoundReason)
+}
+
+func TestAControlPlaneReplacedBeforeTheApplyIsLeftAlone(t *testing.T) {
+	cluster, lcp, cp, _, _ := readyControlPlane(t, "tau-replaced")
+	replacement := cp.DeepCopy()
+	replacement.ObjectMeta = metav1.ObjectMeta{Namespace: cp.Namespace, Name: cp.Name, Finalizers: []string{lodiav1alpha1.DatastoreFinalizer}}
+	racing := direct(t, interceptor.Funcs{
+		Apply: func(ctx context.Context, c client.WithWatch, obj runtime.ApplyConfiguration, opts ...client.ApplyOption) error {
+			if _, ok := obj.(*corev1ac.SecretApplyConfiguration); !ok && replacement.UID == "" {
+				if err := k8s.Delete(ctx, controlPlaneOf(cluster)); err != nil {
+					return err
+				}
+				if err := k8s.Create(ctx, replacement); err != nil {
+					return err
+				}
+			}
+			return c.Apply(ctx, obj, opts...)
+		},
+	})
+	if err := pass(t.Context(), racing, lcp); !apierrors.IsInvalid(err) {
+		t.Fatalf("the pass returned %v, want the UID refused", err)
+	}
+	got := controlPlaneOf(cluster)
+	get(t, got)
+	if got.UID != replacement.UID || got.Generation != replacement.Generation || metav1.GetControllerOf(got) != nil {
+		t.Errorf("the replacement changed: uid %s, generation %d, owners %v", got.UID, got.Generation, got.OwnerReferences)
+	}
+}
+
+func TestAnExpiredDeadlineOnTheControlPlaneApplyIsReturned(t *testing.T) {
+	_, lcp, cp, r, _ := readyControlPlane(t, "tau-slow")
+	slow := direct(t, interceptor.Funcs{
+		Apply: func(ctx context.Context, c client.WithWatch, obj runtime.ApplyConfiguration, opts ...client.ApplyOption) error {
+			if _, ok := obj.(*corev1ac.SecretApplyConfiguration); !ok {
+				<-ctx.Done()
+			}
+			return c.Apply(ctx, obj, opts...)
+		},
+	})
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	defer cancel()
+	if err := pass(ctx, slow, lcp); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("the pass returned %v", err)
+	}
+	created := cp.UID
+	get(t, cp)
+	if cp.UID != created {
+		t.Error("the ControlPlane was replaced")
+	}
+	passes(t, r, lcp)
+}
+
 func TestATransientErrorReadingInitializationCreatesNothing(t *testing.T) {
 	cluster, lcp := create(t, namespace(t), "omicron")
 	r := direct(t, interceptor.Funcs{})

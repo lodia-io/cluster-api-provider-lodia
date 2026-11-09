@@ -189,7 +189,7 @@ func (r *Reconciler) reconcileNormal(ctx context.Context, cluster *clusterv1.Clu
 		}
 	}
 
-	cp, applyErr := r.applyControlPlane(ctx, cluster, lcp)
+	cp, applyErr := r.applyControlPlane(ctx, cluster, lcp, current)
 	if applyErr != nil {
 		cp = current
 	}
@@ -229,7 +229,7 @@ func (r *Reconciler) initialized(ctx context.Context, lcp *v1alpha1.LodiaControl
 	return initialized != nil && *initialized, nil
 }
 
-func (r *Reconciler) applyControlPlane(ctx context.Context, cluster *clusterv1.Cluster, lcp *v1alpha1.LodiaControlPlane) (*unstructured.Unstructured, error) {
+func (r *Reconciler) applyControlPlane(ctx context.Context, cluster *clusterv1.Cluster, lcp *v1alpha1.LodiaControlPlane, current *unstructured.Unstructured) (*unstructured.Unstructured, error) {
 	spec, err := runtime.DefaultUnstructuredConverter.ToUnstructured(&lcp.Spec)
 	if err != nil {
 		return nil, err
@@ -249,6 +249,11 @@ func (r *Reconciler) applyControlPlane(ctx context.Context, cluster *clusterv1.C
 	cp.SetGroupVersionKind(lodiav1alpha1.GroupVersion.WithKind("ControlPlane"))
 	cp.SetNamespace(cluster.Namespace)
 	cp.SetName(cluster.Name)
+	if current != nil {
+		// A ControlPlane gone since the read fails the apply instead of being
+		// created anew.
+		cp.SetUID(current.GetUID())
+	}
 	cp.SetLabels(map[string]string{clusterv1.ClusterNameLabel: cluster.Name})
 	cp.SetOwnerReferences([]metav1.OwnerReference{*metav1.NewControllerRef(lcp, v1alpha1.GroupVersion.WithKind("LodiaControlPlane"))})
 	if err := r.Apply(ctx, client.ApplyConfigurationFromUnstructured(cp), client.FieldOwner(FieldManager), client.ForceOwnership); err != nil {
