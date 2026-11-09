@@ -20,7 +20,7 @@ How each rule of the contract is met, the life of the objects and the reasons: [
 ## Build and test
 
 You need Go (the version in `go.mod`) and [golangci-lint](https://golangci-lint.run/) v2.13.2.
-Every other tool runs through `go tool` or `go run`.
+Every other tool runs through `go tool` or `go run`; `make e2e` also needs what [its README](test/e2e/README.md) lists.
 
 | command | does |
 |---|---|
