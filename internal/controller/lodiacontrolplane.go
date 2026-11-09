@@ -53,7 +53,6 @@ const (
 
 // +kubebuilder:rbac:groups=controlplane.lodia.io,resources=lodiacontrolplanes,verbs=get;list;watch;patch
 // +kubebuilder:rbac:groups=controlplane.lodia.io,resources=lodiacontrolplanes/status,verbs=patch
-// +kubebuilder:rbac:groups=controlplane.lodia.io,resources=lodiacontrolplanes/finalizers,verbs=update
 // +kubebuilder:rbac:groups=lodia.io,resources=controlplanes,verbs=get;list;watch;create;patch;delete
 // +kubebuilder:rbac:groups=cluster.x-k8s.io,resources=clusters,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch;create;patch

@@ -53,12 +53,6 @@ rules:
 - apiGroups:
   - controlplane.lodia.io
   resources:
-  - lodiacontrolplanes/finalizers
-  verbs:
-  - update
-- apiGroups:
-  - controlplane.lodia.io
-  resources:
   - lodiacontrolplanes/status
   verbs:
   - patch
