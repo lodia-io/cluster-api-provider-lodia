@@ -33,8 +33,17 @@ e2e-lodia: ## fetch Lodia at LODIA_COMMIT, the commit go.mod pins, into $(E2E_DI
 	git -C $(E2E_DIR)/lodia fetch --quiet --depth 1 https://github.com/lodia-io/lodia.git $(LODIA_COMMIT)
 	git -C $(E2E_DIR)/lodia checkout --quiet --force --detach $(LODIA_COMMIT)
 
+.PHONY: e2e-capi
+e2e-capi:
+	mkdir -p $(E2E_DIR)/cluster-api
+	git -C $(E2E_DIR)/cluster-api init --quiet
+	git -C $(E2E_DIR)/cluster-api fetch --quiet --depth 1 https://github.com/kubernetes-sigs/cluster-api.git refs/tags/v1.15.0-beta.0
+	git -C $(E2E_DIR)/cluster-api checkout --quiet --force --detach FETCH_HEAD
+	if [ -f test/e2e/testdata/cabpk-fix.patch ]; then git -C $(E2E_DIR)/cluster-api apply $(CURDIR)/test/e2e/testdata/cabpk-fix.patch; fi
+	git -C $(E2E_DIR)/cluster-api diff --stat
+
 .PHONY: e2e
-e2e: e2e-lodia ## the e2e suite, on a kind cluster of its own, E2E_CLUSTER of at most 30 characters, that it deletes afterwards with the containers of the Cluster the suite creates
+e2e: e2e-lodia e2e-capi ## the e2e suite, on a kind cluster of its own, E2E_CLUSTER of at most 30 characters, that it deletes afterwards with the containers of the Cluster the suite creates
 	mkdir -p $(E2E_DIR)
 	go tool kind create cluster --name $(E2E_CLUSTER) --kubeconfig $(E2E_DIR)/kubeconfig --config test/e2e/testdata/kind.yaml
 	$(REMOVE_WORKERS) && E2E_KUBECONFIG=$(E2E_DIR)/kubeconfig go test -v -tags e2e -count=1 -timeout 45m ./test/e2e/...; status=$$?; \
