@@ -51,12 +51,16 @@ const (
 	FieldManager = "cluster-api-provider-lodia"
 )
 
-// +kubebuilder:rbac:groups=controlplane.lodia.io,resources=lodiacontrolplanes,verbs=get;list;watch;patch;update
-// +kubebuilder:rbac:groups=controlplane.lodia.io,resources=lodiacontrolplanes/status,verbs=patch;update
+// +kubebuilder:rbac:groups=controlplane.lodia.io,resources=lodiacontrolplanes,verbs=get;list;watch;patch
+// +kubebuilder:rbac:groups=controlplane.lodia.io,resources=lodiacontrolplanes/status,verbs=patch
 // +kubebuilder:rbac:groups=controlplane.lodia.io,resources=lodiacontrolplanes/finalizers,verbs=update
 // +kubebuilder:rbac:groups=lodia.io,resources=controlplanes,verbs=get;list;watch;create;patch;delete
 // +kubebuilder:rbac:groups=cluster.x-k8s.io,resources=clusters,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch;create;patch
+// +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
+// +kubebuilder:rbac:groups=coordination.k8s.io,resources=leases,verbs=get;create;update
+// +kubebuilder:rbac:groups=authentication.k8s.io,resources=tokenreviews,verbs=create
+// +kubebuilder:rbac:groups=authorization.k8s.io,resources=subjectaccessreviews,verbs=create
 
 type Reconciler struct {
 	client.Client

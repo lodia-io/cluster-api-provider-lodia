@@ -19,7 +19,9 @@ import (
 	"github.com/google/go-cmp/cmp"
 	"go.lodia.io/lodia/api/crds"
 	lodiav1alpha1 "go.lodia.io/lodia/api/v1alpha1"
+	authenticationv1 "k8s.io/api/authentication/v1"
 	authorizationv1 "k8s.io/api/authorization/v1"
+	coordinationv1 "k8s.io/api/coordination/v1"
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
@@ -1047,4 +1049,61 @@ func TestAResyncRepairsTheProvidersSecrets(t *testing.T) {
 		}
 		return nil
 	})
+}
+
+func TestTheRoleCoversLeaderElectionAndTheMetricsFilter(t *testing.T) {
+	ns := namespace(t)
+	mgr, err := ctrl.NewManager(asController, ctrl.Options{
+		Scheme:                  controller.Scheme(),
+		Metrics:                 metricsserver.Options{BindAddress: "0"},
+		LeaderElection:          true,
+		LeaderElectionID:        "controlplane.lodia.io",
+		LeaderElectionNamespace: ns,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan error, 1)
+	go func() { done <- mgr.Start(ctx) }()
+	t.Cleanup(func() {
+		cancel()
+		if err := <-done; err != nil {
+			t.Errorf("manager: %v", err)
+		}
+	})
+	eventually(t, func() error {
+		lease := &coordinationv1.Lease{}
+		if err := k8s.Get(t.Context(), client.ObjectKey{Namespace: ns, Name: "controlplane.lodia.io"}, lease); err != nil {
+			return err
+		}
+		if lease.Spec.HolderIdentity == nil || *lease.Spec.HolderIdentity == "" {
+			return errors.New("no holder")
+		}
+		events := &corev1.EventList{}
+		if err := k8s.List(t.Context(), events, client.InNamespace(ns)); err != nil {
+			return err
+		}
+		for _, e := range events.Items {
+			if e.Reason == "LeaderElection" {
+				return nil
+			}
+		}
+		return errors.New("no LeaderElection event")
+	})
+
+	for _, attributes := range []authorizationv1.ResourceAttributes{
+		{Group: authenticationv1.GroupName, Resource: "tokenreviews", Verb: "create"},
+		{Group: authorizationv1.GroupName, Resource: "subjectaccessreviews", Verb: "create"},
+	} {
+		review := &authorizationv1.SubjectAccessReview{Spec: authorizationv1.SubjectAccessReviewSpec{
+			User: asController.Impersonate.UserName, ResourceAttributes: &attributes,
+		}}
+		if err := k8s.Create(t.Context(), review); err != nil {
+			t.Fatal(err)
+		}
+		if !review.Status.Allowed {
+			t.Errorf("%s %s is not allowed: %s", attributes.Verb, attributes.Resource, review.Status.Reason)
+		}
+	}
 }
