@@ -149,8 +149,8 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (_ ctrl.Re
 	}
 	cluster, err := util.GetOwnerCluster(ctx, r.Client, lcp.ObjectMeta)
 	if !lcp.DeletionTimestamp.IsZero() && (apierrors.IsNotFound(err) || err == nil && cluster == nil) {
-		if annotations.HasPaused(lcp) {
-			return ctrl.Result{}, nil
+		if isPaused, requeue, err := paused.EnsurePausedCondition(ctx, r.Client, nil, lcp); err != nil || isPaused || requeue {
+			return ctrl.Result{}, err
 		}
 		// Nothing is left to wait for: the garbage collector deletes the
 		// ControlPlane and the copies, which this object owns.

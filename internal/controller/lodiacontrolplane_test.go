@@ -771,15 +771,89 @@ func TestThePausedAnnotationHoldsDeletionOnceTheClusterIsGone(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	passes(t, r, lcp)
-	get(t, lcp)
-	if !strings.Contains(strings.Join(lcp.Finalizers, ","), v1alpha1.Finalizer) {
-		t.Errorf("finalizers %v", lcp.Finalizers)
+	for range 2 {
+		passes(t, r, lcp)
+		heldByThePause(t, lcp)
 	}
 
 	updateSpec(t, lcp, func(l *v1alpha1.LodiaControlPlane) { delete(l.Annotations, clusterv1.PausedAnnotation) })
 	passes(t, r, lcp)
+	passes(t, direct(t, interceptor.Funcs{}), lcp)
 	absent(t, lcp)
+}
+
+func TestThePausedAnnotationHoldsDeletionOnceTheOwnerReferenceIsGone(t *testing.T) {
+	_, lcp, _, r, _ := readyControlPlane(t, "phi-ref-paused")
+	updateSpec(t, lcp, func(l *v1alpha1.LodiaControlPlane) {
+		metav1.SetMetaDataAnnotation(&l.ObjectMeta, clusterv1.PausedAnnotation, "")
+		l.OwnerReferences = nil
+	})
+	if err := k8s.Delete(t.Context(), lcp); err != nil {
+		t.Fatal(err)
+	}
+
+	for range 2 {
+		passes(t, r, lcp)
+		heldByThePause(t, lcp)
+	}
+
+	updateSpec(t, lcp, func(l *v1alpha1.LodiaControlPlane) { delete(l.Annotations, clusterv1.PausedAnnotation) })
+	passes(t, r, lcp)
+	passes(t, r, lcp)
+	absent(t, lcp)
+}
+
+func TestAFailedPausedWriteKeepsTheFinalizerOnceTheClusterIsGone(t *testing.T) {
+	cluster, lcp, _, r, _ := readyControlPlane(t, "phi-paused-write")
+	updateSpec(t, lcp, func(l *v1alpha1.LodiaControlPlane) {
+		metav1.SetMetaDataAnnotation(&l.ObjectMeta, clusterv1.PausedAnnotation, "")
+	})
+	deleteTheCluster(t, cluster)
+	if err := k8s.Delete(t.Context(), lcp); err != nil {
+		t.Fatal(err)
+	}
+	passes(t, r, lcp)
+	heldByThePause(t, lcp)
+	updateSpec(t, lcp, func(l *v1alpha1.LodiaControlPlane) { delete(l.Annotations, clusterv1.PausedAnnotation) })
+
+	failure := errors.New("etcdserver: leader changed")
+	failing := direct(t, interceptor.Funcs{
+		SubResourcePatch: func(context.Context, client.Client, string, client.Object, client.Patch, ...client.SubResourcePatchOption) error {
+			return failure
+		},
+	})
+	if err := pass(t.Context(), failing, lcp); !errors.Is(err, failure) {
+		t.Fatalf("the pass returned %v", err)
+	}
+	heldByThePause(t, lcp)
+
+	slow := direct(t, interceptor.Funcs{
+		SubResourcePatch: func(ctx context.Context, _ client.Client, _ string, _ client.Object, _ client.Patch, _ ...client.SubResourcePatchOption) error {
+			<-ctx.Done()
+			return ctx.Err()
+		},
+	})
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	defer cancel()
+	if err := pass(ctx, slow, lcp); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("the pass returned %v", err)
+	}
+	heldByThePause(t, lcp)
+
+	passes(t, r, lcp)
+	passes(t, r, lcp)
+	absent(t, lcp)
+}
+
+func heldByThePause(t *testing.T, lcp *v1alpha1.LodiaControlPlane) {
+	t.Helper()
+	get(t, lcp)
+	if !strings.Contains(strings.Join(lcp.Finalizers, ","), v1alpha1.Finalizer) {
+		t.Errorf("finalizers %v", lcp.Finalizers)
+	}
+	if c := condition(lcp, clusterv1.PausedCondition); c == nil || c.Status != metav1.ConditionTrue || c.Reason != clusterv1.PausedReason {
+		t.Errorf("Paused is %+v", c)
+	}
 }
 
 func TestNoOwnerReferenceAndNoDeletionWaits(t *testing.T) {
