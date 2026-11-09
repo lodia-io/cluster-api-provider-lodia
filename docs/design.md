@@ -30,7 +30,7 @@ Contract v1beta2 ([rules][cp-rules]).
 | — | clusterctl: `control-plane-components.yaml` | a release artifact, not built yet | [components][cc-components] |
 | — | the manager's `--namespace` flag, a MUST for clusterctl, and `--watch-filter`, a MUST for several instances of a provider | not built yet, with the release artifacts; `todo.md` | [components][cc-components], [multiple instances][cp-multi] |
 | — | `clusterctl move`: moving deletes the source objects | blocked (§5) | [move][cc-move], [block-move][move-ann] |
-| — | `spec.replicas`, scale subresource, `status.selector` and the four counters ("mandatory if control plane has a notion of number of instances") | left out (§4.6); a topology must not set `replicas`, `rollout.after`, the machine template's `readinessGates` and `taints`, or the deletion timeouts, which the topology controller then writes and the CRD does not declare | [replicas][cp-replicas], [topology][topo-cp] |
+| — | `spec.replicas`, scale subresource, `status.selector` and the four counters ("mandatory if control plane has a notion of number of instances") | left out (§4.6); a topology or its ClusterClass must not set `replicas`, `rollout.after`, the machine template's `readinessGates` and `taints`, or the deletion timeouts, which the topology controller then writes and the CRD does not declare | [replicas][cp-replicas], [topology][topo-cp] |
 | — | `machineTemplate`, rollout after, in-place updates, machine placement, metadata propagation, `minReadySeconds` | no Machines | [machines][cp-machines] |
 
 No admission webhooks, as in Lodia ([CLAUDE.md][lo-claude]): the contract asks for none, and every rule below is CEL.
