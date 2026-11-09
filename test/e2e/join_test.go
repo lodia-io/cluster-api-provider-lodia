@@ -138,17 +138,17 @@ func TestAWorkerJoinsAClusterOfLodiasControlPlane(t *testing.T) {
 				t.Fatal(err)
 			}
 			if len(kubeconfig.Data[secret.KubeconfigDataName]) == 0 {
-				t.Errorf("Secret %s holds no %s", kubeconfig.Name, secret.KubeconfigDataName)
+				t.Fatalf("Secret %s holds no %s", kubeconfig.Name, secret.KubeconfigDataName)
 			}
 			if len(ca.Data[secret.TLSCrtDataName]) == 0 {
-				t.Errorf("Secret %s holds no %s", ca.Name, secret.TLSCrtDataName)
+				t.Fatalf("Secret %s holds no %s", ca.Name, secret.TLSCrtDataName)
 			}
 			if _, ok := ca.Data[secret.TLSKeyDataName]; ok {
-				t.Errorf("Secret %s holds the CA's key", ca.Name)
+				t.Fatalf("Secret %s holds the CA's key", ca.Name)
 			}
 			for _, s := range []*corev1.Secret{kubeconfig, ca} {
 				if !metav1.IsControlledBy(s, lcp) {
-					t.Errorf("Secret %s is not controlled by LodiaControlPlane %s", s.Name, lcp.Name)
+					t.Fatalf("Secret %s is not controlled by LodiaControlPlane %s", s.Name, lcp.Name)
 				}
 			}
 			return ctx
@@ -201,7 +201,7 @@ func TestAWorkerJoinsAClusterOfLodiasControlPlane(t *testing.T) {
 				t.Fatal(err)
 			}
 			if len(lcp.Status.Versions) == 0 || lcp.Status.Versions[0].Version != lcp.Spec.Version {
-				t.Errorf("LodiaControlPlane.status.versions is %+v, want %s", lcp.Status.Versions, lcp.Spec.Version)
+				t.Fatalf("LodiaControlPlane.status.versions is %+v, want %s", lcp.Status.Versions, lcp.Spec.Version)
 			}
 			return ctx
 		}).
