@@ -30,7 +30,7 @@ Contract v1beta2 ([rules][cp-rules]).
 | — | clusterctl: `control-plane-components.yaml` | a release artifact, not built yet | [components][cc-components] |
 | — | the manager's `--namespace` flag, a MUST for clusterctl, and `--watch-filter`, a MUST for several instances of a provider | not built yet, with the release artifacts; `todo.md` | [components][cc-components], [multiple instances][cp-multi] |
 | — | `clusterctl move`: moving deletes the source objects | blocked (§5) | [move][cc-move], [block-move][move-ann] |
-| — | `spec.replicas`, scale subresource, `status.selector` and the four counters ("mandatory if control plane has a notion of number of instances") | left out (§4.6); a topology or its ClusterClass must not set `replicas`, `rollout.after`, the machine template's `readinessGates` and `taints`, or the deletion timeouts, which the topology controller then writes and the CRD does not declare | [replicas][cp-replicas], [topology][topo-cp] |
+| — | `spec.replicas`, scale subresource, `status.selector` and the four counters ("mandatory if control plane has a notion of number of instances") | left out (§4.6); a topology or its ClusterClass must not set `replicas`, `rollout.after`, the machine template's `readinessGates` and `taints`, or the deletion timeouts, and a ClusterClass must not set `machineInfrastructure`: the topology controller then writes them, `machineInfrastructure` as `machineTemplate.spec.infrastructureRef` and `machineTemplate.metadata`, and the CRD declares none of them | [replicas][cp-replicas], [topology][topo-cp], [machine infrastructure][topo-cp-infra] |
 | — | `machineTemplate`, rollout after, in-place updates, machine placement, metadata propagation, `minReadySeconds` | no Machines | [machines][cp-machines] |
 
 No admission webhooks, as in Lodia ([CLAUDE.md][lo-claude]): the contract asks for none, and every rule below is CEL.
@@ -63,8 +63,8 @@ The spec reaches the `ControlPlane` by its JSON field names: the provider conver
 
 | condition | written as |
 |---|---|
-| `Available` | a mirror of Lodia's `Reachable` at any generation: status, reason, message; `Unknown`, `NotYetReported` while the `ControlPlane` has none. It is not gated, since `Reachable` is a probe of the live endpoint, which a change to the spec does not take down, and the contract asks that `Available` hold through disruption; `False`, `ControlPlaneNotFound` when an initialized `ControlPlane` is gone, and `False`, `Deleting` while the `LodiaControlPlane` is being deleted |
-| `Ready` | a mirror of Lodia's `Ready` at the `ControlPlane`'s current generation ([Lodia's rule][lo-ref-ready]), otherwise `Unknown`, `LatestGenerationNotObserved`, unless the provider cannot write: `Refused` (the API server refuses the `ControlPlane` or a Secret; the message is the server's), `ObjectsControlledElsewhere` (the `ControlPlane`, `<cluster>-kubeconfig` or `<cluster>-ca` exists with another controller, or none, which the message names), `ControlPlaneNotFound` (an initialized `ControlPlane` is gone), `Deleting` (waiting for the `ControlPlane` to go) |
+| `Available` | a mirror of Lodia's `Reachable` at any generation: status, reason, message; `Unknown`, `NotYetReported` while the `ControlPlane` has none. It is not gated, since `Reachable` is a probe of the live endpoint, which a change to the spec does not take down, and the contract asks that `Available` hold through disruption; `False`, `ControlPlaneNotFound` when an initialized `ControlPlane` is gone, and `False`, `Deleting` while the `LodiaControlPlane` is being deleted, unless paused |
+| `Ready` | a mirror of Lodia's `Ready` at the `ControlPlane`'s current generation ([Lodia's rule][lo-ref-ready]), otherwise `Unknown`, `LatestGenerationNotObserved`, unless the provider cannot write: `Refused` (the API server refuses the `ControlPlane` or a Secret; the message is the server's), `ObjectsControlledElsewhere` (the `ControlPlane`, `<cluster>-kubeconfig` or `<cluster>-ca` exists with another controller, or none, which the message names), `ControlPlaneNotFound` (an initialized `ControlPlane` is gone), `Deleting` (waiting for the `ControlPlane` to go, unless paused) |
 | `Paused` | CAPI's pause |
 
 A refused or blocked write, like any other failed one, makes the pass return its error, and the pass is retried with backoff.
@@ -270,6 +270,7 @@ Lodia's availability is a failure tolerance (`highAvailability`) with replica co
 [move-wait]: https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/cmd/clusterctl/client/cluster/mover.go#L685-L735
 [move-crds]: https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/cmd/clusterctl/client/cluster/objectgraph.go#L420-L431
 [topo-cp]: https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/exp/topology/desiredstate/desired_state.go#L440-L531
+[topo-cp-infra]: https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/exp/topology/desiredstate/desired_state.go#L391-L438
 [move-delete]: https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/cmd/clusterctl/client/cluster/mover.go#L1260-L1312
 [paused]: https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/util/annotations/helpers.go#L31-L36
 [paused-cond]: https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/util/paused/paused.go#L44-L91
