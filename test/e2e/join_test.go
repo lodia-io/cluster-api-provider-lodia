@@ -251,7 +251,7 @@ func TestAWorkerJoinsAClusterOfLodiasControlPlane(t *testing.T) {
 			})
 			return ctx
 		}).
-		Assess("a pod runs on the Node, and its logs reach the client through the API server and the tunnel", func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
+		Assess("a pod runs on the Node, and its logs are readable through the tenant's API server", func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
 			web := &corev1.Pod{
 				ObjectMeta: metav1.ObjectMeta{Namespace: metav1.NamespaceDefault, Name: "web"},
 				Spec: corev1.PodSpec{Containers: []corev1.Container{{

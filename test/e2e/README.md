@@ -45,7 +45,7 @@ Lodia's commit is in two places, the pseudo-version of `go.lodia.io/lodia/api` i
 4. kindnet, from the manifest the node image ships, is applied in the tenant through `<cluster>-kubeconfig`.
 5. The `Machine` is `Running` with a `nodeRef`, and `LodiaControlPlane.status.versions` holds the version that the MachineSet's preflight check reads.
 6. The tenant's Node has the `DevMachine`'s `providerID`, has lost the `uninitialized` taint and is `Ready`.
-7. The konnectivity agent is ready, and a pod of agnhost, pinned by digest, runs on the Node with its logs readable through the API server and the tunnel.
+7. The konnectivity agent is ready, and a pod of agnhost, pinned by digest, runs on the Node with its logs readable through the tenant's API server.
 8. `Cluster` `Available`.
 9. Deleting the `Cluster`, once the etcd claim exists and exactly one container is labelled for the `Cluster`, removes the `LodiaControlPlane`, Lodia's `ControlPlane`, the etcd claim and the worker's container.
 
