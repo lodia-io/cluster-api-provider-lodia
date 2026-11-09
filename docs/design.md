@@ -113,7 +113,7 @@ Cluster of that name, and reads both, and its own two, from the API server on
 every pass. `ControlPlane` and `Cluster` events map the same way, through the
 Cluster's `controlPlaneRef`, so a leftover `ControlPlane` of another owner
 wakes the provider when it goes.
-A pass has a minute ([ReconciliationTimeout][cr-timeout]).
+A pass has a minute ([ReconciliationTimeout][cr-timeout]), and ten passes run at once, as in Lodia's controllers ([workers][lo-workers]), so one tenant's blocked write does not hold up another's.
 The cache resyncs every 10 minutes, Cluster API's default ([--sync-period][capi-sync]), which repairs the provider's own Secrets, which no watch covers, and a missed delete event.
 
 RBAC is generated from markers into [`config/rbac/role.yaml`](../config/rbac/role.yaml).
@@ -396,6 +396,7 @@ out; CAPI then leaves the Cluster's control plane counters empty
 [lo-paused]: https://github.com/lodia-io/lodia/blob/57375832e7fe8b3a06374613797eb4c544fe7612/api/v1alpha1/controlplane_types.go#L124-L132
 [lo-names-ca]: https://github.com/lodia-io/lodia/blob/57375832e7fe8b3a06374613797eb4c544fe7612/api/v1alpha1/names.go#L23-L31
 [lo-names-kubeconfig]: https://github.com/lodia-io/lodia/blob/57375832e7fe8b3a06374613797eb4c544fe7612/api/v1alpha1/names.go#L59-L71
+[lo-workers]: https://github.com/lodia-io/lodia/blob/57375832e7fe8b3a06374613797eb4c544fe7612/internal/operator/operator.go#L40-L42
 [lo-labels]: https://github.com/lodia-io/lodia/blob/57375832e7fe8b3a06374613797eb4c544fe7612/api/v1alpha1/labels.go#L17-L20
 
 <!-- Lodia at 5f212ed -->

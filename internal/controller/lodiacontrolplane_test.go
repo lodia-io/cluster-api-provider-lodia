@@ -164,7 +164,12 @@ func boundToTheClusterRole(cfg *rest.Config) (*rest.Config, error) {
 	return controller, nil
 }
 
-func startManager(t *testing.T, mutate ...func(*cache.Options)) {
+func startManager(t *testing.T, mutate ...func(*cache.Options)) ctrl.Manager {
+	t.Helper()
+	return startManagerWith(t, ctrl.Manager.GetClient, mutate...)
+}
+
+func startManagerWith(t *testing.T, clientOf func(ctrl.Manager) client.Client, mutate ...func(*cache.Options)) ctrl.Manager {
 	t.Helper()
 	cache, err := controller.CacheOptions()
 	if err != nil {
@@ -183,7 +188,7 @@ func startManager(t *testing.T, mutate ...func(*cache.Options)) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := (&controller.Reconciler{Client: mgr.GetClient(), APIReader: mgr.GetAPIReader()}).SetupWithManager(mgr); err != nil {
+	if err := (&controller.Reconciler{Client: clientOf(mgr), APIReader: mgr.GetAPIReader()}).SetupWithManager(mgr); err != nil {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
@@ -195,6 +200,7 @@ func startManager(t *testing.T, mutate ...func(*cache.Options)) {
 			t.Errorf("manager: %v", err)
 		}
 	})
+	return mgr
 }
 
 func direct(t *testing.T, funcs interceptor.Funcs) *controller.Reconciler {
@@ -1331,6 +1337,60 @@ func TestATransientErrorReadingInitializationCreatesNothing(t *testing.T) {
 		t.Fatalf("the pass returned %v", err)
 	}
 	absent(t, controlPlaneOf(cluster))
+}
+
+func TestTheControllerRunsTenWorkersAndBoundsAPass(t *testing.T) {
+	options := controller.ControllerOptions()
+	if options.MaxConcurrentReconciles != 10 || options.ReconciliationTimeout != time.Minute {
+		t.Errorf("options %+v", options)
+	}
+}
+
+func TestOneTenantsBlockedWriteDoesNotHoldUpAnother(t *testing.T) {
+	c, err := client.NewWithWatch(asController, client.Options{Scheme: controller.Scheme()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	release := make(chan struct{})
+	blocked := make(chan bool, 1)
+	startManagerWith(t, func(ctrl.Manager) client.Client {
+		return interceptor.NewClient(c, interceptor.Funcs{
+			Apply: func(ctx context.Context, c client.WithWatch, obj runtime.ApplyConfiguration, opts ...client.ApplyOption) error {
+				if a, ok := obj.(interface{ GetName() string }); ok && a.GetName() == "tenant-a" {
+					_, deadline := ctx.Deadline()
+					select {
+					case blocked <- deadline:
+					default:
+					}
+					select {
+					case <-release:
+					case <-ctx.Done():
+						return ctx.Err()
+					}
+				}
+				return c.Apply(ctx, obj, opts...)
+			},
+		})
+	})
+
+	ns := namespace(t)
+	first, _ := create(t, ns, "tenant-a")
+	select {
+	case deadline := <-blocked:
+		if !deadline {
+			t.Error("a pass runs without a deadline")
+		}
+	case <-time.After(30 * time.Second):
+		t.Fatal("tenant A never reached its apply")
+	}
+
+	second, _ := create(t, ns, "tenant-b")
+	cp := controlPlaneOf(second)
+	eventually(t, func() error { return k8s.Get(t.Context(), client.ObjectKeyFromObject(cp), cp) })
+
+	close(release)
+	held := controlPlaneOf(first)
+	eventually(t, func() error { return k8s.Get(t.Context(), client.ObjectKeyFromObject(held), held) })
 }
 
 func TestAResyncRepairsTheProvidersSecrets(t *testing.T) {

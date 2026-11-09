@@ -95,10 +95,16 @@ func CacheOptions() (cache.Options, error) {
 	}, nil
 }
 
+// ControllerOptions keep one tenant's blocked write from holding up the
+// others, and bound a pass.
+func ControllerOptions() controller.Options {
+	return controller.Options{MaxConcurrentReconciles: 10, ReconciliationTimeout: time.Minute}
+}
+
 func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		Named(Name).
-		WithOptions(controller.Options{ReconciliationTimeout: time.Minute}).
+		WithOptions(ControllerOptions()).
 		For(&v1alpha1.LodiaControlPlane{}).
 		Watches(&clusterv1.Cluster{},
 			handler.EnqueueRequestsFromMapFunc(func(_ context.Context, o client.Object) []reconcile.Request {
