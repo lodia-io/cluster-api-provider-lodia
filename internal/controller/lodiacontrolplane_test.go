@@ -37,6 +37,7 @@ import (
 	clusterctlv1 "sigs.k8s.io/cluster-api/cmd/clusterctl/api/v1alpha3"
 	"sigs.k8s.io/cluster-api/util/secret"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 	"sigs.k8s.io/controller-runtime/pkg/config"
@@ -161,13 +162,16 @@ func boundToTheClusterRole(cfg *rest.Config) (*rest.Config, error) {
 	return controller, nil
 }
 
-func startManager(t *testing.T) {
+func startManager(t *testing.T, mutate ...func(*cache.Options)) {
 	t.Helper()
 	cache, err := controller.CacheOptions()
 	if err != nil {
 		t.Fatal(err)
 	}
 	cache.ReaderFailOnMissingInformer = true
+	for _, m := range mutate {
+		m(&cache)
+	}
 	mgr, err := ctrl.NewManager(asController, ctrl.Options{
 		Scheme:     controller.Scheme(),
 		Metrics:    metricsserver.Options{BindAddress: "0"},
@@ -1011,4 +1015,36 @@ func TestATransientErrorReadingInitializationCreatesNothing(t *testing.T) {
 		t.Fatalf("the pass returned %v", err)
 	}
 	absent(t, controlPlaneOf(cluster))
+}
+
+func TestAResyncRepairsTheProvidersSecrets(t *testing.T) {
+	options, err := controller.CacheOptions()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if options.SyncPeriod == nil || *options.SyncPeriod != 10*time.Minute {
+		t.Errorf("sync period %v", options.SyncPeriod)
+	}
+
+	startManager(t, func(o *cache.Options) { o.SyncPeriod = new(time.Second) })
+	cluster, _ := create(t, namespace(t), "pi")
+	cp := controlPlaneOf(cluster)
+	eventually(t, func() error { return k8s.Get(t.Context(), client.ObjectKeyFromObject(cp), cp) })
+	issued := lodiaSecrets(t, cluster, ownedBy(cp))
+	copied := secretOf(cluster, secret.ClusterCA)
+	eventually(t, func() error { return k8s.Get(t.Context(), client.ObjectKeyFromObject(copied), copied) })
+
+	copied.Data[secret.TLSCrtDataName] = []byte("edited by hand")
+	if err := k8s.Update(t.Context(), copied); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, func() error {
+		if err := k8s.Get(t.Context(), client.ObjectKeyFromObject(copied), copied); err != nil {
+			return err
+		}
+		if !bytes.Equal(copied.Data[secret.TLSCrtDataName], issued.cert) {
+			return fmt.Errorf("tls.crt is %s", copied.Data[secret.TLSCrtDataName])
+		}
+		return nil
+	})
 }

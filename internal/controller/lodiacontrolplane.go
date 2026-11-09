@@ -84,6 +84,7 @@ func CacheOptions() (cache.Options, error) {
 		return cache.Options{}, err
 	}
 	return cache.Options{
+		SyncPeriod: new(10 * time.Minute),
 		ByObject: map[client.Object]cache.ByObject{
 			&corev1.Secret{}: {Label: labels.NewSelector().Add(*lodias)},
 		},
