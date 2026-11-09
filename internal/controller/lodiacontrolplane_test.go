@@ -30,6 +30,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/util/wait"
 	corev1ac "k8s.io/client-go/applyconfigurations/core/v1"
 	"k8s.io/client-go/rest"
@@ -898,6 +899,38 @@ func TestInitializationWaitsForBothSecrets(t *testing.T) {
 	passes(t, r, lcp)
 	get(t, lcp)
 	initialized(t, lcp)
+}
+
+func TestAForbiddenWriteIsReportedAsRefused(t *testing.T) {
+	isControlPlane := func(obj runtime.ApplyConfiguration) bool {
+		_, isSecret := obj.(*corev1ac.SecretApplyConfiguration)
+		return !isSecret
+	}
+	for name, target := range map[string]func(obj runtime.ApplyConfiguration) bool{
+		"the ControlPlane": isControlPlane,
+		"a Secret":         func(obj runtime.ApplyConfiguration) bool { return isSecretApply(obj, "psi-ca") },
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, lcp, _, _, _ := readyControlPlane(t, "psi")
+			forbidden := apierrors.NewForbidden(schema.GroupResource{Resource: "objects"}, "x", errors.New("the namespace is terminating"))
+			r := direct(t, interceptor.Funcs{
+				Apply: func(ctx context.Context, c client.WithWatch, obj runtime.ApplyConfiguration, opts ...client.ApplyOption) error {
+					if target(obj) {
+						return forbidden
+					}
+					return c.Apply(ctx, obj, opts...)
+				},
+			})
+			if err := pass(t.Context(), r, lcp); !apierrors.IsForbidden(err) {
+				t.Fatalf("the pass returned %v", err)
+			}
+			get(t, lcp)
+			if err := ready(lcp, metav1.ConditionFalse, v1alpha1.RefusedReason, "the namespace is terminating"); err != nil {
+				t.Error(err)
+			}
+			available(t, lcp, metav1.ConditionTrue, lodiav1alpha1.ReasonReachable)
+		})
+	}
 }
 
 func TestARestartBetweenWritesResumes(t *testing.T) {
