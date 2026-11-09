@@ -1107,3 +1107,25 @@ func TestTheRoleCoversLeaderElectionAndTheMetricsFilter(t *testing.T) {
 		}
 	}
 }
+
+func TestCABPKAcceptsTheCASecretWithoutAKey(t *testing.T) {
+	cluster, _, _, _, issued := readyControlPlane(t, "rho")
+	copied := secretOf(cluster, secret.ClusterCA)
+	get(t, copied)
+	if _, ok := copied.Data[secret.TLSKeyDataName]; ok {
+		t.Fatalf("%s holds %s", copied.Name, secret.TLSKeyDataName)
+	}
+
+	certificates := secret.NewCertificatesForWorker("")
+	if err := certificates.Lookup(t.Context(), k8s, client.ObjectKeyFromObject(cluster)); err != nil {
+		t.Fatal(err)
+	}
+	if err := certificates.EnsureAllExist(); err != nil {
+		t.Fatal(err)
+	}
+	ca := certificates.GetByPurpose(secret.ClusterCA)
+	hashes, err := ca.Hashes()
+	if err != nil || len(hashes) != 1 || !bytes.Equal(ca.KeyPair.Cert, issued.cert) {
+		t.Errorf("hashes %v, %v; certificate %s", hashes, err, ca.KeyPair.Cert)
+	}
+}
