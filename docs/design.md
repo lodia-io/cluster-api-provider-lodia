@@ -287,9 +287,7 @@ out; CAPI then leaves the Cluster's control plane counters empty
 
 **Open questions**
 
-1. InfraClusters: who marks a `KubevirtCluster` provisioned for Segla's KubeVirt
-   pools: Segla's `cluster` service, or an opt-in in the provider, as both
-   reference providers do ([Kamaji][kp-patchcluster], [k0smotron][k0-infra])?
+1. InfraClusters: who marks a `KubevirtCluster` provisioned for Segla's KubeVirt pools: Segla's `cluster` service, or an opt-in in the provider, as k0smotron does ([k0smotron][k0-infra]); Kamaji does it by default ([Kamaji][kp-patchcluster], [its feature gate][kp-gate])?
 2. A dedicated CAPI identity (risk 6): a second standing kubeconfig from PKI, or
    accept the shared one.
 3. Hibernation and MHC (risks 3, 4): document, or have the provider surface the
@@ -381,6 +379,7 @@ out; CAPI then leaves the Cluster's control plane counters empty
 
 <!-- the reference providers -->
 [kp-patchcluster]: https://github.com/clastix/cluster-api-control-plane-provider-kamaji/blob/v0.21.0/controllers/kamajicontrolplane_controller_cluster_patch.go#L104-L151
+[kp-gate]: https://github.com/clastix/cluster-api-control-plane-provider-kamaji/blob/v0.21.0/controllers/kamajicontrolplane_controller.go#L231-L233
 [kp-ca]: https://github.com/clastix/cluster-api-control-plane-provider-kamaji/blob/v0.21.0/controllers/kamajicontrolplane_controller_resources.go#L61-L124
 [k0-infra]: https://github.com/k0sproject/k0smotron/blob/v2.3.0/internal/controller/controlplane/k0smotron_controlplane_controller.go#L888-L959
 
