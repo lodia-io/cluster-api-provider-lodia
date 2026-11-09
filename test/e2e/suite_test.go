@@ -39,6 +39,8 @@ func TestMain(m *testing.M) {
 }
 
 func install(ctx context.Context, cfg *envconf.Config) (context.Context, error) {
+	bounded, cancel := context.WithTimeout(ctx, 15*time.Minute)
+	defer cancel()
 	for _, component := range []struct {
 		name    string
 		install func(context.Context, *envconf.Config) error
@@ -50,7 +52,7 @@ func install(ctx context.Context, cfg *envconf.Config) (context.Context, error) 
 		{"the provider", installProvider},
 	} {
 		start := time.Now()
-		if err := component.install(ctx, cfg); err != nil {
+		if err := component.install(bounded, cfg); err != nil {
 			dump(ctx, cfg)
 			return ctx, fmt.Errorf("install %s: %w", component.name, err)
 		}

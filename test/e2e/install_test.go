@@ -120,7 +120,7 @@ func download(ctx context.Context, url string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := (&http.Client{Timeout: time.Minute}).Do(req)
 	if err != nil {
 		return nil, err
 	}

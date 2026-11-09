@@ -57,4 +57,5 @@ No assertion reads it.
 
 The suite writes to `work/e2e/<E2E_CLUSTER>/artifacts`, and CI uploads it: the objects above with their conditions and Lodia's `Etcd`, the pods and logs of cert-manager, of the managers of Cluster API, CAPD, Lodia and the provider, and of the control plane in `capi-join`, and from the worker container `journalctl -u kubelet -u containerd` and `crictl ps -a`.
 `make e2e` empties the directory before it starts.
+A cancelled job leaves no artifacts, since the test binary writes them and the cancel kills it.
 CAPD does not retry a failed bootstrap; the output of `kubeadm join` is in the `BootstrapCompleted` condition of the `DevMachine`.
