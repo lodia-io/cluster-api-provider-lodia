@@ -38,6 +38,7 @@ import (
 	clientcmdapi "k8s.io/client-go/tools/clientcmd/api"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	clusterctlv1 "sigs.k8s.io/cluster-api/cmd/clusterctl/api/v1alpha3"
+	"sigs.k8s.io/cluster-api/util/conditions"
 	"sigs.k8s.io/cluster-api/util/secret"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/cache"
@@ -1247,6 +1248,20 @@ func readyControlPlane(t *testing.T, name string) (*clusterv1.Cluster, *v1alpha1
 	get(t, lcp)
 	initialized(t, lcp)
 	return cluster, lcp, cp, r, issued
+}
+
+func TestAControlPlaneWithNoStatusIsNotYetReported(t *testing.T) {
+	cluster, lcp := create(t, namespace(t), "no-status")
+	r := direct(t, interceptor.Funcs{})
+	untilBlockMove(t, r, lcp)
+	passes(t, r, lcp)
+	get(t, controlPlaneOf(cluster))
+
+	get(t, lcp)
+	if err := ready(lcp, metav1.ConditionUnknown, conditions.NotYetReportedReason, ""); err != nil {
+		t.Error(err)
+	}
+	available(t, lcp, metav1.ConditionUnknown, conditions.NotYetReportedReason)
 }
 
 func TestReadyIsMirroredOnlyAtTheCurrentGeneration(t *testing.T) {
