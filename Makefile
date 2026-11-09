@@ -27,6 +27,13 @@ verify: ## the check that says a change is done
 	[ "$$before" = "$$(cat $(GENERATED) | cksum)" ] || { echo "make generate changed the generated files: review and commit them"; exit 1; }
 	$(MAKE) --no-print-directory lint test
 
+.PHONY: e2e-cluster
+e2e-cluster: ## refuse an E2E_CLUSTER the suite cannot use, before anything is created or removed
+	@name='$(E2E_CLUSTER)'; \
+	case "$$name" in lodia-e2e*) ;; *) echo "E2E_CLUSTER $$name must start with lodia-e2e, the prefix the suite's guard accepts"; exit 1;; esac; \
+	case "$$name" in *-w) echo "E2E_CLUSTER $$name must not end in -w: the run named $${name%-w} removes the containers labelled $$name, which are the nodes of this kind cluster"; exit 1;; esac; \
+	[ $${#name} -le 30 ] || { echo "E2E_CLUSTER $$name has more than 30 characters: Lodia caps the name of the ControlPlane $$name-w at 32"; exit 1; }
+
 .PHONY: e2e-lodia
 e2e-lodia: ## fetch Lodia at LODIA_COMMIT, the commit go.mod pins, into $(LODIA_DIR); uses only git and is safe to run twice
 	mkdir -p $(LODIA_DIR)
@@ -35,7 +42,7 @@ e2e-lodia: ## fetch Lodia at LODIA_COMMIT, the commit go.mod pins, into $(LODIA_
 	git -C $(LODIA_DIR) checkout --quiet --force --detach $(LODIA_COMMIT)
 
 .PHONY: e2e
-e2e: e2e-lodia ## the e2e suite, on a kind cluster of its own, E2E_CLUSTER of at most 30 characters, that it deletes afterwards with the containers of the Cluster the suite creates
+e2e: e2e-cluster e2e-lodia ## the e2e suite, on a kind cluster of its own that e2e-cluster accepts, that it deletes afterwards with the containers of the Cluster the suite creates
 	mkdir -p $(E2E_DIR)
 	go tool kind create cluster --name $(E2E_CLUSTER) --kubeconfig $(E2E_DIR)/kubeconfig --config test/e2e/testdata/kind.yaml
 	$(REMOVE_WORKERS) && E2E_KUBECONFIG=$(E2E_DIR)/kubeconfig go test -v -tags e2e -count=1 -timeout 45m ./test/e2e/...; status=$$?; \

@@ -3,7 +3,9 @@
 The suite runs only against a kind cluster whose kubeconfig is named on the command line, in `E2E_KUBECONFIG`, and refuses any other: [`guard.go`](guard.go) wants a single context whose name starts with `kind-lodia-e2e`, so it never reaches a cluster through the current kube context.
 
 `make e2e` creates the kind cluster `lodia-e2e-capi`, runs the suite and deletes the cluster.
-`E2E_CLUSTER` changes the name, to at most 30 characters.
+`E2E_CLUSTER` changes the name.
+`make e2e` refuses, before it creates anything, a name that does not start with `lodia-e2e`, that ends in `-w` or that is longer than 30 characters.
+The prefix is the one the guard wants, and a name ending in `-w` is refused because a run named `x` removes the containers labelled `x-w`, which are also the nodes of a kind cluster named `x-w`.
 The Cluster is named `<E2E_CLUSTER>-w`: CAPD [labels](https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/test/infrastructure/docker/internal/docker/util.go#L31) its containers with the Cluster's name in kind's own [label](https://github.com/kubernetes-sigs/kind/blob/v0.33.0/pkg/cluster/internal/providers/docker/constants.go#L21) for the nodes of a cluster, so that name must not be the kind cluster's, and Lodia [caps](https://github.com/lodia-io/lodia/blob/57375832e7fe8b3a06374613797eb4c544fe7612/api/v1alpha1/controlplane_types.go#L17) the name of the `ControlPlane`, the Cluster's, at 32 characters.
 The cluster has one node of kind's default image, with the Docker socket that CAPD needs and the admission plugin `OwnerReferencesPermissionEnforcement`, which [refuses](https://github.com/kubernetes/kubernetes/blob/v1.37.0/plugin/pkg/admission/gc/gc_admission.go#L149) an owner reference with `blockOwnerDeletion` to an object whose finalizers the writer cannot set.
 After it creates the cluster and again at the end, `make e2e` removes the containers labelled for the Cluster, with their volumes; on a Linux host, delete the cluster of a killed run first: `go tool kind delete cluster --name lodia-e2e-capi --kubeconfig work/e2e/lodia-e2e-capi/kubeconfig`.
