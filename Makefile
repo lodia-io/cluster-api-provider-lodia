@@ -43,9 +43,19 @@ e2e-lodia: ## fetch Lodia at LODIA_COMMIT, the commit go.mod pins, into $(LODIA_
 	git -C $(LODIA_DIR) fetch --quiet --depth 1 https://github.com/lodia-io/lodia.git $(LODIA_COMMIT)
 	git -C $(LODIA_DIR) checkout --quiet --force --detach $(LODIA_COMMIT)
 
+.PHONY: e2e-capi
+e2e-capi:
+	mkdir -p $(E2E_DIR)/cluster-api
+	git -C $(E2E_DIR)/cluster-api init --quiet
+	git -C $(E2E_DIR)/cluster-api fetch --quiet --depth 1 https://github.com/kubernetes-sigs/cluster-api.git refs/tags/v1.15.0-beta.0
+	git -C $(E2E_DIR)/cluster-api checkout --quiet --force --detach FETCH_HEAD
+	if [ -f test/e2e/testdata/cabpk-fix.patch ]; then git -C $(E2E_DIR)/cluster-api apply $(CURDIR)/test/e2e/testdata/cabpk-fix.patch; fi
+	git -C $(E2E_DIR)/cluster-api diff --stat
+
 .PHONY: e2e
 e2e: e2e-cluster ## the e2e suite, on a kind cluster of its own that e2e-cluster accepts, that it deletes afterwards with the containers of the Cluster the suite creates
 	$(MAKE) --no-print-directory e2e-lodia
+	$(MAKE) --no-print-directory e2e-capi
 	mkdir -p $(E2E_DIR)
 	go tool kind create cluster --name $(E2E_CLUSTER) --kubeconfig $(E2E_DIR)/kubeconfig --config test/e2e/testdata/kind.yaml
 	rm -rf $(E2E_DIR)/artifacts
