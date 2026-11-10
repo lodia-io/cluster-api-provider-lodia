@@ -96,6 +96,8 @@ The cache resyncs every 10 minutes, Cluster API's default ([--sync-period][capi-
 
 RBAC is generated from markers into [`config/rbac/role.yaml`](../config/rbac/role.yaml).
 The envtest suite runs the controller, and a leader-elected manager, as a user bound to that role.
+Cluster API's kubeadm bootstrap provider reads the object behind `Cluster.spec.controlPlaneRef` to render `.controlPlane.version` into files with `contentFormat: Template`, and v1.14.0 to v1.15.0-beta.0 read it on every worker join ([v1.14.0][cabpk-files-114], [v1.15.0-beta.0][cabpk-files]), while its ClusterRole grants that only for `kubeadmcontrolplanes` ([RBAC markers][cabpk-rbac]), so [`config/rbac/kubeadm_bootstrap_role.yaml`](../config/rbac/kubeadm_bootstrap_role.yaml) and its binding grant it `get` on `lodiacontrolplanes`.
+The binding names the provider's ServiceAccount in `capi-kubeadm-bootstrap-system`, and clusterctl sets the namespace of every namespaced subject to the installed provider's own ([target namespace][cc-ns], [subjects][cc-subjects]), so a clusterctl install does not deliver the grant yet.
 Module `go.lodia.io/cluster-api-provider-lodia`, importing `sigs.k8s.io/cluster-api/api` (its own module since v1.14) and `go.lodia.io/lodia/api` ([go.mod][lo-api-gomod]).
 
 ### A pass
@@ -250,6 +252,9 @@ Lodia's availability is a failure tolerance (`highAvailability`) with replica co
 [cabpk-cache]: https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/bootstrap/kubeadm/setup/setup.go#L48-L75
 [cache-infra]: https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/controllers/clustercache/cluster_cache.go#L483-L488
 [cache-rest]: https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/controllers/clustercache/cluster_accessor_client.go#L124-L164
+[cabpk-rbac]: https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/bootstrap/kubeadm/reconcilers/kubeadmconfig/kubeadmconfig_controller.go#L79-L83
+[cabpk-files]: https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/bootstrap/kubeadm/reconcilers/kubeadmconfig/kubeadmconfig_controller.go#L1023-L1027
+[cabpk-files-114]: https://github.com/kubernetes-sigs/cluster-api/blob/v1.14.0/bootstrap/kubeadm/reconcilers/kubeadmconfig/kubeadmconfig_controller.go#L1018-L1022
 [cabpk-gate]: https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/bootstrap/kubeadm/reconcilers/kubeadmconfig/kubeadmconfig_controller.go#L356-L373
 [cabpk-worker]: https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/bootstrap/kubeadm/reconcilers/kubeadmconfig/kubeadmconfig_controller.go#L655-L697
 [cabpk-discovery]: https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/bootstrap/kubeadm/reconcilers/kubeadmconfig/kubeadmconfig_controller.go#L1276-L1363
@@ -277,6 +282,8 @@ Lodia's availability is a failure tolerance (`highAvailability`) with replica co
 [finalizers]: https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/util/finalizers/finalizers.go#L27-L49
 [patch]: https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/util/patch/patch.go#L82-L83
 [rbac-agg]: https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/core/config/rbac/aggregated_role.yaml#L8
+[cc-ns]: https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/cmd/clusterctl/client/repository/components.go#L242-L257
+[cc-subjects]: https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/cmd/clusterctl/client/repository/components.go#L349-L361
 
 <!-- controller-runtime, kubeadm, Kubernetes -->
 [cr-timeout]: https://github.com/kubernetes-sigs/controller-runtime/blob/v0.25.2/pkg/config/controller.go#L96-L98

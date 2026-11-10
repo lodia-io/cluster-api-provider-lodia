@@ -1,0 +1,60 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: cluster-api-provider-lodia-system
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: manager
+  namespace: cluster-api-provider-lodia-system
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: controller-manager
+  namespace: cluster-api-provider-lodia-system
+  labels:
+    control-plane: controller-manager
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      control-plane: controller-manager
+  template:
+    metadata:
+      labels:
+        control-plane: controller-manager
+    spec:
+      serviceAccountName: manager
+      terminationGracePeriodSeconds: 10
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+      - name: manager
+        image: ko://go.lodia.io/cluster-api-provider-lodia/cmd
+        args:
+        - --leader-elect
+        ports:
+        - name: healthz
+          containerPort: 8081
+          protocol: TCP
+        - name: metrics
+          containerPort: 8443
+          protocol: TCP
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: healthz
+        readinessProbe:
+          httpGet:
+            path: /readyz
+            port: healthz
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop:
+            - ALL
