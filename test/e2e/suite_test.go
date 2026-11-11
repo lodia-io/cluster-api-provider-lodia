@@ -40,7 +40,7 @@ func TestMain(m *testing.M) {
 }
 
 func install(ctx context.Context, cfg *envconf.Config) (context.Context, error) {
-	bounded, cancel := context.WithTimeout(ctx, 15*time.Minute)
+	bounded, cancel := context.WithTimeout(ctx, bounds.Install)
 	defer cancel()
 	for _, component := range []struct {
 		name    string

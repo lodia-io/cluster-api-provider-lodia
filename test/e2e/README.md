@@ -59,4 +59,6 @@ No assertion reads it.
 The suite writes to `work/e2e/<E2E_CLUSTER>/artifacts`, and CI uploads it: the objects above with their conditions and Lodia's `Etcd`, the pods and logs of cert-manager, of the managers of Cluster API, CAPD, Lodia and the provider, and of the control plane in `capi-join`, and from the worker container `journalctl -u kubelet -u containerd` and `crictl ps -a`.
 `make e2e` empties the directory before it starts.
 A cancelled job and a `go test` timeout leave no artifacts, since the test binary writes them and neither lets it finish.
+The bounds in [`bounds_test.go`](bounds_test.go), the install's and the dump's among them, add up to less than `-timeout`, and `-timeout` to less than the job's `timeout-minutes`, so that a step's own bound fails first; `TestTheBoundsFitUnderTheTimeouts` fails when they do not.
+Go kills a test binary one minute after its `-timeout`, counted from its start, while its own alarm counts from the end of the install.
 CAPD does not retry a failed bootstrap; the output of `kubeadm join` is in the `BootstrapCompleted` condition of the `DevMachine`.

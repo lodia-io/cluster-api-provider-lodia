@@ -71,7 +71,7 @@ func TestAWorkerJoinsAClusterOfLodiasControlPlane(t *testing.T) {
 			return ctx
 		}).
 		Assess("the objects are applied, and the DevCluster, whose infrastructure the suite manages, is marked provisioned", func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
-			bounded, cancel := context.WithTimeout(ctx, time.Minute)
+			bounded, cancel := context.WithTimeout(ctx, bounds.Apply)
 			defer cancel()
 			for _, file := range []string{"cluster.yaml", "workers.yaml"} {
 				manifest, err := render(file, key.Name)
@@ -93,7 +93,7 @@ func TestAWorkerJoinsAClusterOfLodiasControlPlane(t *testing.T) {
 			return ctx
 		}).
 		Assess("the Cluster reports ControlPlaneInitialized", func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
-			until(ctx, t, 5*time.Minute, "ControlPlaneInitialized is True", func(ctx context.Context) error {
+			until(ctx, t, bounds.Initialized, "ControlPlaneInitialized is True", func(ctx context.Context) error {
 				cluster := &clusterv1.Cluster{}
 				if err := k8s.Get(ctx, key, cluster); err != nil {
 					return err
@@ -106,7 +106,7 @@ func TestAWorkerJoinsAClusterOfLodiasControlPlane(t *testing.T) {
 			return ctx
 		}).
 		Assess("the Cluster's endpoint is the one Lodia published", func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
-			until(ctx, t, 30*time.Second, "Cluster.spec.controlPlaneEndpoint is the ControlPlane's status.endpoint.apiServer", func(ctx context.Context) error {
+			until(ctx, t, bounds.Endpoint, "Cluster.spec.controlPlaneEndpoint is the ControlPlane's status.endpoint.apiServer", func(ctx context.Context) error {
 				cluster, cp := &clusterv1.Cluster{}, &lodiav1alpha1.ControlPlane{}
 				if err := k8s.Get(ctx, key, cluster); err != nil {
 					return err
@@ -175,13 +175,13 @@ func TestAWorkerJoinsAClusterOfLodiasControlPlane(t *testing.T) {
 			if err := cni.Execute(&rendered, struct{ PodSubnet string }{cluster.Spec.ClusterNetwork.Pods.CIDRBlocks[0]}); err != nil {
 				t.Fatal(err)
 			}
-			until(ctx, t, time.Minute, "kindnet is applied", func(ctx context.Context) error {
+			until(ctx, t, bounds.Kindnet, "kindnet is applied", func(ctx context.Context) error {
 				return decoder.DecodeEach(ctx, bytes.NewReader(rendered.Bytes()), ignoreExisting(decoder.CreateHandler(tenant.resources)))
 			})
 			return ctx
 		}).
 		Assess("the Machine is Running with a nodeRef, and Lodia reported the version the MachineSet's preflight reads", func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
-			until(ctx, t, 5*time.Minute, "the Machine is Running with a nodeRef", func(ctx context.Context) error {
+			until(ctx, t, bounds.Running, "the Machine is Running with a nodeRef", func(ctx context.Context) error {
 				machines := &clusterv1.MachineList{}
 				if err := k8s.List(ctx, machines, client.InNamespace(key.Namespace), client.MatchingLabels{clusterv1.ClusterNameLabel: key.Name}); err != nil {
 					return err
@@ -215,7 +215,7 @@ func TestAWorkerJoinsAClusterOfLodiasControlPlane(t *testing.T) {
 			if err != nil || providerID == "" {
 				t.Fatalf("DevMachine %s has no spec.providerID: %v", dm.GetName(), err)
 			}
-			until(ctx, t, 3*time.Minute, "Node "+machine.Status.NodeRef.Name+" has the providerID, no uninitialized taint, and is Ready", func(ctx context.Context) error {
+			until(ctx, t, bounds.Ready, "Node "+machine.Status.NodeRef.Name+" has the providerID, no uninitialized taint, and is Ready", func(ctx context.Context) error {
 				joined := &corev1.Node{}
 				if err := tenant.client.Get(ctx, client.ObjectKey{Name: machine.Status.NodeRef.Name}, joined); err != nil {
 					return err
@@ -239,7 +239,7 @@ func TestAWorkerJoinsAClusterOfLodiasControlPlane(t *testing.T) {
 			return ctx
 		}).
 		Assess("the konnectivity agent is ready on the Node", func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
-			until(ctx, t, 3*time.Minute, "the konnectivity agent is ready", func(ctx context.Context) error {
+			until(ctx, t, bounds.Konnectivity, "the konnectivity agent is ready", func(ctx context.Context) error {
 				agents := &appsv1.DaemonSet{}
 				if err := tenant.client.Get(ctx, client.ObjectKey{Namespace: metav1.NamespaceSystem, Name: "konnectivity-agent"}, agents); err != nil {
 					return err
@@ -264,7 +264,7 @@ func TestAWorkerJoinsAClusterOfLodiasControlPlane(t *testing.T) {
 				t.Fatal(err)
 			}
 			pods := kubernetes.NewForConfigOrDie(tenant.cfg).CoreV1().Pods(web.Namespace)
-			until(ctx, t, 3*time.Minute, "pod web runs on Node "+node.Name+" and its logs are readable", func(ctx context.Context) error {
+			until(ctx, t, bounds.Pod, "pod web runs on Node "+node.Name+" and its logs are readable", func(ctx context.Context) error {
 				if err := tenant.client.Get(ctx, client.ObjectKeyFromObject(web), web); err != nil {
 					return err
 				}
@@ -286,7 +286,7 @@ func TestAWorkerJoinsAClusterOfLodiasControlPlane(t *testing.T) {
 			return ctx
 		}).
 		Assess("the Cluster is Available", func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
-			until(ctx, t, time.Minute, "Available is True", func(ctx context.Context) error {
+			until(ctx, t, bounds.Available, "Available is True", func(ctx context.Context) error {
 				cluster := &clusterv1.Cluster{}
 				if err := k8s.Get(ctx, key, cluster); err != nil {
 					return err
@@ -314,7 +314,7 @@ func TestAWorkerJoinsAClusterOfLodiasControlPlane(t *testing.T) {
 			if err := k8s.Delete(ctx, &clusterv1.Cluster{ObjectMeta: metav1.ObjectMeta{Namespace: key.Namespace, Name: key.Name}}); err != nil {
 				t.Fatal(err)
 			}
-			until(ctx, t, 10*time.Minute, "everything the Cluster made is gone", func(ctx context.Context) error {
+			until(ctx, t, bounds.Deleted, "everything the Cluster made is gone", func(ctx context.Context) error {
 				for _, obj := range []client.Object{
 					&clusterv1.Cluster{ObjectMeta: metav1.ObjectMeta{Namespace: key.Namespace, Name: key.Name}},
 					&v1alpha1.LodiaControlPlane{ObjectMeta: metav1.ObjectMeta{Namespace: key.Namespace, Name: key.Name}},

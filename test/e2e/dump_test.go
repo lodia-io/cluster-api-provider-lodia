@@ -12,7 +12,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -44,7 +43,7 @@ var (
 )
 
 func dump(ctx context.Context, cfg *envconf.Config) {
-	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+	ctx, cancel := context.WithTimeout(ctx, bounds.Dump)
 	defer cancel()
 	dir := filepath.Join(workDir(cfg), "artifacts")
 	c, err := client.New(cfg.Client().RESTConfig(), client.Options{})
