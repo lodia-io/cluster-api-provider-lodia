@@ -10,7 +10,7 @@ GENERATED = api/v1alpha1/zz_generated.deepcopy.go config/crd/bases/*.yaml config
 generate: ## regenerate deepcopy functions, the CRDs and the controller's ClusterRole
 	go tool controller-gen object:headerFile=hack/boilerplate.go.txt paths=./api/...
 	go tool controller-gen crd paths=./api/... output:crd:artifacts:config=config/crd/bases
-	go tool controller-gen rbac:roleName=cluster-api-provider-lodia paths=./internal/... output:rbac:artifacts:config=config/rbac
+	go tool controller-gen rbac:roleName=manager-role paths=./internal/... output:rbac:artifacts:config=config/rbac
 
 .PHONY: lint
 lint:
