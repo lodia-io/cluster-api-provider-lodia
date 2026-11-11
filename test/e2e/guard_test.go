@@ -42,6 +42,8 @@ func TestRequireNamedCluster(t *testing.T) {
 		{"someone's cluster", kubeconfig(t, kind, "segla-wg", "segla-wg"), "does not start with"},
 		{"another kind cluster", kubeconfig(t, kind, "kind-lodia-hardway", "kind-lodia-hardway"), "does not start with"},
 		{"Lodia's e2e cluster", kubeconfig(t, kind, "kind-lodia-e2e-local", "kind-lodia-e2e-local"), "does not start with"},
+		{"a shorter prefix", kubeconfig(t, kind, "kind-capl-dev", "kind-capl-dev"), "does not start with"},
+		{"the prefix inside the name", kubeconfig(t, kind, "x-kind-capl-e2e", "x-kind-capl-e2e"), "does not start with"},
 		{"current context absent", kubeconfig(t, kind, "kind-capl-e2e-x", "kind-capl-e2e-y"), "does not exist"},
 		{"a context without its cluster", kubeconfig(t, "", "kind-capl-e2e", "kind-capl-e2e"), "does not hold"},
 		{"the name on another host", kubeconfig(t, "https://segla.example.io:6443", "kind-capl-e2e", "kind-capl-e2e"), "not a loopback address"},
@@ -65,7 +67,7 @@ func TestRequireNamedCluster(t *testing.T) {
 }
 
 func TestMakeAndTheGuardAgreeOnTheClusterName(t *testing.T) {
-	for _, name := range []string{"capl-e2e", "capl-e2e-2", "lodia-e2e-local", "lodia-e2e-capi"} {
+	for _, name := range []string{"capl-e2e", "capl-e2e-2", "capl-dev", "lodia-e2e-local", "lodia-e2e-capi"} {
 		t.Run(name, func(t *testing.T) {
 			_, err := exec.Command("make", "--no-print-directory", "-C", "../..", "e2e-cluster", "E2E_CLUSTER="+name).CombinedOutput()
 			guard := RequireNamedCluster(kubeconfig(t, "https://127.0.0.1:6443", "kind-"+name, "kind-"+name))
