@@ -43,7 +43,7 @@ Lodia's commit is in two places, the pseudo-version of `go.lodia.io/lodia/api` i
 
 1. `Cluster` `ControlPlaneInitialized`.
 2. `Cluster.spec.controlPlaneEndpoint` is Lodia's `status.endpoint.apiServer`.
-3. `<cluster>-kubeconfig` and `<cluster>-ca` exist, the CA's Secret holds `tls.crt` and no `tls.key`, and the `LodiaControlPlane` controls both.
+3. `<cluster>-kubeconfig` and `<cluster>-ca` hold the bytes of Lodia's `<cluster>-admin-kubeconfig` and `<cluster>-ca-bundle` under `value` and `tls.crt` and no other key, have the type `cluster.x-k8s.io/secret` and the label `cluster.x-k8s.io/cluster-name`, and the `LodiaControlPlane` controls both.
 4. kindnet, from the manifest the node image ships, is applied in the tenant through `<cluster>-kubeconfig`.
 5. The `Machine` is `Running` with a `nodeRef`, and `LodiaControlPlane.status.versions` holds the version that the MachineSet's preflight check reads.
 6. The tenant's Node has the `DevMachine`'s `providerID`, has lost the `uninitialized` taint and is `Ready`.

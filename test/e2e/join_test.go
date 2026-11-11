@@ -125,31 +125,13 @@ func TestAWorkerJoinsAClusterOfLodiasControlPlane(t *testing.T) {
 			})
 			return ctx
 		}).
-		Assess("the provider copied the kubeconfig and the CA's certificate, never its key, and owns both", func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
+		Assess("the provider copied Lodia's kubeconfig and the CA's certificate, never its key, and owns both", func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
 			lcp := &v1alpha1.LodiaControlPlane{}
 			if err := k8s.Get(ctx, key, lcp); err != nil {
 				t.Fatal(err)
 			}
-			kubeconfig, ca := &corev1.Secret{}, &corev1.Secret{}
-			if err := k8s.Get(ctx, client.ObjectKey{Namespace: key.Namespace, Name: secret.Name(key.Name, secret.Kubeconfig)}, kubeconfig); err != nil {
+			if err := requireCopies(ctx, k8s, key, lcp); err != nil {
 				t.Fatal(err)
-			}
-			if err := k8s.Get(ctx, client.ObjectKey{Namespace: key.Namespace, Name: secret.Name(key.Name, secret.ClusterCA)}, ca); err != nil {
-				t.Fatal(err)
-			}
-			if len(kubeconfig.Data[secret.KubeconfigDataName]) == 0 {
-				t.Fatalf("Secret %s holds no %s", kubeconfig.Name, secret.KubeconfigDataName)
-			}
-			if len(ca.Data[secret.TLSCrtDataName]) == 0 {
-				t.Fatalf("Secret %s holds no %s", ca.Name, secret.TLSCrtDataName)
-			}
-			if _, ok := ca.Data[secret.TLSKeyDataName]; ok {
-				t.Fatalf("Secret %s holds the CA's key", ca.Name)
-			}
-			for _, s := range []*corev1.Secret{kubeconfig, ca} {
-				if !metav1.IsControlledBy(s, lcp) {
-					t.Fatalf("Secret %s is not controlled by LodiaControlPlane %s", s.Name, lcp.Name)
-				}
 			}
 			return ctx
 		}).
