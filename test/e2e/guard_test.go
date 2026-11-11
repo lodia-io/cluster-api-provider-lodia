@@ -6,6 +6,7 @@ package e2e
 import (
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -76,6 +77,40 @@ func TestMakeAndTheGuardAgreeOnTheClusterName(t *testing.T) {
 			}
 			if wantAccepted := strings.HasPrefix(name, "capl-e2e"); wantAccepted != (guard == nil) {
 				t.Fatalf("the guard says %v about %s", guard, name)
+			}
+		})
+	}
+}
+
+func TestMakeAcceptsOnlyNamesWhoseClusterLodiaAccepts(t *testing.T) {
+	lodiaName := regexp.MustCompile(`^[a-z]([-a-z0-9]*[a-z0-9])?$`)
+	cases := []struct {
+		name, want string
+	}{
+		{"capl-e2e", ""},
+		{"capl-e2e-2", ""},
+		{"capl-e2ex", ""},
+		{"capl-e2e-", ""},
+		{"capl-e2e-" + strings.Repeat("x", 21), ""},
+		{"capl-e2e-" + strings.Repeat("x", 22), "more than 30 characters"},
+		{"capl-e2e-w", "must not end in -w"},
+		{"capl-e2e-W", "character outside"},
+		{"capl-e2e_x", "character outside"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			out, err := exec.Command("make", "--no-print-directory", "-C", "../..", "e2e-cluster", "E2E_CLUSTER="+c.name).CombinedOutput()
+			if c.want != "" {
+				if err == nil || !strings.Contains(string(out), c.want) {
+					t.Fatalf("want make to refuse with %q, got %v\n%s", c.want, err, out)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("make refuses: %v\n%s", err, out)
+			}
+			if cluster := c.name + "-w"; len(cluster) > 32 || !lodiaName.MatchString(cluster) {
+				t.Fatalf("make accepts %s, whose Cluster %s Lodia refuses", c.name, cluster)
 			}
 		})
 	}
