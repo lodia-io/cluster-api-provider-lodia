@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -26,7 +27,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 	"sigs.k8s.io/e2e-framework/klient/k8s/resources"
-	"sigs.k8s.io/e2e-framework/pkg/envconf"
 )
 
 type tenantAccess struct {
@@ -104,7 +104,11 @@ func tenantThatNeverCompletesTLS(t *testing.T) (string, func() int) {
 
 func gatedTenant(t *testing.T, gate func(path string) (delay time.Duration, answers bool)) (string, func() []string) {
 	t.Helper()
-	healthy := tenantHandler(t)
+	return gatedServer(t, tenantHandler(t), gate)
+}
+
+func gatedServer(t *testing.T, healthy http.Handler, gate func(path string) (delay time.Duration, answers bool)) (string, func() []string) {
+	t.Helper()
 	var (
 		mu    sync.Mutex
 		asked []string
@@ -292,17 +296,51 @@ func TestTheDumpReadsTheTenantsKubeconfigWithinItsBound(t *testing.T) {
 	}
 }
 
+func shortenTheDumpRequests(t *testing.T, timeout time.Duration) {
+	t.Helper()
+	was := dumpRequestTimeout
+	t.Cleanup(func() { dumpRequestTimeout = was })
+	dumpRequestTimeout = timeout
+}
+
 func TestTheDumpOfAManagementClusterThatDoesNotAnswerEndsInItsBound(t *testing.T) {
 	const bound = time.Second
 	shortenTheDump(t, bound, bound/4)
-	d := newDumpSetup(t, tenantAPI(t).URL)
+	shortenTheDumpRequests(t, bound/4)
 	stalled, _ := tenantThatNeverAnswers(t)
-	kubeconfig := filepath.Join(t.TempDir(), "kubeconfig")
-	if err := os.WriteFile(kubeconfig, serverKubeconfig(t, stalled, "kind-capl-e2e"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	d.cfg = envconf.NewWithKubeConfig(kubeconfig)
-	if err := returnsWithin(t, 2*bound, "the dump", func() error { return dumpBounded(t.Context(), d.cfg, d.c, d.dir) }); err == nil {
+	cfg := configFor(t, stalled)
+	if err := returnsWithin(t, 2*bound, "the dump", func() error { return dumpCluster(t.Context(), cfg, t.TempDir()) }); err == nil {
 		t.Fatal("the dump says nothing about a management cluster that did not answer")
+	}
+}
+
+func TestTheDumpCutsOffWhatTheManagementClusterDoesNotAnswerAtItsBound(t *testing.T) {
+	const bound = time.Second
+	for name, stalls := range map[string]string{
+		"a list of Clusters":      "/clusters",
+		"a list of Pods":          "/pods",
+		"the logs of a container": "/log",
+	} {
+		t.Run(name, func(t *testing.T) {
+			shortenTheDump(t, bound, bound/4)
+			shortenTheDumpRequests(t, 10*bound)
+			url, _ := gatedServer(t, managementHandler(t), func(path string) (time.Duration, bool) { return 0, !strings.HasSuffix(path, stalls) })
+			cfg := configFor(t, url)
+			if err := returnsWithin(t, 2*bound, "the dump", func() error { return dumpCluster(t.Context(), cfg, t.TempDir()) }); err == nil {
+				t.Fatal("the dump says nothing about a request that did not answer")
+			}
+		})
+	}
+}
+
+func TestTheDumpAsksTheManagementClusterNothingOnceItsBoundHasEnded(t *testing.T) {
+	url, asked := gatedServer(t, managementHandler(t), func(string) (time.Duration, bool) { return 0, true })
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	if err := dumpCluster(ctx, configFor(t, url), t.TempDir()); !errors.Is(err, context.Canceled) {
+		t.Fatalf("want the context's error, got %v", err)
+	}
+	if got := asked(); len(got) > 0 {
+		t.Fatalf("the dump sent %v to the management cluster after its bound", got)
 	}
 }

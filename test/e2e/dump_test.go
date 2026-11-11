@@ -23,6 +23,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 	clientcmdapi "k8s.io/client-go/tools/clientcmd/api"
 	"sigs.k8s.io/cluster-api/util/secret"
@@ -64,6 +65,16 @@ var (
 	}
 )
 
+func dumpCluster(ctx context.Context, cfg *envconf.Config, dir string) error {
+	restCfg := rest.CopyConfig(cfg.Client().RESTConfig())
+	restCfg.Timeout = dumpRequestTimeout
+	c, err := client.New(restCfg, client.Options{})
+	if err != nil {
+		return err
+	}
+	return dumpBounded(ctx, cfg, c, dir)
+}
+
 func dumpBounded(ctx context.Context, cfg *envconf.Config, c client.Client, dir string) error {
 	ctx, cancel := context.WithTimeout(ctx, bounds.Dump)
 	defer cancel()
@@ -73,11 +84,22 @@ func dumpBounded(ctx context.Context, cfg *envconf.Config, c client.Client, dir 
 func dumpAll(ctx context.Context, cfg *envconf.Config, c client.Client, dir string, tenantBound time.Duration) error {
 	var errs []error
 	for _, kind := range objectKinds {
+		if ctx.Err() != nil {
+			break
+		}
 		errs = append(errs, dumpObjects(ctx, c, dir, kind, namespace))
 	}
-	errs = append(errs, dumpObjects(ctx, c, dir, datastoreClass, ""))
+	if ctx.Err() == nil {
+		errs = append(errs, dumpObjects(ctx, c, dir, datastoreClass, ""))
+	}
 	for _, ns := range managers {
+		if ctx.Err() != nil {
+			break
+		}
 		errs = append(errs, dumpObjects(ctx, c, dir, podKind, ns), dumpObjects(ctx, c, dir, eventKind, ns), dumpLogs(ctx, cfg, dir, ns))
+	}
+	if err := ctx.Err(); err != nil {
+		return errors.Join(append(errs, err)...)
 	}
 	errs = append(errs, dumpTenant(ctx, cfg, c, dir, tenantBound), dumpWorkers(ctx, cfg, dir))
 	return errors.Join(errs...)
@@ -237,6 +259,27 @@ func respond(t *testing.T, w http.ResponseWriter, body string) {
 	}
 }
 
+func managementHandler(t *testing.T) http.Handler {
+	t.Helper()
+	tenant := tenantHandler(t)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/apis":
+			respond(t, w, `{"kind":"APIGroupList","apiVersion":"v1","groups":[{"name":"cluster.x-k8s.io","versions":[{"groupVersion":"cluster.x-k8s.io/v1beta2","version":"v1beta2"}],"preferredVersion":{"groupVersion":"cluster.x-k8s.io/v1beta2","version":"v1beta2"}}]}`)
+		case r.URL.Path == "/apis/cluster.x-k8s.io/v1beta2":
+			respond(t, w, `{"kind":"APIResourceList","groupVersion":"cluster.x-k8s.io/v1beta2","resources":[{"name":"clusters","kind":"Cluster","namespaced":true,"verbs":["list"]}]}`)
+		case strings.HasSuffix(r.URL.Path, "/clusters"):
+			respond(t, w, `{"kind":"ClusterList","apiVersion":"cluster.x-k8s.io/v1beta2","items":[]}`)
+		case strings.HasSuffix(r.URL.Path, "/pods"):
+			respond(t, w, `{"kind":"PodList","apiVersion":"v1","items":[{"metadata":{"name":"p"},"spec":{"containers":[{"name":"c"}]}}]}`)
+		case strings.HasSuffix(r.URL.Path, "/log"):
+			respond(t, w, "log")
+		default:
+			tenant.ServeHTTP(w, r)
+		}
+	})
+}
+
 func serverKubeconfig(t *testing.T, server, context string) []byte {
 	t.Helper()
 	cfg := clientcmdapi.NewConfig()
@@ -249,6 +292,15 @@ func serverKubeconfig(t *testing.T, server, context string) []byte {
 		t.Fatal(err)
 	}
 	return data
+}
+
+func configFor(t *testing.T, server string) *envconf.Config {
+	t.Helper()
+	kubeconfig := filepath.Join(t.TempDir(), "kubeconfig")
+	if err := os.WriteFile(kubeconfig, serverKubeconfig(t, server, "kind-capl-e2e"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return envconf.NewWithKubeConfig(kubeconfig)
 }
 
 type dumpSetup struct {
@@ -268,10 +320,6 @@ func newDumpSetup(t *testing.T, tenant string) dumpSetup {
 		respond(t, w, `{"kind":"PodList","apiVersion":"v1","items":[]}`)
 	}))
 	t.Cleanup(management.Close)
-	kubeconfig := filepath.Join(t.TempDir(), "kubeconfig")
-	if err := os.WriteFile(kubeconfig, serverKubeconfig(t, management.URL, "kind-capl-e2e"), 0o600); err != nil {
-		t.Fatal(err)
-	}
 	builder := fake.NewClientBuilder()
 	for _, ns := range managers {
 		builder = builder.WithObjects(&corev1.Event{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "event-in-" + ns}})
@@ -282,7 +330,7 @@ func newDumpSetup(t *testing.T, tenant string) dumpSetup {
 			Data:       map[string][]byte{secret.KubeconfigDataName: serverKubeconfig(t, tenant, "tenant")},
 		})
 	}
-	return dumpSetup{cfg: envconf.NewWithKubeConfig(kubeconfig), c: builder.Build(), dir: t.TempDir()}
+	return dumpSetup{cfg: configFor(t, management.URL), c: builder.Build(), dir: t.TempDir()}
 }
 
 func requireFiles(t *testing.T, dir string, want map[string]string) {

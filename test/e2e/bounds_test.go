@@ -50,6 +50,10 @@ const (
 
 const tenantRequestTimeout = 30 * time.Second
 
+// The suite's own client has none: a create through one of cert-manager's
+// webhooks can take the 30 seconds the API server gives it.
+var dumpRequestTimeout = 10 * time.Second
+
 var tenantDumpBound = 30 * time.Second
 
 var goTestTimeout = regexp.MustCompile(`-timeout (\d+)m\b`)
@@ -73,12 +77,19 @@ func fits(bounded, timeout, limit time.Duration) error {
 }
 
 // Nothing stops a discovery once the context has ended, and it asks /api,
-// /apis and a group's version, each with the request timeout: a step can end
-// three request timeouts after its bound, and the tenant's part of the dump a
-// discovery, half the bound, after its own.
-func tenantFits(requestTimeout, dumpBound, dump time.Duration) error {
+// /apis and a group's version, each with the request timeout: a call can end
+// three request timeouts after its bound.
+func requestFits(whose string, requestTimeout time.Duration) error {
 	if requestTimeout <= 0 || 3*requestTimeout > callsWithoutBound {
-		return fmt.Errorf("the tenant's request timeout %s is not positive, or three of them are more than the %s left for the calls without a bound: a step against a tenant that does not answer could overshoot its bound by that much", requestTimeout, callsWithoutBound)
+		return fmt.Errorf("%s request timeout %s is not positive, or three of them are more than the %s left for the calls without a bound: a call to a cluster that does not answer could overshoot its bound by that much", whose, requestTimeout, callsWithoutBound)
+	}
+	return nil
+}
+
+// The tenant's part of the dump ends a discovery, half the bound, after its own.
+func tenantFits(requestTimeout, dumpBound, dump time.Duration) error {
+	if err := requestFits("the tenant's", requestTimeout); err != nil {
+		return err
 	}
 	if dumpBound <= 0 || 2*dumpBound >= dump {
 		return fmt.Errorf("the tenant's part of the dump %s is not positive, or two of them are not less than the dump's %s: a tenant that does not answer would leave the workers no time", dumpBound, dump)
@@ -119,6 +130,9 @@ func TestTheBoundsFitUnderTheTimeouts(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := tenantFits(tenantRequestTimeout, tenantDumpBound, bounds.Dump); err != nil {
+		t.Fatal(err)
+	}
+	if err := requestFits("the dump's", dumpRequestTimeout); err != nil {
 		t.Fatal(err)
 	}
 }

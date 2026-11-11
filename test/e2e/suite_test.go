@@ -14,7 +14,6 @@ import (
 	"testing"
 	"time"
 
-	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/e2e-framework/pkg/env"
 	"sigs.k8s.io/e2e-framework/pkg/envconf"
 )
@@ -40,12 +39,7 @@ func workDir(cfg *envconf.Config) string {
 }
 
 func dump(ctx context.Context, cfg *envconf.Config) {
-	c, err := client.New(cfg.Client().RESTConfig(), client.Options{})
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "dump:", err)
-		return
-	}
-	if err := dumpBounded(ctx, cfg, c, filepath.Join(workDir(cfg), "artifacts")); err != nil {
+	if err := dumpCluster(ctx, cfg, filepath.Join(workDir(cfg), "artifacts")); err != nil {
 		fmt.Fprintln(os.Stderr, "dump:", err)
 	}
 }
