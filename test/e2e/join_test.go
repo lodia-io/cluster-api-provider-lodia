@@ -35,7 +35,6 @@ import (
 	"sigs.k8s.io/e2e-framework/pkg/features"
 
 	"go.lodia.io/cluster-api-provider-lodia/api/v1alpha1"
-	"go.lodia.io/cluster-api-provider-lodia/internal/controller"
 )
 
 const agnhost = "registry.k8s.io/e2e-test-images/agnhost:2.66.1@sha256:6e2eef87d0dc77e070a7549bc5fdfa290c0fefe3359eb33c2ad1eda692fe66a4"
@@ -55,7 +54,9 @@ func TestAWorkerJoinsAClusterOfLodiasControlPlane(t *testing.T) {
 				t.Fatal(err)
 			}
 			key = client.ObjectKey{Namespace: namespace, Name: name}
-			k8s = newClient(t, cfg)
+			if k8s, err = newClient(cfg); err != nil {
+				t.Fatal(err)
+			}
 			return ctx
 		}).
 		Assess("the objects are applied, and the DevCluster, whose infrastructure the suite manages, is marked provisioned", func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
@@ -319,15 +320,6 @@ func TestAWorkerJoinsAClusterOfLodiasControlPlane(t *testing.T) {
 		}).
 		Feature()
 	testenv.Test(t, f)
-}
-
-func newClient(t *testing.T, cfg *envconf.Config) client.Client {
-	t.Helper()
-	k8s, err := client.New(cfg.Client().RESTConfig(), client.Options{Scheme: controller.Scheme()})
-	if err != nil {
-		t.Fatal(err)
-	}
-	return k8s
 }
 
 func render(file, cluster string) ([]byte, error) {

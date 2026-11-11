@@ -29,7 +29,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/e2e-framework/klient/decoder"
 	"sigs.k8s.io/e2e-framework/klient/k8s"
-	"sigs.k8s.io/e2e-framework/klient/wait/conditions"
 	"sigs.k8s.io/e2e-framework/pkg/envconf"
 	"sigs.k8s.io/e2e-framework/third_party/helm"
 )
@@ -130,12 +129,11 @@ func download(ctx context.Context, url string) ([]byte, error) {
 	return body, nil
 }
 
-func createWhenWebhooksAnswer(cfg *envconf.Config) decoder.HandlerFunc {
-	create := decoder.CreateHandler(cfg.Client().Resources())
+func createWhenWebhooksAnswer(c client.Client) decoder.HandlerFunc {
 	return func(ctx context.Context, obj k8s.Object) error {
 		var last error
 		err := wait.PollUntilContextTimeout(ctx, 2*time.Second, time.Minute, true, func(ctx context.Context) (bool, error) {
-			last = create(ctx, obj)
+			last = c.Create(ctx, obj)
 			if last != nil && webhookNotReady(last) {
 				return false, nil
 			}
@@ -160,7 +158,11 @@ func webhookNotReady(err error) bool {
 }
 
 func apply(ctx context.Context, cfg *envconf.Config, manifest []byte) error {
-	return decoder.DecodeEach(ctx, bytes.NewReader(manifest), createWhenWebhooksAnswer(cfg))
+	c, err := newClient(cfg)
+	if err != nil {
+		return err
+	}
+	return decoder.DecodeEach(ctx, bytes.NewReader(manifest), createWhenWebhooksAnswer(c))
 }
 
 func applyRelease(ctx context.Context, cfg *envconf.Config, r release) error {
@@ -175,8 +177,12 @@ func applyRelease(ctx context.Context, cfg *envconf.Config, r release) error {
 }
 
 func available(ctx context.Context, cfg *envconf.Config, namespace string, names ...string) error {
+	c, err := newClient(cfg)
+	if err != nil {
+		return err
+	}
 	for _, name := range names {
-		isAvailable := conditions.New(cfg.Client().Resources()).DeploymentAvailable(name, namespace)
+		isAvailable := deploymentAvailable(c, client.ObjectKey{Namespace: namespace, Name: name})
 		if err := wait.PollUntilContextTimeout(ctx, 2*time.Second, 2*time.Minute, true, isAvailable); err != nil {
 			return fmt.Errorf("deployment %s/%s is not Available: %w", namespace, name, err)
 		}

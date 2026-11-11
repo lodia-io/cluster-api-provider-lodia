@@ -50,9 +50,12 @@ const (
 
 const tenantRequestTimeout = 30 * time.Second
 
-// The suite's own client has none: a create through one of cert-manager's
-// webhooks can take the 30 seconds the API server gives it.
 var dumpRequestTimeout = 10 * time.Second
+
+// The install's and the steps' clients time out their discovery alone: a
+// request timeout would also cut a create, which waits up to the 30 seconds
+// that the API server gives cert-manager's webhook.
+var discoveryTimeout = 10 * time.Second
 
 var tenantDumpBound = 30 * time.Second
 
@@ -137,6 +140,9 @@ func TestTheBoundsFitUnderTheTimeouts(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := requestFits("the dump's", dumpRequestTimeout); err != nil {
+		t.Fatal(err)
+	}
+	if err := requestFits("the steps' discovery", discoveryTimeout); err != nil {
 		t.Fatal(err)
 	}
 }
