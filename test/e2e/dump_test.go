@@ -65,10 +65,14 @@ var (
 	}
 )
 
-func dumpCluster(ctx context.Context, cfg *envconf.Config, dir string) error {
+func dumpRESTConfig(cfg *envconf.Config) *rest.Config {
 	restCfg := rest.CopyConfig(cfg.Client().RESTConfig())
 	restCfg.Timeout = dumpRequestTimeout
-	c, err := client.New(restCfg, client.Options{})
+	return restCfg
+}
+
+func dumpCluster(ctx context.Context, cfg *envconf.Config, dir string) error {
+	c, err := client.New(dumpRESTConfig(cfg), client.Options{})
 	if err != nil {
 		return err
 	}
@@ -121,7 +125,7 @@ func dumpObjects(ctx context.Context, c client.Client, dir string, kind schema.G
 }
 
 func dumpLogs(ctx context.Context, cfg *envconf.Config, dir, ns string) error {
-	clientset, err := kubernetes.NewForConfig(cfg.Client().RESTConfig())
+	clientset, err := kubernetes.NewForConfig(dumpRESTConfig(cfg))
 	if err != nil {
 		return err
 	}

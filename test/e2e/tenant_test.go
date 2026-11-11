@@ -383,3 +383,48 @@ func TestTheDumpAsksTheManagementClusterNothingOnceItsBoundHasEnded(t *testing.T
 		t.Fatalf("the dump sent %v to the management cluster after its bound", got)
 	}
 }
+
+type request struct{ path, timeout string }
+
+func requestsOfTheDump(t *testing.T) []request {
+	t.Helper()
+	shortenTheDumpRequests(t, 7*time.Second)
+	useDocker(t, fakeDocker)
+	healthy := managementHandler(t)
+	var (
+		mu    sync.Mutex
+		asked []request
+	)
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		asked = append(asked, request{r.URL.Path, r.URL.Query().Get("timeout")})
+		mu.Unlock()
+		healthy.ServeHTTP(w, r)
+	}))
+	t.Cleanup(server.Close)
+	_ = dumpCluster(t.Context(), configFor(t, server.URL), t.TempDir())
+	mu.Lock()
+	defer mu.Unlock()
+	return slices.Clone(asked)
+}
+
+func requireRequestTimeout(t *testing.T, requests []request, suffix string) {
+	t.Helper()
+	var n int
+	for _, r := range requests {
+		if !strings.HasSuffix(r.path, suffix) {
+			continue
+		}
+		n++
+		if want := dumpRequestTimeout.String(); r.timeout != want {
+			t.Errorf("%s was sent with the timeout %q, want %q", r.path, r.timeout, want)
+		}
+	}
+	if n == 0 {
+		t.Errorf("the dump sent no request to a path ending in %s: %v", suffix, requests)
+	}
+}
+
+func TestTheDumpGivesTheLogsOfTheManagersTheRequestTimeout(t *testing.T) {
+	requireRequestTimeout(t, requestsOfTheDump(t), "/log")
+}
