@@ -194,6 +194,29 @@ func TestReadyIsMirroredOnlyAtTheCurrentGeneration(t *testing.T) {
 	}
 }
 
+func TestTheVersionIsLodiasAndFollowsItPastTheFirstCopy(t *testing.T) {
+	_, lcp, cp, r, _ := readyControlPlane(t, "lambda-version")
+	reported := func(version string) {
+		t.Helper()
+		passes(t, r, lcp)
+		get(t, lcp)
+		if lcp.Status.Version != version || len(lcp.Status.Versions) != 1 || lcp.Status.Versions[0].Version != version {
+			t.Errorf("version %q, versions %+v, want %s", lcp.Status.Version, lcp.Status.Versions, version)
+		}
+	}
+	reported("v1.35.8")
+
+	updateSpec(t, lcp, func(l *v1alpha1.LodiaControlPlane) { l.Spec.Version = "v1.35.9" })
+	reported("v1.35.8")
+
+	get(t, cp)
+	cp.Status.Kubernetes.Version = "v1.35.9"
+	if err := k8s.Status().Update(t.Context(), cp); err != nil {
+		t.Fatal(err)
+	}
+	reported("v1.35.9")
+}
+
 func TestARefusedChangeStillCopiesAndReports(t *testing.T) {
 	cluster, lcp, cp, r, _ := readyControlPlane(t, "mu")
 
