@@ -7,11 +7,13 @@
 //   - every object has the label cluster.x-k8s.io/provider;
 //   - a Deployment has a container named manager;
 //   - a RoleBinding in the manager's namespace gives the manager's
-//     ServiceAccount a Role that grants create, get and update on leases.
+//     ServiceAccount a Role that grants create, get and update on leases;
+//   - a ClusterRoleBinding gives the manager's ServiceAccount a ClusterRole
+//     that the render holds.
 //
 // The first three are rules of what clusterctl asks of a components YAML
 // (https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/docs/book/src/developer/providers/contracts/clusterctl.md#components-yaml);
-// the last is what the manager's leader election needs.
+// the last two are what the manager needs to run.
 package main
 
 import (
@@ -106,14 +108,14 @@ func check(r io.Reader) error {
 		errs = append(errs, errors.New("config/default renders no Deployment with a container named manager, which clusterctl looks for"))
 	}
 	for _, manager := range managers {
-		errs = append(errs, requireLeaderElection(objs, manager))
+		errs = append(errs, requireLeaderElection(objs, manager), requireClusterRole(objs, manager))
 	}
 	return errors.Join(errs...)
 }
 
 func requireLeaderElection(objs []*unstructured.Unstructured, manager *unstructured.Unstructured) error {
 	ns := manager.GetNamespace()
-	account, _, _ := unstructured.NestedString(manager.Object, "spec", "template", "spec", "serviceAccountName")
+	account := serviceAccount(manager)
 	roles := make(map[string]rbacv1.Role)
 	var bindings []rbacv1.RoleBinding
 	for _, obj := range objs {
@@ -139,13 +141,47 @@ func requireLeaderElection(objs []*unstructured.Unstructured, manager *unstructu
 		if binding.RoleRef.Kind != "Role" || !grantsLeases(roles[binding.RoleRef.Name].Rules) {
 			continue
 		}
-		if slices.ContainsFunc(binding.Subjects, func(s rbacv1.Subject) bool {
-			return s.Kind == rbacv1.ServiceAccountKind && s.Name == account && s.Namespace == ns
-		}) {
+		if boundTo(binding.Subjects, account, ns) {
 			return nil
 		}
 	}
 	return fmt.Errorf("the ServiceAccount %q of Deployment %s has no RoleBinding in %s to a Role that grants create, get and update on leases: the manager could not take its leader election Lease", account, manager.GetName(), ns)
+}
+
+func requireClusterRole(objs []*unstructured.Unstructured, manager *unstructured.Unstructured) error {
+	ns := manager.GetNamespace()
+	account := serviceAccount(manager)
+	var roles []string
+	var bindings []rbacv1.ClusterRoleBinding
+	for _, obj := range objs {
+		switch obj.GetKind() {
+		case "ClusterRole":
+			roles = append(roles, obj.GetName())
+		case "ClusterRoleBinding":
+			var binding rbacv1.ClusterRoleBinding
+			if err := runtime.DefaultUnstructuredConverter.FromUnstructured(obj.Object, &binding); err != nil {
+				return fmt.Errorf("decode ClusterRoleBinding %s: %w", obj.GetName(), err)
+			}
+			bindings = append(bindings, binding)
+		}
+	}
+	for _, binding := range bindings {
+		if binding.RoleRef.Kind == "ClusterRole" && slices.Contains(roles, binding.RoleRef.Name) && boundTo(binding.Subjects, account, ns) {
+			return nil
+		}
+	}
+	return fmt.Errorf("the ServiceAccount %q of Deployment %s has no ClusterRoleBinding to a ClusterRole that config/default renders: the manager could not read a Cluster or a LodiaControlPlane", account, manager.GetName())
+}
+
+func serviceAccount(manager *unstructured.Unstructured) string {
+	account, _, _ := unstructured.NestedString(manager.Object, "spec", "template", "spec", "serviceAccountName")
+	return account
+}
+
+func boundTo(subjects []rbacv1.Subject, account, ns string) bool {
+	return slices.ContainsFunc(subjects, func(s rbacv1.Subject) bool {
+		return s.Kind == rbacv1.ServiceAccountKind && s.Name == account && s.Namespace == ns
+	})
 }
 
 func grantsLeases(rules []rbacv1.PolicyRule) bool {

@@ -25,7 +25,7 @@ Every other tool runs through `go tool` or `go run`; `make e2e` also needs what 
 | command | does |
 |---|---|
 | `make generate` | deepcopy functions, the CRDs in `config/crd/bases` and the controller's ClusterRole in `config/rbac/role.yaml`; commit the result |
-| `make verify` | the check that says a change is done: generated files current, modules tidy, `config/default` rendered and checked for one Namespace holding every namespaced object, the provider label on every object, a `manager` container and the manager's leader election grant, lint, unit and envtest tests |
+| `make verify` | the check that says a change is done: generated files current, modules tidy, `config/default` rendered and checked for one Namespace holding every namespaced object, the provider label on every object, a `manager` container, the manager's leader election grant and ClusterRoleBinding, lint, unit and envtest tests |
 | `make e2e` | the [end-to-end suite](test/e2e/README.md) on a kind cluster of its own; CI runs it |
 
 The envtest suite starts its own API server and etcd; nothing in it reads a kubeconfig.

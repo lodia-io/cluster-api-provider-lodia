@@ -18,6 +18,10 @@ const (
 	binding    = "apiVersion: rbac.authorization.k8s.io/v1\nkind: RoleBinding\nmetadata:\n  name: b\n  namespace: ns\n  labels:\n" + label +
 		"roleRef:\n  apiGroup: rbac.authorization.k8s.io\n  kind: Role\n  name: r\nsubjects:\n- kind: ServiceAccount\n  name: manager\n  namespace: ns\n"
 
+	clusterRole    = "apiVersion: rbac.authorization.k8s.io/v1\nkind: ClusterRole\nmetadata:\n  name: cr\n  labels:\n" + label + "rules: []\n"
+	clusterBinding = "apiVersion: rbac.authorization.k8s.io/v1\nkind: ClusterRoleBinding\nmetadata:\n  name: cb\n  labels:\n" + label +
+		"roleRef:\n  apiGroup: rbac.authorization.k8s.io\n  kind: ClusterRole\n  name: cr\nsubjects:\n- kind: ServiceAccount\n  name: manager\n  namespace: ns\n"
+
 	leases       = "- apiGroups: [coordination.k8s.io]\n  resources: [leases]\n  verbs: [create, get, update]\n"
 	scopedLeases = "- apiGroups: [coordination.k8s.io]\n  resources: [leases]\n  verbs: [create]\n- apiGroups: [coordination.k8s.io]\n  resources: [leases]\n  resourceNames: [x]\n  verbs: [get, update]\n"
 	everything   = "- apiGroups: ['*']\n  resources: ['*']\n  verbs: ['*']\n"
@@ -31,12 +35,12 @@ func manifest(docs ...string) string {
 
 func TestTheRenderedManifestsMeetClusterctl(t *testing.T) {
 	grant := role + leases
-	ok := manifest(namespace, crd, deployment, grant, binding)
+	ok := manifest(namespace, crd, deployment, grant, binding, clusterRole, clusterBinding)
 	cases := []struct {
 		name, manifest, want string
 	}{
 		{"a namespace, a manager and labels", ok, ""},
-		{"comments and empty documents between", "# top\n---\n" + namespace + "---\n---\n# nothing\n---\n" + manifest(deployment, grant, binding), ""},
+		{"comments and empty documents between", "# top\n---\n" + namespace + "---\n---\n# nothing\n---\n" + manifest(deployment, grant, binding, clusterRole, clusterBinding), ""},
 		{"no namespace", manifest(crd, deployment, grant, binding), "renders 0 Namespaces"},
 		{"two namespaces", manifest(namespace, strings.Replace(namespace, "name: ns", "name: other", 1), deployment, grant, binding), "renders 2 Namespaces"},
 		{"a container of another name", manifest(namespace, strings.Replace(deployment, "name: manager", "name: controller", 1)), "no Deployment with a container named manager"},
@@ -75,9 +79,19 @@ func TestTheRenderedManifestsMeetClusterctl(t *testing.T) {
 		{"a Role that cannot create", manifest(namespace, deployment, role+strings.Replace(leases, "create, ", "", 1), binding), "has no RoleBinding in ns to a Role that grants"},
 		{"a Role that cannot get", manifest(namespace, deployment, role+strings.Replace(leases, "get, ", "", 1), binding), "has no RoleBinding in ns to a Role that grants"},
 		{"a Role that cannot update", manifest(namespace, deployment, role+strings.Replace(leases, ", update", "", 1), binding), "has no RoleBinding in ns to a Role that grants"},
-		{"the grant in two rules", manifest(namespace, deployment, role+scopedLeases, binding), ""},
-		{"the grant by wildcards", manifest(namespace, deployment, role+everything, binding), ""},
-		{"the grant beside other rules", manifest(namespace, deployment, role+events+leases, binding), ""},
+		{"the grant in two rules", manifest(namespace, deployment, role+scopedLeases, binding, clusterRole, clusterBinding), ""},
+		{"the grant by wildcards", manifest(namespace, deployment, role+everything, binding, clusterRole, clusterBinding), ""},
+		{"the grant beside other rules", manifest(namespace, deployment, role+events+leases, binding, clusterRole, clusterBinding), ""},
+		{"no ClusterRoleBinding", manifest(namespace, deployment, grant, binding, clusterRole), "has no ClusterRoleBinding"},
+		{"a ClusterRoleBinding to a ClusterRole that is not rendered", manifest(namespace, deployment, grant, binding, clusterRole, strings.Replace(clusterBinding, "  name: cr\nsubjects", "  name: manager\nsubjects", 1)), "has no ClusterRoleBinding"},
+		{"a ClusterRoleBinding to a ClusterRole named like a Role", manifest(namespace, deployment, grant, binding, strings.Replace(clusterBinding, "  name: cr\nsubjects", "  name: r\nsubjects", 1)), "has no ClusterRoleBinding"},
+		{"a ClusterRoleBinding to a Role", manifest(namespace, deployment, grant, binding, clusterRole, strings.Replace(clusterBinding, "kind: ClusterRole\n", "kind: Role\n", 1)), "has no ClusterRoleBinding"},
+		{"a ClusterRoleBinding subject that is not the Deployment's ServiceAccount", manifest(namespace, deployment, grant, binding, clusterRole, strings.Replace(clusterBinding, "name: manager\n  namespace: ns", "name: other\n  namespace: ns", 1)), `the ServiceAccount "manager" of Deployment d has no ClusterRoleBinding`},
+		{"a ClusterRoleBinding subject in another namespace", manifest(namespace, deployment, grant, binding, clusterRole, strings.Replace(clusterBinding, "name: manager\n  namespace: ns", "name: manager\n  namespace: other", 1)), "has no ClusterRoleBinding"},
+		{"a ClusterRoleBinding subject that is not a ServiceAccount", manifest(namespace, deployment, grant, binding, clusterRole, strings.Replace(clusterBinding, "- kind: ServiceAccount", "- kind: User", 1)), "has no ClusterRoleBinding"},
+		{"a ClusterRoleBinding that cannot be read", manifest(namespace, deployment, grant, binding, clusterRole, strings.Replace(clusterBinding, "roleRef:\n  apiGroup: rbac.authorization.k8s.io\n  kind: ClusterRole\n  name: cr\n", "roleRef: x\n", 1)), "decode ClusterRoleBinding cb"},
+		{"another ServiceAccount's ClusterRoleBinding before the manager's", manifest(namespace, deployment, grant, binding, clusterRole, strings.Replace(strings.Replace(clusterBinding, "name: cb\n", "name: other\n", 1), "name: manager\n", "name: other\n", 1), clusterBinding), ""},
+		{"a second manager without a ClusterRoleBinding", manifest(ok, strings.Replace(strings.Replace(deployment, "name: d\n", "name: e\n", 1), "serviceAccountName: manager", "serviceAccountName: other", 1), strings.Replace(binding, "name: manager\n", "name: other\n", 1)), `the ServiceAccount "other" of Deployment e has no ClusterRoleBinding`},
 		{"a second manager without a grant", manifest(namespace, deployment, strings.Replace(strings.Replace(deployment, "name: d\n", "name: e\n", 1), "serviceAccountName: manager", "serviceAccountName: other", 1), grant, binding), `the ServiceAccount "other" of Deployment e has no RoleBinding`},
 	}...)
 	for _, c := range cases {
