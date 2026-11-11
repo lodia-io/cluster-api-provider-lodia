@@ -17,5 +17,12 @@ rules:
   - leases
   verbs:
   - create
+- apiGroups:
+  - coordination.k8s.io
+  resourceNames:
+  - controlplane.lodia.io
+  resources:
+  - leases
+  verbs:
   - get
   - update

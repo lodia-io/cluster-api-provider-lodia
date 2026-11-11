@@ -112,11 +112,11 @@ func TestTheRoleCoversLeaderElectionAndTheMetricsFilter(t *testing.T) {
 func TestLeasesAndEventsAreGrantedOnlyInTheLeaderElectionNamespace(t *testing.T) {
 	ns := namespace(t)
 	boundToTheLeaderElectionRole(t, ns)
-	allowed := func(namespace, group, resource, verb string) bool {
+	allowed := func(namespace, group, resource, name, verb string) bool {
 		review := &authorizationv1.SubjectAccessReview{Spec: authorizationv1.SubjectAccessReviewSpec{
 			User: asController.Impersonate.UserName,
 			ResourceAttributes: &authorizationv1.ResourceAttributes{
-				Namespace: namespace, Group: group, Resource: resource, Verb: verb,
+				Namespace: namespace, Group: group, Resource: resource, Name: name, Verb: verb,
 			},
 		}}
 		if err := k8s.Create(t.Context(), review); err != nil {
@@ -124,23 +124,28 @@ func TestLeasesAndEventsAreGrantedOnlyInTheLeaderElectionNamespace(t *testing.T)
 		}
 		return review.Status.Allowed
 	}
-	for _, c := range []struct{ group, resource, verb string }{
-		{coordinationv1.GroupName, "leases", "create"},
-		{coordinationv1.GroupName, "leases", "get"},
-		{coordinationv1.GroupName, "leases", "update"},
-		{corev1.GroupName, "events", "create"},
-		{corev1.GroupName, "events", "patch"},
+	for _, c := range []struct{ group, resource, name, verb string }{
+		{coordinationv1.GroupName, "leases", "", "create"},
+		{coordinationv1.GroupName, "leases", "controlplane.lodia.io", "get"},
+		{coordinationv1.GroupName, "leases", "controlplane.lodia.io", "update"},
+		{corev1.GroupName, "events", "", "create"},
+		{corev1.GroupName, "events", "", "patch"},
 	} {
 		eventually(t, func() error {
-			if !allowed(ns, c.group, c.resource, c.verb) {
+			if !allowed(ns, c.group, c.resource, c.name, c.verb) {
 				return fmt.Errorf("%s %s is not allowed in %s", c.verb, c.resource, ns)
 			}
 			return nil
 		})
 		for _, other := range []string{metav1.NamespaceSystem, corev1.NamespaceNodeLease} {
-			if allowed(other, c.group, c.resource, c.verb) {
+			if allowed(other, c.group, c.resource, c.name, c.verb) {
 				t.Errorf("%s %s is allowed in %s", c.verb, c.resource, other)
 			}
+		}
+	}
+	for _, verb := range []string{"get", "update", "patch", "delete"} {
+		if allowed(ns, coordinationv1.GroupName, "leases", "controller-leader-election-capi", verb) {
+			t.Errorf("%s of another controller's Lease is allowed in %s", verb, ns)
 		}
 	}
 }
