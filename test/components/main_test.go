@@ -23,7 +23,8 @@ const (
 		"roleRef:\n  apiGroup: rbac.authorization.k8s.io\n  kind: ClusterRole\n  name: cr\nsubjects:\n- kind: ServiceAccount\n  name: manager\n  namespace: ns\n"
 
 	leases       = "- apiGroups: [coordination.k8s.io]\n  resources: [leases]\n  verbs: [create, get, update]\n"
-	scopedLeases = "- apiGroups: [coordination.k8s.io]\n  resources: [leases]\n  verbs: [create]\n- apiGroups: [coordination.k8s.io]\n  resources: [leases]\n  resourceNames: [x]\n  verbs: [get, update]\n"
+	createLeases = "- apiGroups: [coordination.k8s.io]\n  resources: [leases]\n  verbs: [create]\n"
+	named        = "- apiGroups: [coordination.k8s.io]\n  resources: [leases]\n  resourceNames: [%s]\n  verbs: [%s]\n"
 	everything   = "- apiGroups: ['*']\n  resources: ['*']\n  verbs: ['*']\n"
 	events       = "- apiGroups: ['']\n  resources: [events]\n  verbs: [create, patch]\n"
 	anyKind      = "apiVersion: v1\nkind: %s\nmetadata:\n  name: obj\n  labels:\n" + label
@@ -79,9 +80,16 @@ func TestTheRenderedManifestsMeetClusterctl(t *testing.T) {
 		{"a Role that cannot create", manifest(namespace, deployment, role+strings.Replace(leases, "create, ", "", 1), binding), "has no RoleBinding in ns to a Role that grants"},
 		{"a Role that cannot get", manifest(namespace, deployment, role+strings.Replace(leases, "get, ", "", 1), binding), "has no RoleBinding in ns to a Role that grants"},
 		{"a Role that cannot update", manifest(namespace, deployment, role+strings.Replace(leases, ", update", "", 1), binding), "has no RoleBinding in ns to a Role that grants"},
-		{"the grant in two rules", manifest(namespace, deployment, role+scopedLeases, binding, clusterRole, clusterBinding), ""},
+		{"the grant in two rules", manifest(namespace, deployment, role+createLeases+fmt.Sprintf(named, "controlplane.lodia.io", "get, update"), binding, clusterRole, clusterBinding), ""},
 		{"the grant by wildcards", manifest(namespace, deployment, role+everything, binding, clusterRole, clusterBinding), ""},
 		{"the grant beside other rules", manifest(namespace, deployment, role+events+leases, binding, clusterRole, clusterBinding), ""},
+		{"get and update among several names", manifest(namespace, deployment, role+createLeases+fmt.Sprintf(named, "x, controlplane.lodia.io", "get, update"), binding, clusterRole, clusterBinding), ""},
+		{"get and update on a Lease of another name", manifest(namespace, deployment, role+createLeases+fmt.Sprintf(named, "x", "get, update"), binding, clusterRole, clusterBinding), "has no RoleBinding in ns to a Role that grants"},
+		{"get and update on the Leases of two names, not the manager's", manifest(namespace, deployment, role+createLeases+fmt.Sprintf(named, "x, z", "get, update"), binding, clusterRole, clusterBinding), "has no RoleBinding in ns to a Role that grants"},
+		{"get on the manager's Lease and update on another", manifest(namespace, deployment, role+createLeases+fmt.Sprintf(named, "controlplane.lodia.io", "get")+fmt.Sprintf(named, "x", "update"), binding, clusterRole, clusterBinding), "has no RoleBinding in ns to a Role that grants"},
+		{"create on the manager's Lease", manifest(namespace, deployment, role+fmt.Sprintf(named, "controlplane.lodia.io", "create, get, update"), binding, clusterRole, clusterBinding), "has no RoleBinding in ns to a Role that grants"},
+		{"every verb on the manager's Lease", manifest(namespace, deployment, role+fmt.Sprintf(named, "controlplane.lodia.io", "'*'"), binding, clusterRole, clusterBinding), "has no RoleBinding in ns to a Role that grants"},
+		{"every verb on the manager's Lease and create on any", manifest(namespace, deployment, role+createLeases+fmt.Sprintf(named, "controlplane.lodia.io", "'*'"), binding, clusterRole, clusterBinding), ""},
 		{"no ClusterRoleBinding", manifest(namespace, deployment, grant, binding, clusterRole), "has no ClusterRoleBinding"},
 		{"a ClusterRoleBinding to a ClusterRole that is not rendered", manifest(namespace, deployment, grant, binding, clusterRole, strings.Replace(clusterBinding, "  name: cr\nsubjects", "  name: manager\nsubjects", 1)), "has no ClusterRoleBinding"},
 		{"a ClusterRoleBinding to a ClusterRole named like a Role", manifest(namespace, deployment, grant, binding, strings.Replace(clusterBinding, "  name: cr\nsubjects", "  name: r\nsubjects", 1)), "has no ClusterRoleBinding"},

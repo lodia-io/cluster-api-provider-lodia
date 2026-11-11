@@ -7,7 +7,8 @@
 //   - every object has the label cluster.x-k8s.io/provider;
 //   - a Deployment has a container named manager;
 //   - a RoleBinding in the manager's namespace gives the manager's
-//     ServiceAccount a Role that grants create, get and update on leases;
+//     ServiceAccount a Role that grants create on leases, and get and update
+//     on the Lease that the manager's LeaderElectionID names;
 //   - a ClusterRoleBinding gives the manager's ServiceAccount a ClusterRole
 //     that the render holds.
 //
@@ -27,6 +28,8 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilyaml "k8s.io/apimachinery/pkg/util/yaml"
+
+	"go.lodia.io/cluster-api-provider-lodia/internal/controller"
 )
 
 const providerLabel = "cluster.x-k8s.io/provider"
@@ -61,6 +64,10 @@ func main() {
 }
 
 func check(r io.Reader) error {
+	options, err := controller.ManagerOptions("0", "0", true)
+	if err != nil {
+		return err
+	}
 	var objs []*unstructured.Unstructured
 	decoder := utilyaml.NewYAMLOrJSONDecoder(r, 4096)
 	for {
@@ -108,12 +115,12 @@ func check(r io.Reader) error {
 		errs = append(errs, errors.New("config/default renders no Deployment with a container named manager, which clusterctl looks for"))
 	}
 	for _, manager := range managers {
-		errs = append(errs, requireLeaderElection(objs, manager), requireClusterRole(objs, manager))
+		errs = append(errs, requireLeaderElection(objs, manager, options.LeaderElectionID), requireClusterRole(objs, manager))
 	}
 	return errors.Join(errs...)
 }
 
-func requireLeaderElection(objs []*unstructured.Unstructured, manager *unstructured.Unstructured) error {
+func requireLeaderElection(objs []*unstructured.Unstructured, manager *unstructured.Unstructured, lease string) error {
 	ns := manager.GetNamespace()
 	account := serviceAccount(manager)
 	roles := make(map[string]rbacv1.Role)
@@ -138,14 +145,14 @@ func requireLeaderElection(objs []*unstructured.Unstructured, manager *unstructu
 		}
 	}
 	for _, binding := range bindings {
-		if binding.RoleRef.Kind != "Role" || !grantsLeases(roles[binding.RoleRef.Name].Rules) {
+		if binding.RoleRef.Kind != "Role" || !grantsLeases(roles[binding.RoleRef.Name].Rules, lease) {
 			continue
 		}
 		if boundTo(binding.Subjects, account, ns) {
 			return nil
 		}
 	}
-	return fmt.Errorf("the ServiceAccount %q of Deployment %s has no RoleBinding in %s to a Role that grants create, get and update on leases: the manager could not take its leader election Lease", account, manager.GetName(), ns)
+	return fmt.Errorf("the ServiceAccount %q of Deployment %s has no RoleBinding in %s to a Role that grants create on leases, and get and update on the Lease %s: the manager could not take its leader election Lease", account, manager.GetName(), ns, lease)
 }
 
 func requireClusterRole(objs []*unstructured.Unstructured, manager *unstructured.Unstructured) error {
@@ -184,21 +191,25 @@ func boundTo(subjects []rbacv1.Subject, account, ns string) bool {
 	})
 }
 
-func grantsLeases(rules []rbacv1.PolicyRule) bool {
-	granted := make(map[string]bool)
-	for _, rule := range rules {
-		if covers(rule.APIGroups, "coordination.k8s.io") && covers(rule.Resources, "leases") {
-			for _, verb := range rule.Verbs {
-				granted[verb] = true
-			}
-		}
-	}
+func grantsLeases(rules []rbacv1.PolicyRule, lease string) bool {
 	for _, verb := range []string{"create", "get", "update"} {
-		if !granted[verb] && !granted[rbacv1.VerbAll] {
+		if !slices.ContainsFunc(rules, func(rule rbacv1.PolicyRule) bool { return grants(rule, verb, lease) }) {
 			return false
 		}
 	}
 	return true
+}
+
+// A create request has no name yet to match, so a rule with resourceNames
+// grants none.
+func grants(rule rbacv1.PolicyRule, verb, lease string) bool {
+	if !covers(rule.APIGroups, "coordination.k8s.io") || !covers(rule.Resources, "leases") || !covers(rule.Verbs, verb) {
+		return false
+	}
+	if verb == "create" {
+		return len(rule.ResourceNames) == 0
+	}
+	return len(rule.ResourceNames) == 0 || slices.Contains(rule.ResourceNames, lease)
 }
 
 func covers(list []string, name string) bool {
