@@ -174,6 +174,21 @@ func TestEveryOptionalFieldReachesTheControlPlane(t *testing.T) {
 	}
 }
 
+func TestTheProviderLeavesLodiasBreakGlassPauseAlone(t *testing.T) {
+	_, lcp, cp, r, _ := readyControlPlane(t, "break-glass")
+	before := cp.DeepCopy()
+	cp.Spec.Paused = true
+	if err := k8s.Patch(t.Context(), cp, client.MergeFrom(before), client.FieldOwner("operator")); err != nil {
+		t.Fatal(err)
+	}
+
+	passes(t, r, lcp)
+	get(t, cp)
+	if !cp.Spec.Paused {
+		t.Error("the provider reverted spec.paused, which only an operator sets")
+	}
+}
+
 func TestAnEditOfAFieldTheProviderOwnsIsReverted(t *testing.T) {
 	_, lcp, cp, r, _ := readyControlPlane(t, "edited")
 	before := cp.DeepCopy()

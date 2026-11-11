@@ -71,6 +71,15 @@ func TestTheSpecPassesLodiasSchemaThrough(t *testing.T) {
 	}
 }
 
+func TestTheSpecHasNeitherTheNetworkNorLodiasPause(t *testing.T) {
+	ours := specOf(crd(t, bases, "controlplane.lodia.io_lodiacontrolplanes.yaml"))
+	for _, name := range []string{"network", "paused"} {
+		if _, ok := ours.Properties[name]; ok {
+			t.Errorf("spec.%s is in the CRD: the network comes from the Cluster, and Lodia's pause stays an operator's break-glass switch", name)
+		}
+	}
+}
+
 func TestTheCRDsCarryTheContractLabel(t *testing.T) {
 	files, err := fs.Glob(bases, "*.yaml")
 	if err != nil || len(files) != 2 {
