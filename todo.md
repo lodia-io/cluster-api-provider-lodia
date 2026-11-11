@@ -3,6 +3,8 @@
 - Move `sigs.k8s.io/cluster-api` and `sigs.k8s.io/cluster-api/api` from `v1.15.0-beta.0` to v1.15.0 when it is released, planned for 2026-12-08 ([release plan](https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/docs/release/releases/release-1.15.md?plain=1#L24)), re-pin the links in `README.md`, `docs/design.md` and `test/e2e/README.md`, and move the releases in `test/e2e/install_test.go` as `test/e2e/README.md` says.
   Check the range of releases that read the control plane on every join, stated in `README.md` and `docs/design.md`, against the code at the new pin.
 - With the release artifacts: the manager's `--namespace` flag, a MUST for clusterctl, and `--watch-filter`, a MUST for several instances of a provider.
+- Compare `.golangci.yml` with Lodia's copy at `LODIA_COMMIT` in `verify` and fail on any difference, once Lodia's file is the canonical one again.
+  Lodia's copy still differs by an exclusion of gosec for `internal/testenv/`, which [Lodia's todo](https://github.com/lodia-io/lodia/blob/05c47ab109528a829134b4bc451a894c9aa6f60c/todo.md?plain=1#L228-L229) moves to `//nolint:gosec` at its sites, and by the first lines of its header, which the provider words for itself.
 - Publish the manager's image and the manifests of `config/default` with a release.
 - Ship the kubeadm bootstrap provider's access to `LodiaControlPlane`s (`config/rbac/kubeadm_bootstrap_role.yaml`, `config/rbac/kubeadm_bootstrap_role_binding.yaml` and their lines in `config/rbac/kustomization.yaml`) outside the components YAML of the release artifacts.
   The access stays: [`docs/design.md`](docs/design.md#what-the-provider-writes) says why the provider needs it.
