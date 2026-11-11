@@ -12,12 +12,16 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/tools/clientcmd"
+	"sigs.k8s.io/cluster-api/util/secret"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/e2e-framework/pkg/envconf"
 	"sigs.k8s.io/yaml"
@@ -40,7 +44,22 @@ var (
 	}
 	datastoreClass = schema.GroupVersionKind{Group: "lodia.io", Version: "v1alpha1", Kind: "DatastoreClass"}
 	managers       = []string{"cert-manager", "capi-system", "capi-kubeadm-bootstrap-system", "capd-system", providerNamespace, lodiaNamespace, namespace}
+	podKind        = corev1.SchemeGroupVersion.WithKind("Pod")
+	eventKind      = corev1.SchemeGroupVersion.WithKind("Event")
+	tenantObjects  = []struct {
+		kind      schema.GroupVersionKind
+		namespace string
+	}{
+		{corev1.SchemeGroupVersion.WithKind("Node"), ""},
+		{podKind, metav1.NamespaceSystem},
+		{podKind, metav1.NamespaceDefault},
+		{appsv1.SchemeGroupVersion.WithKind("DaemonSet"), metav1.NamespaceSystem},
+		{eventKind, metav1.NamespaceSystem},
+		{eventKind, metav1.NamespaceDefault},
+	}
 )
+
+const tenantDumpBound = 30 * time.Second
 
 func dump(ctx context.Context, cfg *envconf.Config) {
 	ctx, cancel := context.WithTimeout(ctx, bounds.Dump)
@@ -57,9 +76,9 @@ func dump(ctx context.Context, cfg *envconf.Config) {
 	}
 	errs = append(errs, dumpObjects(ctx, c, dir, datastoreClass, ""))
 	for _, ns := range managers {
-		errs = append(errs, dumpObjects(ctx, c, dir, corev1.SchemeGroupVersion.WithKind("Pod"), ns), dumpLogs(ctx, cfg, dir, ns))
+		errs = append(errs, dumpObjects(ctx, c, dir, podKind, ns), dumpObjects(ctx, c, dir, eventKind, ns), dumpLogs(ctx, cfg, dir, ns))
 	}
-	errs = append(errs, dumpWorkers(ctx, cfg, dir))
+	errs = append(errs, dumpTenant(ctx, cfg, c, dir), dumpWorkers(ctx, cfg, dir))
 	if err := errors.Join(errs...); err != nil {
 		fmt.Fprintln(os.Stderr, "dump:", err)
 	}
@@ -110,6 +129,32 @@ func dumpLogs(ctx context.Context, cfg *envconf.Config, dir, ns string) error {
 				errs = append(errs, write(filepath.Join(dir, "logs", ns, name+".log"), logs))
 			}
 		}
+	}
+	return errors.Join(errs...)
+}
+
+func dumpTenant(ctx context.Context, cfg *envconf.Config, c client.Client, dir string) error {
+	ctx, cancel := context.WithTimeout(ctx, tenantDumpBound)
+	defer cancel()
+	cluster, err := clusterName(cfg)
+	if err != nil {
+		return err
+	}
+	kubeconfig := &corev1.Secret{}
+	if err := c.Get(ctx, client.ObjectKey{Namespace: namespace, Name: secret.Name(cluster, secret.Kubeconfig)}, kubeconfig); err != nil {
+		return client.IgnoreNotFound(err)
+	}
+	restCfg, err := clientcmd.RESTConfigFromKubeConfig(kubeconfig.Data[secret.KubeconfigDataName])
+	if err != nil {
+		return err
+	}
+	tenant, err := client.New(restCfg, client.Options{})
+	if err != nil {
+		return err
+	}
+	var errs []error
+	for _, o := range tenantObjects {
+		errs = append(errs, dumpObjects(ctx, tenant, filepath.Join(dir, "tenant"), o.kind, o.namespace))
 	}
 	return errors.Join(errs...)
 }
