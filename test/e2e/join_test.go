@@ -26,14 +26,11 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/kubernetes"
-	"k8s.io/client-go/rest"
-	"k8s.io/client-go/tools/clientcmd"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	"sigs.k8s.io/cluster-api/cmd/clusterctl/client/yamlprocessor"
 	"sigs.k8s.io/cluster-api/util/secret"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/e2e-framework/klient/decoder"
-	"sigs.k8s.io/e2e-framework/klient/k8s/resources"
 	"sigs.k8s.io/e2e-framework/pkg/envconf"
 	"sigs.k8s.io/e2e-framework/pkg/features"
 
@@ -41,7 +38,10 @@ import (
 	"go.lodia.io/cluster-api-provider-lodia/internal/controller"
 )
 
-const agnhost = "registry.k8s.io/e2e-test-images/agnhost:2.66.1@sha256:6e2eef87d0dc77e070a7549bc5fdfa290c0fefe3359eb33c2ad1eda692fe66a4"
+const (
+	agnhost              = "registry.k8s.io/e2e-test-images/agnhost:2.66.1@sha256:6e2eef87d0dc77e070a7549bc5fdfa290c0fefe3359eb33c2ad1eda692fe66a4"
+	tenantRequestTimeout = 30 * time.Second
+)
 
 func TestAWorkerJoinsAClusterOfLodiasControlPlane(t *testing.T) {
 	var (
@@ -127,7 +127,7 @@ func TestAWorkerJoinsAClusterOfLodiasControlPlane(t *testing.T) {
 			return ctx
 		}).
 		Assess("kindnet, from the management node's own manifest, is applied in the tenant", func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
-			tenant = openTenant(ctx, t, k8s, key)
+			tenant = openTenant(ctx, t, k8s, key, tenantRequestTimeout)
 			cluster := &clusterv1.Cluster{}
 			if err := k8s.Get(ctx, key, cluster); err != nil {
 				t.Fatal(err)
@@ -344,34 +344,6 @@ func render(file, cluster string) ([]byte, error) {
 		}
 		return cluster, nil
 	})
-}
-
-type tenantAccess struct {
-	cfg       *rest.Config
-	client    client.Client
-	resources *resources.Resources
-}
-
-func openTenant(ctx context.Context, t *testing.T, k8s client.Client, key client.ObjectKey) *tenantAccess {
-	t.Helper()
-	kubeconfig := &corev1.Secret{}
-	if err := k8s.Get(ctx, client.ObjectKey{Namespace: key.Namespace, Name: secret.Name(key.Name, secret.Kubeconfig)}, kubeconfig); err != nil {
-		t.Fatal(err)
-	}
-	cfg, err := clientcmd.RESTConfigFromKubeConfig(kubeconfig.Data[secret.KubeconfigDataName])
-	if err != nil {
-		t.Fatal(err)
-	}
-	c, err := client.New(cfg, client.Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	r, err := resources.New(cfg)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Logf("the tenant's API server %s is reached through %s", cfg.Host, kubeconfig.Name)
-	return &tenantAccess{cfg: cfg, client: c, resources: r}
 }
 
 func until(ctx context.Context, t *testing.T, timeout time.Duration, what string, check func(context.Context) error) {

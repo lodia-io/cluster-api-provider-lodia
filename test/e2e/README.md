@@ -62,5 +62,6 @@ The suite writes to `work/e2e/<E2E_CLUSTER>/artifacts`, and CI uploads it: the o
 `make e2e` empties the directory before it starts.
 A cancelled job and a `go test` timeout leave no artifacts, since the test binary writes them and neither lets it finish.
 The bounds in [`bounds_test.go`](bounds_test.go), the install's and the dump's among them, add up to less than `-timeout`, and `-timeout` to less than the job's `timeout-minutes`, so that a step's own bound fails first; `TestTheBoundsFitUnderTheTimeouts` fails when they do not.
+A request to the tenant has a timeout of its own, 30 seconds in the steps and a sixth of the dump's 30 seconds for the tenant in the dump, since controller-runtime's REST mapper [discovers](https://github.com/kubernetes-sigs/controller-runtime/blob/v0.25.2/pkg/client/apiutil/restmapper.go#L285) without the request's context, and a tenant that does not answer would hold a step or the dump past its bound.
 Go kills a test binary one minute after its `-timeout`, counted from its start, while its own alarm counts from the end of the install.
 CAPD does not retry a failed bootstrap; the output of `kubeadm join` is in the `BootstrapCompleted` condition of the `DevMachine`.

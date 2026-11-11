@@ -35,6 +35,8 @@ func TestMain(m *testing.M) {
 	os.Exit(testenv.Run(m))
 }
 
+const tenantDumpBound = 30 * time.Second
+
 func workDir(cfg *envconf.Config) string {
 	return filepath.Dir(cfg.KubeconfigFile())
 }
@@ -47,7 +49,7 @@ func dump(ctx context.Context, cfg *envconf.Config) {
 		fmt.Fprintln(os.Stderr, "dump:", err)
 		return
 	}
-	if err := dumpAll(ctx, cfg, c, filepath.Join(workDir(cfg), "artifacts")); err != nil {
+	if err := dumpAll(ctx, cfg, c, filepath.Join(workDir(cfg), "artifacts"), tenantDumpBound); err != nil {
 		fmt.Fprintln(os.Stderr, "dump:", err)
 	}
 }

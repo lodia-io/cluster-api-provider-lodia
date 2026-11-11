@@ -64,9 +64,7 @@ var (
 	}
 )
 
-const tenantDumpBound = 30 * time.Second
-
-func dumpAll(ctx context.Context, cfg *envconf.Config, c client.Client, dir string) error {
+func dumpAll(ctx context.Context, cfg *envconf.Config, c client.Client, dir string, tenantBound time.Duration) error {
 	var errs []error
 	for _, kind := range objectKinds {
 		errs = append(errs, dumpObjects(ctx, c, dir, kind, namespace))
@@ -75,7 +73,7 @@ func dumpAll(ctx context.Context, cfg *envconf.Config, c client.Client, dir stri
 	for _, ns := range managers {
 		errs = append(errs, dumpObjects(ctx, c, dir, podKind, ns), dumpObjects(ctx, c, dir, eventKind, ns), dumpLogs(ctx, cfg, dir, ns))
 	}
-	errs = append(errs, dumpTenant(ctx, cfg, c, dir), dumpWorkers(ctx, cfg, dir))
+	errs = append(errs, dumpTenant(ctx, cfg, c, dir, tenantBound), dumpWorkers(ctx, cfg, dir))
 	return errors.Join(errs...)
 }
 
@@ -128,20 +126,16 @@ func dumpLogs(ctx context.Context, cfg *envconf.Config, dir, ns string) error {
 	return errors.Join(errs...)
 }
 
-func dumpTenant(ctx context.Context, cfg *envconf.Config, c client.Client, dir string) error {
-	ctx, cancel := context.WithTimeout(ctx, tenantDumpBound)
+func dumpTenant(ctx context.Context, cfg *envconf.Config, c client.Client, dir string, bound time.Duration) error {
+	ctx, cancel := context.WithTimeout(ctx, bound)
 	defer cancel()
 	cluster, err := clusterName(cfg)
 	if err != nil {
 		return err
 	}
-	kubeconfig := &corev1.Secret{}
-	if err := c.Get(ctx, client.ObjectKey{Namespace: namespace, Name: secret.Name(cluster, secret.Kubeconfig)}, kubeconfig); err != nil {
-		return client.IgnoreNotFound(err)
-	}
-	restCfg, err := clientcmd.RESTConfigFromKubeConfig(kubeconfig.Data[secret.KubeconfigDataName])
+	restCfg, err := tenantRESTConfig(ctx, c, client.ObjectKey{Namespace: namespace, Name: cluster}, bound/time.Duration(len(tenantObjects)))
 	if err != nil {
-		return err
+		return client.IgnoreNotFound(err)
 	}
 	tenant, err := client.New(restCfg, client.Options{})
 	if err != nil {
@@ -291,7 +285,7 @@ func requireFiles(t *testing.T, dir string, want map[string]string) {
 
 func TestTheDumpWritesTheTenantTheEventsAndTheWorkers(t *testing.T) {
 	d := newDumpSetup(t, tenantAPI(t).URL)
-	if err := dumpAll(t.Context(), d.cfg, d.c, d.dir); err != nil {
+	if err := dumpAll(t.Context(), d.cfg, d.c, d.dir, time.Minute); err != nil {
 		t.Fatal(err)
 	}
 	want := map[string]string{
@@ -312,7 +306,7 @@ func TestTheDumpWritesTheTenantTheEventsAndTheWorkers(t *testing.T) {
 
 func TestTheDumpOfAnInstallThatFailedBeforeTheTenantHadAKubeconfig(t *testing.T) {
 	d := newDumpSetup(t, "")
-	if err := dumpAll(t.Context(), d.cfg, d.c, d.dir); err != nil {
+	if err := dumpAll(t.Context(), d.cfg, d.c, d.dir, time.Minute); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(filepath.Join(d.dir, "tenant")); !os.IsNotExist(err) {
