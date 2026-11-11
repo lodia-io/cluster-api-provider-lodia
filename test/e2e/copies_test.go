@@ -110,6 +110,16 @@ func TestTheCopiesAreLodiasSecretsWithTheContractsTypeAndLabel(t *testing.T) {
 		{"no cluster label", "has the label", func(s map[string]*corev1.Secret) { s["ca-copy"].Labels = nil }},
 		{"another cluster's label", "has the label", func(s map[string]*corev1.Secret) { s["ca-copy"].Labels[clusterv1.ClusterNameLabel] = "other" }},
 		{"no owner", "not controlled", func(s map[string]*corev1.Secret) { s["kubeconfig-copy"].OwnerReferences = nil }},
+		{"an owner reference that is not the controller", "not controlled", func(s map[string]*corev1.Secret) {
+			ref := owner[0]
+			ref.Controller = new(false)
+			s["kubeconfig-copy"].OwnerReferences = []metav1.OwnerReference{ref}
+		}},
+		{"another LodiaControlPlane's controller", "not controlled", func(s map[string]*corev1.Secret) {
+			ref := owner[0]
+			ref.UID = types.UID("other")
+			s["ca-copy"].OwnerReferences = []metav1.OwnerReference{ref}
+		}},
 		{"no copy", "not found", func(s map[string]*corev1.Secret) { delete(s, "ca-copy") }},
 		{"no source", "not found", func(s map[string]*corev1.Secret) { delete(s, "kubeconfig-source") }},
 	}
