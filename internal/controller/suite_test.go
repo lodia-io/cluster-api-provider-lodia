@@ -187,7 +187,7 @@ func startManagerWith(t *testing.T, ns string, clientOf func(ctrl.Manager) clien
 	if err := (&controller.Reconciler{Client: clientOf(mgr), APIReader: mgr.GetAPIReader()}).SetupWithManager(mgr); err != nil {
 		t.Fatal(err)
 	}
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan error, 1)
 	go func() { done <- mgr.Start(ctx) }()
 	t.Cleanup(func() {
