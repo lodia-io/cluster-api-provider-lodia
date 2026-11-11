@@ -341,6 +341,14 @@ func withoutDocker(t *testing.T) {
 	t.Setenv("PATH", t.TempDir())
 }
 
+func objectOf(kind schema.GroupVersionKind, ns string) *unstructured.Unstructured {
+	o := &unstructured.Unstructured{}
+	o.SetGroupVersionKind(kind)
+	o.SetNamespace(ns)
+	o.SetName("object-of-" + kind.Kind)
+	return o
+}
+
 func newDumpSetup(t *testing.T, tenant string) dumpSetup {
 	t.Helper()
 	useDocker(t, fakeDocker)
@@ -352,6 +360,10 @@ func newDumpSetup(t *testing.T, tenant string) dumpSetup {
 	for _, ns := range managers {
 		builder = builder.WithObjects(&corev1.Event{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "event-in-" + ns}})
 	}
+	for _, kind := range objectKinds {
+		builder = builder.WithObjects(objectOf(kind, namespace))
+	}
+	builder = builder.WithObjects(objectOf(datastoreClass, ""))
 	if tenant != "" {
 		builder = builder.WithObjects(&corev1.Secret{
 			ObjectMeta: metav1.ObjectMeta{Namespace: namespace, Name: secret.Name("capl-e2e-w", secret.Kubeconfig)},
@@ -397,6 +409,10 @@ func TestTheDumpWritesTheTenantTheEventsAndTheWorkers(t *testing.T) {
 	for _, ns := range managers {
 		want["objects/"+ns+"/Event.yaml"] = "event-in-" + ns
 	}
+	for _, kind := range objectKinds {
+		want["objects/"+namespace+"/"+kind.Kind+".yaml"] = "object-of-" + kind.Kind
+	}
+	want["objects/DatastoreClass.yaml"] = "object-of-DatastoreClass"
 	requireFiles(t, d.dir, want)
 }
 
