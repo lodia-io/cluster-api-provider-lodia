@@ -462,7 +462,7 @@ func updateSpec(t *testing.T, lcp *v1alpha1.LodiaControlPlane, change func(*v1al
 	}
 }
 
-func readyControlPlane(t *testing.T, name string) (*clusterv1.Cluster, *v1alpha1.LodiaControlPlane, *lodiav1alpha1.ControlPlane, *controller.Reconciler, ca) {
+func createdControlPlane(t *testing.T, name string) (*clusterv1.Cluster, *v1alpha1.LodiaControlPlane, *lodiav1alpha1.ControlPlane, *controller.Reconciler) {
 	t.Helper()
 	cluster, lcp := create(t, namespace(t), name)
 	r := direct(t, interceptor.Funcs{})
@@ -470,6 +470,12 @@ func readyControlPlane(t *testing.T, name string) (*clusterv1.Cluster, *v1alpha1
 	passes(t, r, lcp)
 	cp := controlPlaneOf(cluster)
 	get(t, cp)
+	return cluster, lcp, cp, r
+}
+
+func readyControlPlane(t *testing.T, name string) (*clusterv1.Cluster, *v1alpha1.LodiaControlPlane, *lodiav1alpha1.ControlPlane, *controller.Reconciler, ca) {
+	t.Helper()
+	cluster, lcp, cp, r := createdControlPlane(t, name)
 	setReady(t, cp)
 	issued := lodiaSecrets(t, cluster, ownedBy(cp))
 	passes(t, r, lcp)

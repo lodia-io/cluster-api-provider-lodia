@@ -40,12 +40,7 @@ func TestANameLodiaRefusesIsReportedAndNothingIsCreated(t *testing.T) {
 }
 
 func TestInitializationWaitsForBothSecrets(t *testing.T) {
-	cluster, lcp := create(t, namespace(t), "omega")
-	r := direct(t, interceptor.Funcs{})
-	untilBlockMove(t, r, lcp)
-	passes(t, r, lcp)
-	cp := controlPlaneOf(cluster)
-	get(t, cp)
+	cluster, lcp, cp, r := createdControlPlane(t, "omega")
 	setReady(t, cp)
 	notInitialized := func() {
 		t.Helper()
@@ -88,12 +83,7 @@ func TestInitializationWaitsForBothSecrets(t *testing.T) {
 }
 
 func TestReadyAtAnOlderGenerationInitializes(t *testing.T) {
-	cluster, lcp := create(t, namespace(t), "older-generation")
-	r := direct(t, interceptor.Funcs{})
-	untilBlockMove(t, r, lcp)
-	passes(t, r, lcp)
-	cp := controlPlaneOf(cluster)
-	get(t, cp)
+	cluster, lcp, cp, r := createdControlPlane(t, "older-generation")
 	setReady(t, cp)
 	updateSpec(t, lcp, func(l *v1alpha1.LodiaControlPlane) { l.Spec.Version = "v1.35.9" })
 	passes(t, r, lcp)

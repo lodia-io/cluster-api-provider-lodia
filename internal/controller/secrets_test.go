@@ -26,12 +26,7 @@ import (
 )
 
 func TestAFailureOnOneSecretDoesNotStopTheOther(t *testing.T) {
-	cluster, lcp := create(t, namespace(t), "chi")
-	r := direct(t, interceptor.Funcs{})
-	untilBlockMove(t, r, lcp)
-	passes(t, r, lcp)
-	cp := controlPlaneOf(cluster)
-	get(t, cp)
+	cluster, lcp, cp, _ := createdControlPlane(t, "chi")
 	lodiaSecrets(t, cluster, ownedBy(cp))
 
 	kubeconfigErr, caErr := errors.New("the kubeconfig write failed"), errors.New("the CA write failed")
@@ -58,12 +53,7 @@ func TestAFailureOnOneSecretDoesNotStopTheOther(t *testing.T) {
 }
 
 func TestASourceWithoutItsKeyDoesNotInitialize(t *testing.T) {
-	cluster, lcp := create(t, namespace(t), "keyless")
-	r := direct(t, interceptor.Funcs{})
-	untilBlockMove(t, r, lcp)
-	passes(t, r, lcp)
-	cp := controlPlaneOf(cluster)
-	get(t, cp)
+	cluster, lcp, cp, r := createdControlPlane(t, "keyless")
 	setReady(t, cp)
 	lodiaSecrets(t, cluster, ownedBy(cp))
 	admin := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: cluster.Namespace, Name: lodiav1alpha1.AdminKubeconfigSecret.Name(cluster.Name)}}
@@ -111,12 +101,7 @@ func TestASourceWithoutItsKeyKeepsTheLastGoodCopy(t *testing.T) {
 }
 
 func TestASourceWithoutItsKeyWritesNoCopy(t *testing.T) {
-	cluster, lcp := create(t, namespace(t), "upsilon")
-	r := direct(t, interceptor.Funcs{})
-	untilBlockMove(t, r, lcp)
-	passes(t, r, lcp)
-	cp := controlPlaneOf(cluster)
-	get(t, cp)
+	cluster, lcp, cp, r := createdControlPlane(t, "upsilon")
 	for name, data := range map[string]map[string][]byte{
 		lodiav1alpha1.AdminKubeconfigSecret.Name(cluster.Name): {"wrong": []byte("x")},
 		lodiav1alpha1.CABundleSecret.Name(cluster.Name):        {lodiav1alpha1.CACertKey: {}},

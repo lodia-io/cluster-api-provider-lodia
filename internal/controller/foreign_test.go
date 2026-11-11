@@ -120,12 +120,7 @@ func TestALeftoverSecretOutsideTheCacheIsLeftAlone(t *testing.T) {
 }
 
 func TestATargetHeldElsewhereDoesNotInitialize(t *testing.T) {
-	cluster, lcp := create(t, namespace(t), "held")
-	r := direct(t, interceptor.Funcs{})
-	untilBlockMove(t, r, lcp)
-	passes(t, r, lcp)
-	cp := controlPlaneOf(cluster)
-	get(t, cp)
+	cluster, lcp, cp, r := createdControlPlane(t, "held")
 	setReady(t, cp)
 	lodiaSecrets(t, cluster, ownedBy(cp))
 	held := secretOf(cluster, secret.ClusterCA)
@@ -178,12 +173,7 @@ func TestAPredecessorsSecretsAreNotCopied(t *testing.T) {
 }
 
 func TestATransientReadOfATargetSecretLeavesTheLeftoverAlone(t *testing.T) {
-	cluster, lcp := create(t, namespace(t), "target-read")
-	r := direct(t, interceptor.Funcs{})
-	untilBlockMove(t, r, lcp)
-	passes(t, r, lcp)
-	cp := controlPlaneOf(cluster)
-	get(t, cp)
+	cluster, lcp, cp, _ := createdControlPlane(t, "target-read")
 	lodiaSecrets(t, cluster, ownedBy(cp))
 	leftover := &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{Namespace: cluster.Namespace, Name: secret.Name(cluster.Name, secret.Kubeconfig)},
