@@ -182,18 +182,18 @@ func returnsWithin(t *testing.T, limit time.Duration, what string, call func() e
 	}
 }
 
-func shortenTheDump(t *testing.T, dump, tenant time.Duration) {
+func shortenTheDump(t *testing.T, dump, tenant, workers time.Duration) {
 	t.Helper()
-	was, wasTenant := bounds.Dump, tenantDumpBound
-	t.Cleanup(func() { bounds.Dump, tenantDumpBound = was, wasTenant })
-	bounds.Dump, tenantDumpBound = dump, tenant
+	was, wasTenant, wasWorkers := bounds.Dump, tenantDumpBound, workerDumpBound
+	t.Cleanup(func() { bounds.Dump, tenantDumpBound, workerDumpBound = was, wasTenant, wasWorkers })
+	bounds.Dump, tenantDumpBound, workerDumpBound = dump, tenant, workers
 }
 
-func TestTheDumpOfATenantThatDoesNotAnswerEndsInItsBoundAndLeavesTimeForTheWorkers(t *testing.T) {
+func TestTheDumpOfATenantThatDoesNotAnswerEndsInItsBoundAndWritesTheWorkers(t *testing.T) {
 	const bound = 1500 * time.Millisecond
 	for name, stalled := range stalledTenants {
 		t.Run(name, func(t *testing.T) {
-			shortenTheDump(t, 4*bound, bound)
+			shortenTheDump(t, 4*bound, bound, bound)
 			url, stalls := stalled(t)
 			d := newDumpSetup(t, url)
 			err := returnsWithin(t, bound+bound/2, "the dump", func() error { return dumpBounded(t.Context(), d.cfg, d.c, d.dir) })
@@ -302,14 +302,52 @@ func shortenTheDumpRequests(t *testing.T, timeout time.Duration) {
 	dumpRequestTimeout = timeout
 }
 
-func TestTheDumpOfAManagementClusterThatDoesNotAnswerEndsInItsBound(t *testing.T) {
+func TestTheDumpOfAManagementClusterThatDoesNotAnswerEndsInItsBoundAndWritesTheWorkers(t *testing.T) {
 	const bound = time.Second
-	shortenTheDump(t, bound, bound/4)
+	shortenTheDump(t, bound, bound/4, bound/4)
 	shortenTheDumpRequests(t, bound/4)
+	useDocker(t, fakeDocker)
 	stalled, _ := tenantThatNeverAnswers(t)
 	cfg := configFor(t, stalled)
-	if err := returnsWithin(t, 2*bound, "the dump", func() error { return dumpCluster(t.Context(), cfg, t.TempDir()) }); err == nil {
+	dir := t.TempDir()
+	if err := returnsWithin(t, 2*bound, "the dump", func() error { return dumpCluster(t.Context(), cfg, dir) }); err == nil {
 		t.Fatal("the dump says nothing about a management cluster that did not answer")
+	}
+	requireFiles(t, dir, workerFiles)
+}
+
+func TestTheDumpOfADockerThatHangsEndsTheWorkersAtTheirBoundAndDumpsTheRest(t *testing.T) {
+	const bound = 1500 * time.Millisecond
+	for _, verb := range []string{"ps", "exec"} {
+		t.Run("docker "+verb, func(t *testing.T) {
+			shortenTheDump(t, 4*bound, bound/2, bound)
+			d := newDumpSetup(t, tenantAPI(t).URL)
+			useDocker(t, dockerThatHangsOn(verb))
+			start := time.Now()
+			if err := returnsWithin(t, bound+bound/2, "the dump", func() error { return dumpBounded(t.Context(), d.cfg, d.c, d.dir) }); err == nil {
+				t.Fatal("the dump says nothing about a docker that hung")
+			}
+			if took := time.Since(start); took < bound {
+				t.Errorf("the dump ended after %s, before the workers' bound %s", took, bound)
+			}
+			want := map[string]string{"tenant/objects/Node.yaml": "/api/v1/nodes"}
+			for _, ns := range managers {
+				want["objects/"+ns+"/Event.yaml"] = "event-in-" + ns
+			}
+			requireFiles(t, d.dir, want)
+		})
+	}
+}
+
+func TestTheDumpOfADockerThatHangsAndAManagementClusterThatDoesNotAnswerEndsInItsBound(t *testing.T) {
+	const bound = 3 * time.Second
+	shortenTheDump(t, bound, bound/8, bound/2)
+	shortenTheDumpRequests(t, bound/30)
+	useDocker(t, dockerThatHangsOn("ps"))
+	stalled, _ := tenantThatNeverAnswers(t)
+	cfg := configFor(t, stalled)
+	if err := returnsWithin(t, bound+bound/4, "the dump", func() error { return dumpCluster(t.Context(), cfg, t.TempDir()) }); err == nil {
+		t.Fatal("the dump says nothing about a docker that hung and a management cluster that did not answer")
 	}
 }
 
@@ -321,8 +359,9 @@ func TestTheDumpCutsOffWhatTheManagementClusterDoesNotAnswerAtItsBound(t *testin
 		"the logs of a container": "/log",
 	} {
 		t.Run(name, func(t *testing.T) {
-			shortenTheDump(t, bound, bound/4)
+			shortenTheDump(t, bound, bound/4, bound/4)
 			shortenTheDumpRequests(t, 10*bound)
+			useDocker(t, fakeDocker)
 			url, _ := gatedServer(t, managementHandler(t), func(path string) (time.Duration, bool) { return 0, !strings.HasSuffix(path, stalls) })
 			cfg := configFor(t, url)
 			if err := returnsWithin(t, 2*bound, "the dump", func() error { return dumpCluster(t.Context(), cfg, t.TempDir()) }); err == nil {
@@ -333,6 +372,7 @@ func TestTheDumpCutsOffWhatTheManagementClusterDoesNotAnswerAtItsBound(t *testin
 }
 
 func TestTheDumpAsksTheManagementClusterNothingOnceItsBoundHasEnded(t *testing.T) {
+	withoutDocker(t)
 	url, asked := gatedServer(t, managementHandler(t), func(string) (time.Duration, bool) { return 0, true })
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()

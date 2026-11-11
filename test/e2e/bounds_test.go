@@ -56,6 +56,8 @@ var dumpRequestTimeout = 10 * time.Second
 
 var tenantDumpBound = 30 * time.Second
 
+var workerDumpBound = 30 * time.Second
+
 var goTestTimeout = regexp.MustCompile(`-timeout (\d+)m\b`)
 
 func total(b boundSet) time.Duration {
@@ -86,13 +88,15 @@ func requestFits(whose string, requestTimeout time.Duration) error {
 	return nil
 }
 
-// The tenant's part of the dump ends a discovery, half the bound, after its own.
-func tenantFits(requestTimeout, dumpBound, dump time.Duration) error {
+// The workers go first and a docker that hangs uses their whole bound: what
+// remains of the dump has to hold the tenant's bound and as much again for the
+// kind cluster's lists.
+func tenantFits(requestTimeout, workerBound, dumpBound, dump time.Duration) error {
 	if err := requestFits("the tenant's", requestTimeout); err != nil {
 		return err
 	}
-	if dumpBound <= 0 || 2*dumpBound >= dump {
-		return fmt.Errorf("the tenant's part of the dump %s is not positive, or two of them are not less than the dump's %s: a tenant that does not answer would leave the workers no time", dumpBound, dump)
+	if workerBound <= 0 || dumpBound <= 0 || workerBound+2*dumpBound >= dump {
+		return fmt.Errorf("the workers' part of the dump %s or the tenant's %s is not positive, or the workers' and two of the tenant's are not less than the dump's %s: a docker that hangs would leave the kind cluster and the tenant too little time", workerBound, dumpBound, dump)
 	}
 	return nil
 }
@@ -129,7 +133,7 @@ func TestTheBoundsFitUnderTheTimeouts(t *testing.T) {
 	if err := fits(total(bounds), time.Duration(n)*time.Minute, time.Duration(limit)*time.Minute); err != nil {
 		t.Fatal(err)
 	}
-	if err := tenantFits(tenantRequestTimeout, tenantDumpBound, bounds.Dump); err != nil {
+	if err := tenantFits(tenantRequestTimeout, workerDumpBound, tenantDumpBound, bounds.Dump); err != nil {
 		t.Fatal(err)
 	}
 	if err := requestFits("the dump's", dumpRequestTimeout); err != nil {
@@ -181,22 +185,26 @@ func TestBoundsThatDoNotFitAreRefused(t *testing.T) {
 func TestTenantTimesThatDoNotFitAreRefused(t *testing.T) {
 	const second = time.Second
 	cases := []struct {
-		name                            string
-		requestTimeout, dumpBound, dump time.Duration
-		want                            string
+		name                                         string
+		requestTimeout, workerBound, dumpBound, dump time.Duration
+		want                                         string
 	}{
-		{"a request timeout of 40 seconds against 120", 40 * second, 30 * second, 120 * second, ""},
-		{"a request timeout of 41 seconds against 120", 41 * second, 30 * second, 120 * second, "request timeout"},
-		{"no request timeout", 0, 30 * second, 120 * second, "request timeout"},
-		{"a negative request timeout", -second, 30 * second, 120 * second, "request timeout"},
-		{"a tenant dump of 59 seconds against 120", 30 * second, 59 * second, 120 * second, ""},
-		{"a tenant dump of 60 seconds against 120", 30 * second, 60 * second, 120 * second, "part of the dump"},
-		{"no tenant dump", 30 * second, 0, 120 * second, "part of the dump"},
-		{"a negative tenant dump", 30 * second, -second, 120 * second, "part of the dump"},
+		{"a request timeout of 40 seconds against 120", 40 * second, 30 * second, 30 * second, 120 * second, ""},
+		{"a request timeout of 41 seconds against 120", 41 * second, 30 * second, 30 * second, 120 * second, "request timeout"},
+		{"no request timeout", 0, 30 * second, 30 * second, 120 * second, "request timeout"},
+		{"a negative request timeout", -second, 30 * second, 30 * second, 120 * second, "request timeout"},
+		{"a tenant dump of 44 seconds after workers of 30 against 120", 30 * second, 30 * second, 44 * second, 120 * second, ""},
+		{"a tenant dump of 45 seconds after workers of 30 against 120", 30 * second, 30 * second, 45 * second, 120 * second, "part of the dump"},
+		{"no tenant dump", 30 * second, 30 * second, 0, 120 * second, "part of the dump"},
+		{"a negative tenant dump", 30 * second, 30 * second, -second, 120 * second, "part of the dump"},
+		{"workers of 59 seconds before a tenant dump of 30 against 120", 30 * second, 59 * second, 30 * second, 120 * second, ""},
+		{"workers of 60 seconds before a tenant dump of 30 against 120", 30 * second, 60 * second, 30 * second, 120 * second, "part of the dump"},
+		{"no workers", 30 * second, 0, 30 * second, 120 * second, "part of the dump"},
+		{"negative workers", 30 * second, -second, 30 * second, 120 * second, "part of the dump"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			err := tenantFits(c.requestTimeout, c.dumpBound, c.dump)
+			err := tenantFits(c.requestTimeout, c.workerBound, c.dumpBound, c.dump)
 			switch {
 			case c.want == "" && err != nil:
 				t.Fatalf("want accepted, got %v", err)

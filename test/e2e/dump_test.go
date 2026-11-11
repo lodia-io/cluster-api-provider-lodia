@@ -78,11 +78,13 @@ func dumpCluster(ctx context.Context, cfg *envconf.Config, dir string) error {
 func dumpBounded(ctx context.Context, cfg *envconf.Config, c client.Client, dir string) error {
 	ctx, cancel := context.WithTimeout(ctx, bounds.Dump)
 	defer cancel()
-	return dumpAll(ctx, cfg, c, dir, tenantDumpBound)
+	return dumpAll(ctx, cfg, c, dir, tenantDumpBound, workerDumpBound)
 }
 
-func dumpAll(ctx context.Context, cfg *envconf.Config, c client.Client, dir string, tenantBound time.Duration) error {
-	var errs []error
+func dumpAll(ctx context.Context, cfg *envconf.Config, c client.Client, dir string, tenantBound, workerBound time.Duration) error {
+	// Docker does not need the API server, which when it does not answer uses
+	// all that remains of the dump.
+	errs := []error{dumpWorkers(ctx, cfg, dir, workerBound)}
 	for _, kind := range objectKinds {
 		if ctx.Err() != nil {
 			break
@@ -101,7 +103,7 @@ func dumpAll(ctx context.Context, cfg *envconf.Config, c client.Client, dir stri
 	if err := ctx.Err(); err != nil {
 		return errors.Join(append(errs, err)...)
 	}
-	errs = append(errs, dumpTenant(ctx, cfg, c, dir, tenantBound), dumpWorkers(ctx, cfg, dir))
+	errs = append(errs, dumpTenant(ctx, cfg, c, dir, tenantBound))
 	return errors.Join(errs...)
 }
 
@@ -180,7 +182,9 @@ func dumpTenant(ctx context.Context, cfg *envconf.Config, c client.Client, dir s
 	return errors.Join(errs...)
 }
 
-func dumpWorkers(ctx context.Context, cfg *envconf.Config, dir string) error {
+func dumpWorkers(ctx context.Context, cfg *envconf.Config, dir string, bound time.Duration) error {
+	ctx, cancel := context.WithTimeout(ctx, bound)
+	defer cancel()
 	cluster, err := clusterName(cfg)
 	if err != nil {
 		return err
@@ -219,6 +223,16 @@ ps) echo worker ;;
 exec) shift; echo "$@" ;;
 esac
 `
+
+func dockerThatHangsOn(verb string) string {
+	return fmt.Sprintf(`#!/bin/sh
+case "$1" in
+%s) exec sleep 10 ;;
+ps) echo worker ;;
+exec) shift; echo "$@" ;;
+esac
+`, verb)
+}
 
 var tenantKinds = map[string]string{"nodes": "Node", "pods": "Pod", "daemonsets": "DaemonSet", "events": "Event"}
 
@@ -309,13 +323,23 @@ type dumpSetup struct {
 	dir string
 }
 
-func newDumpSetup(t *testing.T, tenant string) dumpSetup {
+func useDocker(t *testing.T, script string) {
 	t.Helper()
 	bin := t.TempDir()
-	if err := os.WriteFile(filepath.Join(bin, "docker"), []byte(fakeDocker), 0o755); err != nil {
+	if err := os.WriteFile(filepath.Join(bin, "docker"), []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+}
+
+func withoutDocker(t *testing.T) {
+	t.Helper()
+	t.Setenv("PATH", t.TempDir())
+}
+
+func newDumpSetup(t *testing.T, tenant string) dumpSetup {
+	t.Helper()
+	useDocker(t, fakeDocker)
 	management := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		respond(t, w, `{"kind":"PodList","apiVersion":"v1","items":[]}`)
 	}))
@@ -346,9 +370,14 @@ func requireFiles(t *testing.T, dir string, want map[string]string) {
 	}
 }
 
+var workerFiles = map[string]string{
+	"worker/worker/journal.log":   "journalctl --no-pager -u kubelet -u containerd",
+	"worker/worker/crictl-ps.txt": "crictl ps -a",
+}
+
 func TestTheDumpWritesTheTenantTheEventsAndTheWorkers(t *testing.T) {
 	d := newDumpSetup(t, tenantAPI(t).URL)
-	if err := dumpAll(t.Context(), d.cfg, d.c, d.dir, time.Minute); err != nil {
+	if err := dumpAll(t.Context(), d.cfg, d.c, d.dir, time.Minute, time.Minute); err != nil {
 		t.Fatal(err)
 	}
 	want := map[string]string{
@@ -369,7 +398,7 @@ func TestTheDumpWritesTheTenantTheEventsAndTheWorkers(t *testing.T) {
 
 func TestTheDumpOfAnInstallThatFailedBeforeTheTenantHadAKubeconfig(t *testing.T) {
 	d := newDumpSetup(t, "")
-	if err := dumpAll(t.Context(), d.cfg, d.c, d.dir, time.Minute); err != nil {
+	if err := dumpAll(t.Context(), d.cfg, d.c, d.dir, time.Minute, time.Minute); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(filepath.Join(d.dir, "tenant")); !os.IsNotExist(err) {
@@ -379,4 +408,16 @@ func TestTheDumpOfAnInstallThatFailedBeforeTheTenantHadAKubeconfig(t *testing.T)
 		"objects/" + providerNamespace + "/Event.yaml": "event-in-" + providerNamespace,
 		"worker/worker/journal.log":                    "journalctl",
 	})
+}
+
+func TestTheDumpRunsNoDockerOnceItsBoundHasEnded(t *testing.T) {
+	d := newDumpSetup(t, "")
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	if err := dumpBounded(ctx, d.cfg, d.c, d.dir); !errors.Is(err, context.Canceled) {
+		t.Fatalf("want the context's error, got %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(d.dir, "worker")); !os.IsNotExist(err) {
+		t.Fatalf("the dump wrote the workers after its bound: %v", err)
+	}
 }
