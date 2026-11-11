@@ -24,6 +24,7 @@ import (
 	"sigs.k8s.io/cluster-api/util/secret"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 	"sigs.k8s.io/e2e-framework/klient/k8s/resources"
 )
 
@@ -268,5 +269,24 @@ func TestTheDumpOfATenantWhoseBoundHasEndedSaysSo(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(d.dir, "tenant")); !os.IsNotExist(err) {
 		t.Fatalf("the dump listed a tenant after its bound: %v", err)
+	}
+}
+
+func TestTheDumpReadsTheTenantsKubeconfigWithinItsBound(t *testing.T) {
+	const bound = 500 * time.Millisecond
+	d := newDumpSetup(t, tenantAPI(t).URL)
+	management := interceptor.NewClient(d.c.(client.WithWatch), interceptor.Funcs{
+		Get: func(ctx context.Context, _ client.WithWatch, _ client.ObjectKey, _ client.Object, _ ...client.GetOption) error {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(10 * time.Second):
+				return nil
+			}
+		},
+	})
+	err := returnsWithin(t, 2*bound, "the dump of the tenant", func() error { return dumpTenant(t.Context(), d.cfg, management, d.dir, bound) })
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("want the deadline of the tenant's bound, got %v", err)
 	}
 }
