@@ -151,6 +151,10 @@ var stalledTenants = map[string]func(*testing.T) (string, func() int){
 	"a tenant that answers /api and never /apis":                tenantThatNeverAnswersApis,
 }
 
+func isDiscovery(path string) bool {
+	return slices.Contains([]string{"/api", "/apis", "/api/v1", "/apis/apps/v1"}, path)
+}
+
 func countPaths(paths []string, match func(string) bool) int {
 	var n int
 	for _, path := range paths {
@@ -240,6 +244,19 @@ func TestTheDumpStopsDiscoveringOnceTheTenantsBoundHasEnded(t *testing.T) {
 	}
 	if n := countPaths(asked(), func(path string) bool { return path == "/apis" }); n >= len(tenantObjects) {
 		t.Fatalf("%d of the %d lists went on to discover after the tenant's bound", n, len(tenantObjects))
+	}
+}
+
+func TestTheDumpStopsListingATenantAtItsBound(t *testing.T) {
+	const bound = 1500 * time.Millisecond
+	half := bound / time.Duration(len(tenantObjects)) / 2
+	url, asked := gatedTenant(t, func(path string) (time.Duration, bool) { return half, isDiscovery(path) })
+	d := newDumpSetup(t, url)
+	if err := dumpTenant(t.Context(), d.cfg, d.c, d.dir, bound); err == nil {
+		t.Fatal("the dump says nothing about a tenant that never answered a list")
+	}
+	if n := countPaths(asked(), func(path string) bool { return !isDiscovery(path) }); n >= len(tenantObjects) {
+		t.Fatalf("%d of the %d lists reached the tenant, which cannot have happened inside its bound", n, len(tenantObjects))
 	}
 }
 
