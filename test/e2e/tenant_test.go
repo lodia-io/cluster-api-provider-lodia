@@ -428,3 +428,10 @@ func requireRequestTimeout(t *testing.T, requests []request, suffix string) {
 func TestTheDumpGivesTheLogsOfTheManagersTheRequestTimeout(t *testing.T) {
 	requireRequestTimeout(t, requestsOfTheDump(t), "/log")
 }
+
+func TestTheDumpGivesTheListsAndTheDiscoveryOfTheManagementClusterTheRequestTimeout(t *testing.T) {
+	requests := requestsOfTheDump(t)
+	for _, suffix := range []string{"/api", "/apis", "/clusters", "/events"} {
+		requireRequestTimeout(t, requests, suffix)
+	}
+}
