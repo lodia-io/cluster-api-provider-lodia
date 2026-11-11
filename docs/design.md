@@ -95,7 +95,7 @@ A pass has a minute ([ReconciliationTimeout][cr-timeout]), and ten passes run at
 The cache resyncs every 10 minutes, Cluster API's default ([--sync-period][capi-sync]), which repairs the provider's own Secrets, which no watch covers, and a missed delete event.
 
 RBAC is generated from markers into [`config/rbac/role.yaml`](../config/rbac/role.yaml), except leader election.
-[`leader_election_role.yaml`](../config/rbac/leader_election_role.yaml) grants Leases and Events in the manager's namespace only, as [Cluster API's kubeadm control plane provider][kcp-leader] does, so the ServiceAccount cannot write a Lease in `kube-node-lease`.
+[`leader_election_role.yaml`](../config/rbac/leader_election_role.yaml) grants Leases and Events in the manager's namespace only, as [Lodia's leader election Role][lo-leader-election] does, so the ServiceAccount cannot write a Lease in `kube-node-lease`.
 The envtest suite runs the controller, and a leader-elected manager, as a user bound to the ClusterRole and, in the namespace where the manager elects, to the Role.
 Cluster API's kubeadm bootstrap provider reads the object behind `Cluster.spec.controlPlaneRef` to render `.controlPlane.version` into files with `contentFormat: Template`, and v1.14.0 to v1.15.0-beta.0 read it on every worker join ([v1.14.0][cabpk-files-114], [v1.15.0-beta.0][cabpk-files]), while its ClusterRole grants that only for `kubeadmcontrolplanes` ([RBAC markers][cabpk-rbac]), so [`config/rbac/kubeadm_bootstrap_role.yaml`](../config/rbac/kubeadm_bootstrap_role.yaml) and its binding grant it `get` on `lodiacontrolplanes`.
 The binding names the provider's ServiceAccount in `capi-kubeadm-bootstrap-system`, and clusterctl sets the namespace of every namespaced subject to the installed provider's own ([target namespace][cc-ns], [subjects][cc-subjects]), so a clusterctl install does not deliver the grant yet.
@@ -283,7 +283,6 @@ Lodia's availability is a failure tolerance (`highAvailability`) with replica co
 [finalizers]: https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/util/finalizers/finalizers.go#L27-L49
 [patch]: https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/util/patch/patch.go#L82-L83
 [rbac-agg]: https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/core/config/rbac/aggregated_role.yaml#L8
-[kcp-leader]: https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/controlplane/kubeadm/config/rbac/leader_election_role.yaml
 [cc-ns]: https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/cmd/clusterctl/client/repository/components.go#L242-L257
 [cc-subjects]: https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/cmd/clusterctl/client/repository/components.go#L349-L361
 
@@ -316,6 +315,7 @@ Lodia's availability is a failure tolerance (`highAvailability`) with replica co
 [lo-target]: https://github.com/lodia-io/lodia/blob/57375832e7fe8b3a06374613797eb4c544fe7612/internal/controller/lifecycle/lifecycle.go#L138-L152
 [lo-workers]: https://github.com/lodia-io/lodia/blob/57375832e7fe8b3a06374613797eb4c544fe7612/internal/operator/operator.go#L40-L42
 [lo-labels]: https://github.com/lodia-io/lodia/blob/57375832e7fe8b3a06374613797eb4c544fe7612/api/v1alpha1/labels.go#L17-L20
+[lo-leader-election]: https://github.com/lodia-io/lodia/blob/57375832e7fe8b3a06374613797eb4c544fe7612/charts/lodia/templates/rbac.yaml#L58-L75
 
 <!-- Lodia at 5f212ed -->
 [lo-claude]: https://github.com/lodia-io/lodia/blob/5f212ed9acd71fe2a944e5fe63cad73e3d17812e/CLAUDE.md?plain=1#L53-L54
