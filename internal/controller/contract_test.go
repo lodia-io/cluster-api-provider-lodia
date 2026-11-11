@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
+	"github.com/google/go-cmp/cmp/cmpopts"
 	lodiav1alpha1 "go.lodia.io/lodia/api/v1alpha1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -30,7 +31,7 @@ func TestAClusterGetsItsControlPlaneAndTheContract(t *testing.T) {
 
 	cp := controlPlaneOf(cluster)
 	eventually(t, func() error { return k8s.Get(t.Context(), client.ObjectKeyFromObject(cp), cp) })
-	if !metav1.IsControlledBy(cp, lcp) || cp.Labels[clusterv1.ClusterNameLabel] != "alpha" {
+	if !metav1.IsControlledBy(cp, lcp) || !blocksOwnerDeletion(cp) || cp.Labels[clusterv1.ClusterNameLabel] != "alpha" {
 		t.Errorf("ControlPlane owners %v, labels %v", cp.OwnerReferences, cp.Labels)
 	}
 	want := lodiav1alpha1.ControlPlaneSpec{
@@ -68,9 +69,8 @@ func TestAClusterGetsItsControlPlaneAndTheContract(t *testing.T) {
 		}
 		return ready(lcp, metav1.ConditionTrue, lodiav1alpha1.ReasonReady, "")
 	})
-	if c := meta.FindStatusCondition(lcp.Status.Conditions, clusterv1.AvailableCondition); c.Reason != lodiav1alpha1.ReasonReachable {
-		t.Errorf("Available %+v, want Reachable's reason", c)
-	}
+	mirrored(t, meta.FindStatusCondition(lcp.Status.Conditions, clusterv1.AvailableCondition), meta.FindStatusCondition(cp.Status.Conditions, lodiav1alpha1.ConditionReachable))
+	mirrored(t, meta.FindStatusCondition(lcp.Status.Conditions, clusterv1.ReadyCondition), meta.FindStatusCondition(cp.Status.Conditions, lodiav1alpha1.ConditionReady))
 	if lcp.Status.ExternalManagedControlPlane == nil || !*lcp.Status.ExternalManagedControlPlane {
 		t.Error("externalManagedControlPlane is not true")
 	}
@@ -88,7 +88,7 @@ func TestAClusterGetsItsControlPlaneAndTheContract(t *testing.T) {
 	} {
 		s := secretOf(cluster, purpose)
 		eventually(t, func() error { return k8s.Get(t.Context(), client.ObjectKeyFromObject(s), s) })
-		if s.Type != clusterv1.ClusterSecretType || s.Labels[clusterv1.ClusterNameLabel] != "alpha" || !metav1.IsControlledBy(s, lcp) {
+		if s.Type != clusterv1.ClusterSecretType || s.Labels[clusterv1.ClusterNameLabel] != "alpha" || !metav1.IsControlledBy(s, lcp) || !blocksOwnerDeletion(s) {
 			t.Errorf("%s: type %s, labels %v, owners %v", s.Name, s.Type, s.Labels, s.OwnerReferences)
 		}
 		if diff := cmp.Diff(data, s.Data); diff != "" {
@@ -109,6 +109,21 @@ func TestAClusterGetsItsControlPlaneAndTheContract(t *testing.T) {
 				t.Errorf("Secret %s holds a private key under %s", s.Name, key)
 			}
 		}
+	}
+}
+
+func blocksOwnerDeletion(obj client.Object) bool {
+	owner := metav1.GetControllerOf(obj)
+	return owner != nil && owner.BlockOwnerDeletion != nil && *owner.BlockOwnerDeletion
+}
+
+func mirrored(t *testing.T, got, want *metav1.Condition) {
+	t.Helper()
+	if got == nil || want == nil {
+		t.Fatalf("condition %+v, source %+v", got, want)
+	}
+	if diff := cmp.Diff(want, got, cmpopts.IgnoreFields(metav1.Condition{}, "Type", "ObservedGeneration", "LastTransitionTime")); diff != "" {
+		t.Errorf("%s does not mirror %s (-source +got):\n%s", got.Type, want.Type, diff)
 	}
 }
 
