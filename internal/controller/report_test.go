@@ -6,7 +6,6 @@ package controller_test
 import (
 	"context"
 	"errors"
-	"fmt"
 	"strings"
 	"testing"
 
@@ -35,8 +34,7 @@ func TestANameLodiaRefusesIsReportedAndNothingIsCreated(t *testing.T) {
 
 	eventually(t, func() error {
 		get(t, lcp)
-		return ready(lcp, metav1.ConditionFalse, v1alpha1.RefusedReason,
-			fmt.Sprintf(`ControlPlane.lodia.io %q is invalid: <nil>: Invalid value: the name must be a DNS-1035 label of at most 32 characters`, name))
+		return ready(lcp, metav1.ConditionFalse, v1alpha1.RefusedReason, "the name must be a DNS-1035 label of at most 32 characters")
 	})
 	absent(t, controlPlaneOf(cluster), secretOf(cluster, secret.Kubeconfig), secretOf(cluster, secret.ClusterCA))
 }
