@@ -239,7 +239,8 @@ func TestOneTenantsBlockedWriteDoesNotHoldUpAnother(t *testing.T) {
 	}
 	release := make(chan struct{})
 	blocked := make(chan bool, 1)
-	startManagerWith(t, func(ctrl.Manager) client.Client {
+	ns := namespace(t)
+	startManagerWith(t, ns, func(ctrl.Manager) client.Client {
 		return interceptor.NewClient(c, interceptor.Funcs{
 			Apply: func(ctx context.Context, c client.WithWatch, obj runtime.ApplyConfiguration, opts ...client.ApplyOption) error {
 				if a, ok := obj.(interface{ GetName() string }); ok && a.GetName() == "tenant-a" {
@@ -259,7 +260,6 @@ func TestOneTenantsBlockedWriteDoesNotHoldUpAnother(t *testing.T) {
 		})
 	})
 
-	ns := namespace(t)
 	first, _ := create(t, ns, "tenant-a")
 	select {
 	case deadline := <-blocked:

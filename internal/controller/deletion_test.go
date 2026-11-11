@@ -21,8 +21,9 @@ import (
 )
 
 func TestDeletingWaitsUntilTheControlPlaneIsGone(t *testing.T) {
-	startManager(t)
-	cluster, lcp := create(t, namespace(t), "gamma")
+	ns := namespace(t)
+	startManager(t, ns)
+	cluster, lcp := create(t, ns, "gamma")
 	cp := controlPlaneOf(cluster)
 	eventually(t, func() error { return k8s.Get(t.Context(), client.ObjectKeyFromObject(cp), cp) })
 	before := cp.DeepCopy()

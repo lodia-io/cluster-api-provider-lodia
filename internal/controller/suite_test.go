@@ -159,25 +159,26 @@ func boundToTheClusterRole(cfg *rest.Config) (*rest.Config, error) {
 	return controller, nil
 }
 
-func startManager(t *testing.T, mutate ...func(*cache.Options)) ctrl.Manager {
+func startManager(t *testing.T, ns string, mutate ...func(*cache.Options)) ctrl.Manager {
 	t.Helper()
-	return startManagerWith(t, ctrl.Manager.GetClient, mutate...)
+	return startManagerWith(t, ns, ctrl.Manager.GetClient, mutate...)
 }
 
-func startManagerWith(t *testing.T, clientOf func(ctrl.Manager) client.Client, mutate ...func(*cache.Options)) ctrl.Manager {
+func startManagerWith(t *testing.T, ns string, clientOf func(ctrl.Manager) client.Client, mutate ...func(*cache.Options)) ctrl.Manager {
 	t.Helper()
-	cache, err := controller.CacheOptions()
+	options, err := controller.CacheOptions()
 	if err != nil {
 		t.Fatal(err)
 	}
-	cache.ReaderFailOnMissingInformer = true
+	options.DefaultNamespaces = map[string]cache.Config{ns: {}}
+	options.ReaderFailOnMissingInformer = true
 	for _, m := range mutate {
-		m(&cache)
+		m(&options)
 	}
 	mgr, err := ctrl.NewManager(asController, ctrl.Options{
 		Scheme:     controller.Scheme(),
 		Metrics:    metricsserver.Options{BindAddress: "0"},
-		Cache:      cache,
+		Cache:      options,
 		Controller: config.Controller{SkipNameValidation: new(true)},
 	})
 	if err != nil {

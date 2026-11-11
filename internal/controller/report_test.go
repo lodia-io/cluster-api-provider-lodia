@@ -27,9 +27,10 @@ import (
 )
 
 func TestANameLodiaRefusesIsReportedAndNothingIsCreated(t *testing.T) {
-	startManager(t)
+	ns := namespace(t)
+	startManager(t, ns)
 	name := strings.Repeat("a", 33)
-	cluster, lcp := create(t, namespace(t), name)
+	cluster, lcp := create(t, ns, name)
 	lodiaSecrets(t, cluster, nil)
 
 	eventually(t, func() error {

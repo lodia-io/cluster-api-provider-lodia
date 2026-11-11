@@ -24,8 +24,9 @@ import (
 )
 
 func TestAClusterGetsItsControlPlaneAndTheContract(t *testing.T) {
-	startManager(t)
-	cluster, lcp := create(t, namespace(t), "alpha")
+	ns := namespace(t)
+	startManager(t, ns)
+	cluster, lcp := create(t, ns, "alpha")
 
 	cp := controlPlaneOf(cluster)
 	eventually(t, func() error { return k8s.Get(t.Context(), client.ObjectKeyFromObject(cp), cp) })

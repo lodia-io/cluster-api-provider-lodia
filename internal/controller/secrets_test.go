@@ -179,8 +179,9 @@ func TestAResyncRepairsTheProvidersSecrets(t *testing.T) {
 		t.Errorf("sync period %v", options.SyncPeriod)
 	}
 
-	startManager(t, func(o *cache.Options) { o.SyncPeriod = new(time.Second) })
-	cluster, _ := create(t, namespace(t), "pi")
+	ns := namespace(t)
+	startManager(t, ns, func(o *cache.Options) { o.SyncPeriod = new(time.Second) })
+	cluster, _ := create(t, ns, "pi")
 	cp := controlPlaneOf(cluster)
 	eventually(t, func() error { return k8s.Get(t.Context(), client.ObjectKeyFromObject(cp), cp) })
 	issued := lodiaSecrets(t, cluster, ownedBy(cp))
@@ -203,8 +204,8 @@ func TestAResyncRepairsTheProvidersSecrets(t *testing.T) {
 }
 
 func TestTheCacheHoldsOnlyLodiasSecretsAndOnlyTheirMetadata(t *testing.T) {
-	mgr := startManager(t)
 	ns := namespace(t)
+	mgr := startManager(t, ns)
 	other := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "other"}}
 	lodias := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "lodias", Labels: map[string]string{lodiav1alpha1.ControlPlaneLabel: "x"}}}
 	for _, s := range []*corev1.Secret{other, lodias} {

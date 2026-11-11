@@ -138,8 +138,9 @@ func heldByThePause(t *testing.T, lcp *v1alpha1.LodiaControlPlane) {
 }
 
 func TestPauseStopsTheProvider(t *testing.T) {
-	startManager(t)
-	cluster, lcp := create(t, namespace(t), "delta", func(c *clusterv1.Cluster, _ *v1alpha1.LodiaControlPlane) { c.Spec.Paused = new(true) })
+	ns := namespace(t)
+	startManager(t, ns)
+	cluster, lcp := create(t, ns, "delta", func(c *clusterv1.Cluster, _ *v1alpha1.LodiaControlPlane) { c.Spec.Paused = new(true) })
 	paused := func(message string) func() error {
 		return func() error {
 			get(t, lcp)
@@ -197,8 +198,9 @@ func settled(t *testing.T, lcp *v1alpha1.LodiaControlPlane) {
 }
 
 func TestAClusterEventAloneReachesARunningManager(t *testing.T) {
-	startManager(t)
-	cluster, lcp := create(t, namespace(t), "delta-event")
+	ns := namespace(t)
+	startManager(t, ns)
+	cluster, lcp := create(t, ns, "delta-event")
 	eventually(t, func() error {
 		return k8s.Get(t.Context(), client.ObjectKeyFromObject(cluster), controlPlaneOf(cluster))
 	})

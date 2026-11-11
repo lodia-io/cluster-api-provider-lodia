@@ -63,8 +63,8 @@ func leftoverOfAnotherOwner(t *testing.T, ns, name string) (*corev1.ConfigMap, *
 }
 
 func TestALeftoverControlPlaneOfAnotherOwnerIsLeftAlone(t *testing.T) {
-	startManager(t)
 	ns := namespace(t)
+	startManager(t, ns)
 	previous, leftover := leftoverOfAnotherOwner(t, ns, "epsilon")
 	cluster, lcp := create(t, ns, "epsilon")
 
@@ -94,8 +94,8 @@ func TestALeftoverControlPlaneOfAnotherOwnerIsLeftAlone(t *testing.T) {
 }
 
 func TestALeftoverSecretOutsideTheCacheIsLeftAlone(t *testing.T) {
-	startManager(t)
 	ns := namespace(t)
+	startManager(t, ns)
 	leftover := &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "zeta-kubeconfig"},
 		Data:       map[string][]byte{secret.KubeconfigDataName: []byte("a predecessor's kubeconfig")},
