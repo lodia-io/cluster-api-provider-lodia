@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 	"time"
 
@@ -143,9 +144,20 @@ func TestLeasesAndEventsAreGrantedOnlyInTheLeaderElectionNamespace(t *testing.T)
 			}
 		}
 	}
-	for _, verb := range []string{"get", "update", "patch", "delete"} {
-		if allowed(ns, coordinationv1.GroupName, "leases", "controller-leader-election-capi", verb) {
-			t.Errorf("%s of another controller's Lease is allowed in %s", verb, ns)
+	for _, c := range []struct {
+		group, resource, name string
+		allow                 []string
+	}{
+		{coordinationv1.GroupName, "leases", "", []string{"create"}},
+		{coordinationv1.GroupName, "leases", "controlplane.lodia.io", []string{"create", "get", "update"}},
+		{coordinationv1.GroupName, "leases", "controller-leader-election-capi", []string{"create"}},
+		{corev1.GroupName, "events", "", []string{"create", "patch"}},
+		{corev1.GroupName, "events", "an-event", []string{"create", "patch"}},
+	} {
+		for _, verb := range []string{"get", "list", "watch", "create", "update", "patch", "delete", "deletecollection"} {
+			if got, want := allowed(ns, c.group, c.resource, c.name, verb), slices.Contains(c.allow, verb); got != want {
+				t.Errorf("%s %s %q in %s: allowed %v, want %v", verb, c.resource, c.name, ns, got, want)
+			}
 		}
 	}
 }
