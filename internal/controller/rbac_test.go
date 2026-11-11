@@ -19,6 +19,7 @@ import (
 	coordinationv1 "k8s.io/api/coordination/v1"
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
@@ -159,6 +160,35 @@ func TestLeasesAndEventsAreGrantedOnlyInTheLeaderElectionNamespace(t *testing.T)
 				t.Errorf("%s %s %q in %s: allowed %v, want %v", verb, c.resource, c.name, ns, got, want)
 			}
 		}
+	}
+}
+
+func TestALeaseUnderAFreeNameCanBeCreatedButAnotherControllersCannotBeReadChangedOrDeleted(t *testing.T) {
+	ns := namespace(t)
+	boundToTheLeaderElectionRole(t, ns)
+	other := &coordinationv1.Lease{
+		ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "controller-leader-election-capi"},
+		Spec:       coordinationv1.LeaseSpec{HolderIdentity: new("capi")},
+	}
+	if err := k8s.Create(t.Context(), other); err != nil {
+		t.Fatal(err)
+	}
+	c, err := client.New(asController, client.Options{Scheme: controller.Scheme()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	free := &coordinationv1.Lease{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "a-free-name"}}
+	eventually(t, func() error { return c.Create(t.Context(), free) })
+
+	if err := c.Get(t.Context(), client.ObjectKeyFromObject(other), &coordinationv1.Lease{}); !apierrors.IsForbidden(err) {
+		t.Errorf("get of another controller's Lease: %v, want forbidden", err)
+	}
+	other.Spec.HolderIdentity = new("the provider")
+	if err := c.Update(t.Context(), other); !apierrors.IsForbidden(err) {
+		t.Errorf("update of another controller's Lease: %v, want forbidden", err)
+	}
+	if err := c.Delete(t.Context(), other); !apierrors.IsForbidden(err) {
+		t.Errorf("delete of another controller's Lease: %v, want forbidden", err)
 	}
 }
 
