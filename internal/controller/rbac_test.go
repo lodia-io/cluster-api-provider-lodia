@@ -177,6 +177,9 @@ func TestTheManagerIsLeaderElectedSecuredAndBuiltOnTheCacheOptions(t *testing.T)
 		if options.LeaderElection != flags.leaderElect || options.LeaderElectionID != "controlplane.lodia.io" {
 			t.Errorf("leader election %v with ID %q, want %v", options.LeaderElection, options.LeaderElectionID, flags.leaderElect)
 		}
+		if options.LeaderElectionNamespace != "" {
+			t.Errorf("leader election in the namespace %q, want the Pod's", options.LeaderElectionNamespace)
+		}
 		if m := options.Metrics; m.BindAddress != flags.metrics || !m.SecureServing || m.FilterProvider == nil {
 			t.Errorf("metrics %+v: want them on %q over HTTPS behind a filter", m, flags.metrics)
 		}
