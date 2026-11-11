@@ -45,7 +45,7 @@ const (
 	// outsideTheBinary is what the job spends beyond -timeout: the build before
 	// the binary starts, go test's minute of grace, and the removal of the
 	// containers and the cluster.
-	outsideTheBinary = 8 * time.Minute
+	outsideTheBinary = 10 * time.Minute
 )
 
 const tenantRequestTimeout = 30 * time.Second
@@ -162,7 +162,8 @@ func TestBoundsThatDoNotFitAreRefused(t *testing.T) {
 		{"bounds that leave the calls no room", 39 * minute, 40 * minute, 50 * minute, "more than go test's -timeout"},
 		{"bounds that leave the calls their room", 38 * minute, 40 * minute, 50 * minute, ""},
 		{"a timeout the job cannot hold", 20 * minute, 45 * minute, 50 * minute, "more than the job's timeout-minutes"},
-		{"a timeout the job holds", 20 * minute, 42 * minute, 50 * minute, ""},
+		{"a timeout one minute more than the job holds", 20 * minute, 41 * minute, 50 * minute, "more than the job's timeout-minutes"},
+		{"a timeout the job holds", 20 * minute, 40 * minute, 50 * minute, ""},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
