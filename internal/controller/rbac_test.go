@@ -10,7 +10,9 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
+	lodiav1alpha1 "go.lodia.io/lodia/api/v1alpha1"
 	authenticationv1 "k8s.io/api/authentication/v1"
 	authorizationv1 "k8s.io/api/authorization/v1"
 	coordinationv1 "k8s.io/api/coordination/v1"
@@ -19,7 +21,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	"sigs.k8s.io/yaml"
 
 	"go.lodia.io/cluster-api-provider-lodia/internal/controller"
@@ -51,13 +52,12 @@ func boundToTheLeaderElectionRole(t *testing.T, ns string) {
 func TestTheRoleCoversLeaderElectionAndTheMetricsFilter(t *testing.T) {
 	ns := namespace(t)
 	boundToTheLeaderElectionRole(t, ns)
-	mgr, err := ctrl.NewManager(asController, ctrl.Options{
-		Scheme:                  controller.Scheme(),
-		Metrics:                 metricsserver.Options{BindAddress: "0"},
-		LeaderElection:          true,
-		LeaderElectionID:        "controlplane.lodia.io",
-		LeaderElectionNamespace: ns,
-	})
+	options, err := controller.ManagerOptions("0", "0", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	options.LeaderElectionNamespace = ns
+	mgr, err := ctrl.NewManager(asController, options)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -139,5 +139,33 @@ func TestLeasesAndEventsAreGrantedOnlyInTheLeaderElectionNamespace(t *testing.T)
 				t.Errorf("%s %s is allowed in %s", c.verb, c.resource, other)
 			}
 		}
+	}
+}
+
+func TestTheManagerIsLeaderElectedSecuredAndBuiltOnTheCacheOptions(t *testing.T) {
+	options, err := controller.ManagerOptions(":8443", ":8081", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !options.LeaderElection || options.LeaderElectionID != "controlplane.lodia.io" {
+		t.Errorf("leader election %v with ID %q", options.LeaderElection, options.LeaderElectionID)
+	}
+	if m := options.Metrics; m.BindAddress != ":8443" || !m.SecureServing || m.FilterProvider == nil {
+		t.Errorf("metrics %+v: want them served over HTTPS behind a filter", m)
+	}
+	if options.HealthProbeBindAddress != ":8081" {
+		t.Errorf("probes on %q", options.HealthProbeBindAddress)
+	}
+	if period := options.Cache.SyncPeriod; period == nil || *period != 10*time.Minute {
+		t.Errorf("sync period %v", period)
+	}
+	selectors := 0
+	for object, byObject := range options.Cache.ByObject {
+		if _, ok := object.(*corev1.Secret); ok && byObject.Label != nil && byObject.Label.String() == lodiav1alpha1.ControlPlaneLabel {
+			selectors++
+		}
+	}
+	if selectors != 1 {
+		t.Errorf("%d Secret selectors on Lodia's label, want 1", selectors)
 	}
 }

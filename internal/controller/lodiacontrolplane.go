@@ -40,6 +40,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
+	"sigs.k8s.io/controller-runtime/pkg/metrics/filters"
+	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
@@ -76,6 +78,27 @@ func Scheme() *runtime.Scheme {
 	utilruntime.Must(lodiav1alpha1.AddToScheme(scheme))
 	utilruntime.Must(v1alpha1.AddToScheme(scheme))
 	return scheme
+}
+
+// ManagerOptions are the manager's: leader-elected, with the metrics served
+// over HTTPS behind authentication and authorization, and CacheOptions.
+func ManagerOptions(metricsAddr, probeAddr string, leaderElect bool) (ctrl.Options, error) {
+	cache, err := CacheOptions()
+	if err != nil {
+		return ctrl.Options{}, err
+	}
+	return ctrl.Options{
+		Scheme: Scheme(),
+		Metrics: metricsserver.Options{
+			BindAddress:    metricsAddr,
+			SecureServing:  true,
+			FilterProvider: filters.WithAuthenticationAndAuthorization,
+		},
+		HealthProbeBindAddress: probeAddr,
+		LeaderElection:         leaderElect,
+		LeaderElectionID:       "controlplane.lodia.io",
+		Cache:                  cache,
+	}, nil
 }
 
 // CacheOptions keep of Secrets only Lodia's, and only their metadata, which
