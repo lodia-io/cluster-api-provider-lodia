@@ -19,7 +19,6 @@ import (
 	"path"
 	"path/filepath"
 	goruntime "runtime"
-	"slices"
 	"strings"
 	"time"
 
@@ -219,9 +218,13 @@ func installCAPD(ctx context.Context, cfg *envconf.Config) error {
 func installLodia(ctx context.Context, cfg *envconf.Config) error {
 	lodia := filepath.Join(root, "work", "lodia")
 	chart := filepath.Join(lodia, "charts", "lodia")
+	version, err := lodiaVersion(ctx, lodia)
+	if err != nil {
+		return err
+	}
 	args := []string{"--install", "--create-namespace"}
 	for _, build := range []struct{ values, command string }{{"image", "./cmd/lodia"}, {"signerImage", "./cmd/lodia-signer"}, {"tunnelImage", "./cmd/lodia-tunnel"}} {
-		out, err := ko(ctx, cfg, lodia, nil, "build", build.command)
+		out, err := ko(ctx, cfg, lodia, []string{"VERSION=" + version}, nil, "build", build.command)
 		if err != nil {
 			return err
 		}
@@ -238,7 +241,7 @@ func installLodia(ctx context.Context, cfg *envconf.Config) error {
 	if out, err := exec.CommandContext(ctx, "helm", "dependency", "build", chart, "--kubeconfig", cfg.KubeconfigFile()).CombinedOutput(); err != nil {
 		return fmt.Errorf("build the chart's dependencies: %w\n%s", err, out)
 	}
-	err := helm.New(cfg.KubeconfigFile()).RunUpgrade(
+	err = helm.New(cfg.KubeconfigFile()).RunUpgrade(
 		helm.WithName(lodiaRelease), helm.WithChart(chart), helm.WithNamespace(lodiaNamespace), helm.WithContext(ctx),
 		helm.WithArgs(args...), helm.WithWait(), helm.WithTimeout("5m"))
 	if err != nil {
@@ -254,7 +257,7 @@ func installProvider(ctx context.Context, cfg *envconf.Config) error {
 	if err != nil {
 		return fmt.Errorf("build config/default: %w", err)
 	}
-	resolved, err := ko(ctx, cfg, root, bytes.NewReader(built), "resolve", "-f", "-")
+	resolved, err := ko(ctx, cfg, root, nil, bytes.NewReader(built), "resolve", "-f", "-")
 	if err != nil {
 		return err
 	}
@@ -264,7 +267,15 @@ func installProvider(ctx context.Context, cfg *envconf.Config) error {
 	return available(ctx, cfg, providerNamespace, "cluster-api-provider-lodia-controller-manager")
 }
 
-func ko(ctx context.Context, cfg *envconf.Config, dir string, stdin io.Reader, verb string, args ...string) ([]byte, error) {
+func lodiaVersion(ctx context.Context, lodia string) (string, error) {
+	out, err := exec.CommandContext(ctx, "git", "-C", lodia, "rev-parse", "--short=12", "HEAD").Output()
+	if err != nil {
+		return "", fmt.Errorf("name the Lodia build: %w", err)
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
+func ko(ctx context.Context, cfg *envconf.Config, dir string, env []string, stdin io.Reader, verb string, args ...string) ([]byte, error) {
 	cluster, err := kindCluster(cfg.KubeconfigFile())
 	if err != nil {
 		return nil, err
@@ -272,9 +283,7 @@ func ko(ctx context.Context, cfg *envconf.Config, dir string, stdin io.Reader, v
 	run := append([]string{"run", "github.com/google/ko@v0.19.1", verb, "--base-import-paths", "--platform=linux/" + goruntime.GOARCH}, args...)
 	cmd := exec.CommandContext(ctx, "go", run...)
 	cmd.Dir = dir
-	// ko refuses --platform beside GOARCH.
-	cmd.Env = append(slices.DeleteFunc(os.Environ(), func(env string) bool { return strings.HasPrefix(env, "GOARCH=") }),
-		"KO_DOCKER_REPO=kind.local", "KIND_CLUSTER_NAME="+cluster)
+	cmd.Env = koEnv(os.Environ(), cluster, env...)
 	cmd.Stdin = stdin
 	out, err := toolOutput(cmd)
 	if err != nil {
