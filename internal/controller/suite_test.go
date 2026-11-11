@@ -75,6 +75,7 @@ func TestMain(m *testing.M) {
 		ErrorIfCRDPathMissing: true,
 		UseExistingCluster:    new(false),
 	}
+	env.ControlPlane.GetAPIServer().Configure().Append("enable-admission-plugins", "OwnerReferencesPermissionEnforcement")
 	cfg, err := env.Start()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "start envtest:", err)
