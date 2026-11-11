@@ -19,10 +19,13 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/yaml"
 
+	"go.lodia.io/cluster-api-provider-lodia/api/v1alpha1"
 	"go.lodia.io/cluster-api-provider-lodia/internal/controller"
 )
 
@@ -143,21 +146,46 @@ func TestLeasesAndEventsAreGrantedOnlyInTheLeaderElectionNamespace(t *testing.T)
 }
 
 func TestTheManagerIsLeaderElectedSecuredAndBuiltOnTheCacheOptions(t *testing.T) {
-	options, err := controller.ManagerOptions(":8443", ":8081", true)
+	for _, flags := range []struct {
+		metrics, probes string
+		leaderElect     bool
+	}{
+		{":9443", ":9081", false},
+		{"127.0.0.1:9444", "127.0.0.1:9082", true},
+	} {
+		options, err := controller.ManagerOptions(flags.metrics, flags.probes, flags.leaderElect)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if options.LeaderElection != flags.leaderElect || options.LeaderElectionID != "controlplane.lodia.io" {
+			t.Errorf("leader election %v with ID %q, want %v", options.LeaderElection, options.LeaderElectionID, flags.leaderElect)
+		}
+		if m := options.Metrics; m.BindAddress != flags.metrics || !m.SecureServing || m.FilterProvider == nil {
+			t.Errorf("metrics %+v: want them on %q over HTTPS behind a filter", m, flags.metrics)
+		}
+		if options.HealthProbeBindAddress != flags.probes {
+			t.Errorf("probes on %q, want %q", options.HealthProbeBindAddress, flags.probes)
+		}
+	}
+
+	options, err := controller.ManagerOptions(":9443", ":9081", true)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !options.LeaderElection || options.LeaderElectionID != "controlplane.lodia.io" {
-		t.Errorf("leader election %v with ID %q", options.LeaderElection, options.LeaderElectionID)
-	}
-	if m := options.Metrics; m.BindAddress != ":8443" || !m.SecureServing || m.FilterProvider == nil {
-		t.Errorf("metrics %+v: want them served over HTTPS behind a filter", m)
-	}
-	if options.HealthProbeBindAddress != ":8081" {
-		t.Errorf("probes on %q", options.HealthProbeBindAddress)
+	for _, kind := range []schema.GroupVersionKind{
+		v1alpha1.GroupVersion.WithKind("LodiaControlPlane"),
+		lodiav1alpha1.GroupVersion.WithKind("ControlPlane"),
+		clusterv1.GroupVersion.WithKind("Cluster"),
+	} {
+		if options.Scheme == nil || !options.Scheme.Recognizes(kind) {
+			t.Errorf("the scheme does not recognize %s", kind)
+		}
 	}
 	if period := options.Cache.SyncPeriod; period == nil || *period != 10*time.Minute {
 		t.Errorf("sync period %v", period)
+	}
+	if len(options.Cache.DefaultNamespaces) != 0 {
+		t.Errorf("the cache is limited to the namespaces %v", options.Cache.DefaultNamespaces)
 	}
 	selectors := 0
 	for object, byObject := range options.Cache.ByObject {
