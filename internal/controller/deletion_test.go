@@ -7,7 +7,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
 	"testing"
 
 	lodiav1alpha1 "go.lodia.io/lodia/api/v1alpha1"
@@ -16,6 +15,7 @@ import (
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
 	"go.lodia.io/cluster-api-provider-lodia/api/v1alpha1"
 )
@@ -44,7 +44,7 @@ func TestDeletingWaitsUntilTheControlPlaneIsGone(t *testing.T) {
 		return ready(lcp, metav1.ConditionFalse, clusterv1.DeletingReason, "waiting for ControlPlane gamma to be deleted")
 	})
 	available(t, lcp, metav1.ConditionFalse, clusterv1.DeletingReason)
-	if !strings.Contains(strings.Join(lcp.Finalizers, ","), v1alpha1.Finalizer) {
+	if !controllerutil.ContainsFinalizer(lcp, v1alpha1.Finalizer) {
 		t.Errorf("finalizers %v", lcp.Finalizers)
 	}
 
@@ -120,7 +120,7 @@ func TestAFailedFinalizerRemovalIsRetried(t *testing.T) {
 		t.Fatalf("the pass returned %v", err)
 	}
 	get(t, lcp)
-	if !strings.Contains(strings.Join(lcp.Finalizers, ","), v1alpha1.Finalizer) {
+	if !controllerutil.ContainsFinalizer(lcp, v1alpha1.Finalizer) {
 		t.Errorf("finalizers %v", lcp.Finalizers)
 	}
 	passes(t, r, lcp)
@@ -144,7 +144,7 @@ func TestATransientClusterReadWhileDeletingKeepsTheFinalizer(t *testing.T) {
 		t.Fatalf("the pass returned %v", err)
 	}
 	get(t, lcp)
-	if !strings.Contains(strings.Join(lcp.Finalizers, ","), v1alpha1.Finalizer) {
+	if !controllerutil.ContainsFinalizer(lcp, v1alpha1.Finalizer) {
 		t.Errorf("finalizers %v", lcp.Finalizers)
 	}
 }
@@ -157,7 +157,7 @@ func TestAGoneClusterKeepsTheFinalizerUntilDeletion(t *testing.T) {
 		t.Fatalf("the pass returned %v", err)
 	}
 	get(t, lcp)
-	if !strings.Contains(strings.Join(lcp.Finalizers, ","), v1alpha1.Finalizer) {
+	if !controllerutil.ContainsFinalizer(lcp, v1alpha1.Finalizer) {
 		t.Errorf("finalizers %v", lcp.Finalizers)
 	}
 }
@@ -179,7 +179,7 @@ func TestAReadErrorWhileDeletingKeepsTheFinalizer(t *testing.T) {
 		t.Fatalf("the pass returned %v", err)
 	}
 	get(t, lcp)
-	if !strings.Contains(strings.Join(lcp.Finalizers, ","), v1alpha1.Finalizer) {
+	if !controllerutil.ContainsFinalizer(lcp, v1alpha1.Finalizer) {
 		t.Errorf("finalizers %v", lcp.Finalizers)
 	}
 	get(t, cp)
@@ -214,7 +214,7 @@ func TestAFailedDeleteIsReturnedAndKeepsTheFinalizer(t *testing.T) {
 		t.Fatalf("the pass returned %v", err)
 	}
 	get(t, lcp)
-	if !strings.Contains(strings.Join(lcp.Finalizers, ","), v1alpha1.Finalizer) {
+	if !controllerutil.ContainsFinalizer(lcp, v1alpha1.Finalizer) {
 		t.Errorf("finalizers %v", lcp.Finalizers)
 	}
 	get(t, cp)

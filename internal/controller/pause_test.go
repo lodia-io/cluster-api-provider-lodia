@@ -7,7 +7,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
 	"testing"
 	"time"
 
@@ -16,6 +15,7 @@ import (
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
 	"go.lodia.io/cluster-api-provider-lodia/api/v1alpha1"
 )
@@ -136,7 +136,7 @@ func TestAFailedPausedWriteKeepsTheFinalizerOnceTheClusterIsGone(t *testing.T) {
 func heldByThePause(t *testing.T, lcp *v1alpha1.LodiaControlPlane) {
 	t.Helper()
 	get(t, lcp)
-	if !strings.Contains(strings.Join(lcp.Finalizers, ","), v1alpha1.Finalizer) {
+	if !controllerutil.ContainsFinalizer(lcp, v1alpha1.Finalizer) {
 		t.Errorf("finalizers %v", lcp.Finalizers)
 	}
 	if c := condition(lcp, clusterv1.PausedCondition); c == nil || c.Status != metav1.ConditionTrue || c.Reason != clusterv1.PausedReason {
