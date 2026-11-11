@@ -1,15 +1,16 @@
 # End-to-end test
 
-The suite runs only against a kind cluster whose kubeconfig is named on the command line, in `E2E_KUBECONFIG`, and refuses any other: [`guard.go`](guard.go) wants a single context whose name starts with `kind-lodia-e2e`, so it never reaches a cluster through the current kube context.
+The suite runs only against a kind cluster whose kubeconfig is named on the command line, in `E2E_KUBECONFIG`, and refuses any other: [`guard.go`](guard.go) wants a single context whose name starts with `kind-capl-e2e` and whose server is a loopback address, as kind writes it, so it never reaches a cluster through the current kube context or one that only carries the name.
+The prefix is not Lodia's `lodia-e2e`: this guard refuses Lodia's own e2e cluster, `kind-lodia-e2e-local`, in which the suite would upgrade Lodia, and Lodia's guard refuses this one.
 It also refuses to start while a `HELM_KUBE*` variable is set, since helm [lays them over](https://github.com/helm/helm/blob/v4.3.1/pkg/cli/environment.go#L97-L130) `--kubeconfig`.
 
-`make e2e` creates the kind cluster `lodia-e2e-capi`, runs the suite and deletes the cluster.
+`make e2e` creates the kind cluster `capl-e2e`, runs the suite and deletes the cluster.
 `E2E_CLUSTER` changes the name.
-`make e2e` refuses, before it creates anything, a name that does not start with `lodia-e2e`, that has a character outside `a-z`, `0-9` and `-`, that ends in `-w` or that is longer than 30 characters.
+`make e2e` refuses, before it creates anything, a name that does not start with `capl-e2e`, that has a character outside `a-z`, `0-9` and `-`, that ends in `-w` or that is longer than 30 characters.
 The prefix is the one the guard wants, and a name ending in `-w` is refused because a run named `x` removes the containers labelled `x-w`, which are also the nodes of a kind cluster named `x-w`.
 The Cluster is named `<E2E_CLUSTER>-w`: CAPD [labels](https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/test/infrastructure/docker/internal/docker/util.go#L31) its containers with the Cluster's name in kind's own [label](https://github.com/kubernetes-sigs/kind/blob/v0.33.0/pkg/cluster/internal/providers/docker/constants.go#L21) for the nodes of a cluster, so that name must not be the kind cluster's, and Lodia [requires](https://github.com/lodia-io/lodia/blob/57375832e7fe8b3a06374613797eb4c544fe7612/api/v1alpha1/controlplane_types.go#L17) the name of the `ControlPlane`, the Cluster's, to be a DNS-1035 label of at most 32 characters.
 The cluster has one node of kind's default image, with the Docker socket that CAPD needs and the admission plugin `OwnerReferencesPermissionEnforcement`, which [refuses](https://github.com/kubernetes/kubernetes/blob/v1.37.0/plugin/pkg/admission/gc/gc_admission.go#L149) an owner reference with `blockOwnerDeletion` to an object whose finalizers the writer cannot set.
-After it creates the cluster and again at the end, `make e2e` removes the containers labelled for the Cluster, with their volumes; on a Linux host, delete the cluster of a killed run first: `go tool kind delete cluster --name lodia-e2e-capi --kubeconfig work/e2e/lodia-e2e-capi/kubeconfig`.
+After it creates the cluster and again at the end, `make e2e` removes the containers labelled for the Cluster, with their volumes; on a Linux host, delete the cluster of a killed run first: `go tool kind delete cluster --name capl-e2e --kubeconfig work/e2e/capl-e2e/kubeconfig`.
 
 The suite needs Docker and helm on the `PATH`, and runs where the Docker network `kind` is routable from the test process, as on GitHub's Linux runners: it dials the tenant's API server at a kind node's address on that network.
 Docker Desktop does not route it, so the suite does not run on macOS.
