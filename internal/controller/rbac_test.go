@@ -22,26 +22,37 @@ import (
 	rbacv1 "k8s.io/api/rbac/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/runtime/serializer"
+	"k8s.io/client-go/kubernetes/scheme"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/yaml"
 
 	"go.lodia.io/cluster-api-provider-lodia/api/v1alpha1"
 	"go.lodia.io/cluster-api-provider-lodia/internal/controller"
 )
 
-func leaderElectionRole(t *testing.T) *rbacv1.Role {
+func decodeRBAC(t *testing.T, file string, into runtime.Object) {
 	t.Helper()
-	manifest, err := os.ReadFile(filepath.Join("..", "..", "config", "rbac", "leader_election_role.yaml"))
+	manifest, err := os.ReadFile(filepath.Join("..", "..", "config", "rbac", file))
 	if err != nil {
 		t.Fatal(err)
 	}
-	role := &rbacv1.Role{}
-	if err := yaml.UnmarshalStrict(manifest, role); err != nil {
-		t.Fatal(err)
+	obj, _, err := serializer.NewCodecFactory(scheme.Scheme, serializer.EnableStrict).UniversalDeserializer().Decode(manifest, nil, into)
+	if err != nil {
+		t.Fatalf("%s: %v", file, err)
 	}
+	if obj != into {
+		t.Fatalf("%s holds a %T, want a %T", file, obj, into)
+	}
+}
+
+func leaderElectionRole(t *testing.T) *rbacv1.Role {
+	t.Helper()
+	role := &rbacv1.Role{}
+	decodeRBAC(t, "leader_election_role.yaml", role)
 	return role
 }
 
