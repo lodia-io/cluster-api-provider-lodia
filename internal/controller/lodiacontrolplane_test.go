@@ -166,6 +166,29 @@ func boundToTheClusterRole(cfg *rest.Config) (*rest.Config, error) {
 	return controller, nil
 }
 
+func boundToTheLeaderElectionRole(t *testing.T, ns string) {
+	t.Helper()
+	manifest, err := os.ReadFile(filepath.Join("..", "..", "config", "rbac", "leader_election_role.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	role := &rbacv1.Role{}
+	if err := yaml.UnmarshalStrict(manifest, role); err != nil {
+		t.Fatal(err)
+	}
+	role.Namespace = ns
+	binding := &rbacv1.RoleBinding{
+		ObjectMeta: metav1.ObjectMeta{Name: role.Name, Namespace: ns},
+		RoleRef:    rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "Role", Name: role.Name},
+		Subjects:   []rbacv1.Subject{{APIGroup: rbacv1.GroupName, Kind: rbacv1.UserKind, Name: asController.Impersonate.UserName}},
+	}
+	for _, obj := range []client.Object{role, binding} {
+		if err := k8s.Create(t.Context(), obj); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
 func startManager(t *testing.T, mutate ...func(*cache.Options)) ctrl.Manager {
 	t.Helper()
 	return startManagerWith(t, ctrl.Manager.GetClient, mutate...)
@@ -1961,6 +1984,7 @@ func TestAnEditOfAFieldTheProviderOwnsIsReverted(t *testing.T) {
 
 func TestTheRoleCoversLeaderElectionAndTheMetricsFilter(t *testing.T) {
 	ns := namespace(t)
+	boundToTheLeaderElectionRole(t, ns)
 	mgr, err := ctrl.NewManager(asController, ctrl.Options{
 		Scheme:                  controller.Scheme(),
 		Metrics:                 metricsserver.Options{BindAddress: "0"},
@@ -2012,6 +2036,42 @@ func TestTheRoleCoversLeaderElectionAndTheMetricsFilter(t *testing.T) {
 		}
 		if !review.Status.Allowed {
 			t.Errorf("%s %s is not allowed: %s", attributes.Verb, attributes.Resource, review.Status.Reason)
+		}
+	}
+}
+
+func TestLeasesAndEventsAreGrantedOnlyInTheLeaderElectionNamespace(t *testing.T) {
+	ns := namespace(t)
+	boundToTheLeaderElectionRole(t, ns)
+	allowed := func(namespace, group, resource, verb string) bool {
+		review := &authorizationv1.SubjectAccessReview{Spec: authorizationv1.SubjectAccessReviewSpec{
+			User: asController.Impersonate.UserName,
+			ResourceAttributes: &authorizationv1.ResourceAttributes{
+				Namespace: namespace, Group: group, Resource: resource, Verb: verb,
+			},
+		}}
+		if err := k8s.Create(t.Context(), review); err != nil {
+			t.Fatal(err)
+		}
+		return review.Status.Allowed
+	}
+	for _, c := range []struct{ group, resource, verb string }{
+		{coordinationv1.GroupName, "leases", "create"},
+		{coordinationv1.GroupName, "leases", "get"},
+		{coordinationv1.GroupName, "leases", "update"},
+		{corev1.GroupName, "events", "create"},
+		{corev1.GroupName, "events", "patch"},
+	} {
+		eventually(t, func() error {
+			if !allowed(ns, c.group, c.resource, c.verb) {
+				return fmt.Errorf("%s %s is not allowed in %s", c.verb, c.resource, ns)
+			}
+			return nil
+		})
+		for _, other := range []string{metav1.NamespaceSystem, corev1.NamespaceNodeLease} {
+			if allowed(other, c.group, c.resource, c.verb) {
+				t.Errorf("%s %s is allowed in %s", c.verb, c.resource, other)
+			}
 		}
 	}
 }

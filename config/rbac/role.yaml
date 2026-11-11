@@ -7,13 +7,6 @@ rules:
 - apiGroups:
   - ""
   resources:
-  - events
-  verbs:
-  - create
-  - patch
-- apiGroups:
-  - ""
-  resources:
   - secrets
   verbs:
   - create
@@ -62,14 +55,6 @@ rules:
   - lodiacontrolplanes/status
   verbs:
   - patch
-- apiGroups:
-  - coordination.k8s.io
-  resources:
-  - leases
-  verbs:
-  - create
-  - get
-  - update
 - apiGroups:
   - lodia.io
   resources:
