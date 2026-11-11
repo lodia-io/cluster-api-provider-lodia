@@ -78,10 +78,22 @@ func TestALeftoverControlPlaneOfAnotherOwnerIsLeftAlone(t *testing.T) {
 	if cp.Spec.Version != "v1.35.0" || cp.Generation != leftover.Generation || !metav1.IsControlledBy(cp, previous) {
 		t.Errorf("the leftover changed: version %s, generation %d, owners %v", cp.Spec.Version, cp.Generation, cp.OwnerReferences)
 	}
+}
+
+func TestTheProviderTakesOverOnceALeftoverControlPlaneIsGone(t *testing.T) {
+	ns := namespace(t)
+	startManager(t, ns)
+	_, leftover := leftoverOfAnotherOwner(t, ns, "epsilon-gone")
+	cluster, lcp := create(t, ns, "epsilon-gone")
+	eventually(t, func() error {
+		get(t, lcp)
+		return ready(lcp, metav1.ConditionFalse, v1alpha1.ObjectsControlledElsewhereReason, "")
+	})
 
 	if err := k8s.Delete(t.Context(), leftover); err != nil {
 		t.Fatal(err)
 	}
+	cp := controlPlaneOf(cluster)
 	eventually(t, func() error {
 		if err := k8s.Get(t.Context(), client.ObjectKeyFromObject(cp), cp); err != nil {
 			return err
