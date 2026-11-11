@@ -77,6 +77,7 @@ func TestTheRenderedManifestsMeetClusterctl(t *testing.T) {
 		{"a Role in another namespace grants nothing", manifest(namespace, deployment, strings.Replace(role, "namespace: ns", "namespace: kube-system", 1)+leases, binding), "has no RoleBinding in ns to a Role that grants"},
 		{"a RoleBinding in another namespace binds nothing", manifest(namespace, deployment, grant, strings.Replace(binding, "  name: b\n  namespace: ns", "  name: b\n  namespace: kube-system", 1)), "has no RoleBinding in ns to a Role that grants"},
 		{"a Deployment without a namespace", manifest(namespace, strings.Replace(deployment, "  namespace: ns\n", "", 1), grant, binding), `Deployment d is in the namespace ""`},
+		{"a Deployment without a namespace is bound to nothing", manifest(namespace, strings.Replace(deployment, "  namespace: ns\n", "", 1), grant, strings.Replace(binding, "  name: manager\n  namespace: ns\n", "  name: manager\n", 1), clusterRole, clusterBinding), "has no RoleBinding in  to a Role that grants"},
 		{"a namespaced kind clusterctl does not list", manifest(ok, fmt.Sprintf(anyKind, "Service")), `Service obj is in the namespace ""`},
 		{"no RoleBinding", manifest(namespace, deployment, grant), "has no RoleBinding in ns to a Role that grants"},
 		{"a RoleBinding to a Role that is not rendered", manifest(namespace, deployment, grant, strings.Replace(binding, "  name: r\nsubjects", "  name: leader-election\nsubjects", 1)), "has no RoleBinding in ns to a Role that grants"},
