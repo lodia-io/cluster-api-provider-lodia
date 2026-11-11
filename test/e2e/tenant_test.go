@@ -5,9 +5,13 @@ package e2e
 
 import (
 	"context"
+	"errors"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -60,7 +64,7 @@ func openTenant(ctx context.Context, t *testing.T, k8s client.Client, key client
 	return &tenantAccess{cfg: cfg, client: c, resources: r}
 }
 
-func tenantThatNeverCompletesTLS(t *testing.T) string {
+func tenantThatNeverCompletesTLS(t *testing.T) (string, func() int) {
 	t.Helper()
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -89,24 +93,72 @@ func tenantThatNeverCompletesTLS(t *testing.T) string {
 			_ = conn.Close()
 		}
 	})
-	return "https://" + ln.Addr().String()
+	return "https://" + ln.Addr().String(), func() int {
+		mu.Lock()
+		defer mu.Unlock()
+		return len(conns)
+	}
 }
 
-func tenantThatNeverAnswers(t *testing.T) string {
+func gatedTenant(t *testing.T, gate func(path string) (delay time.Duration, answers bool)) (string, func() []string) {
 	t.Helper()
-	server := httptest.NewTLSServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
-		<-r.Context().Done()
+	healthy := tenantHandler(t)
+	var (
+		mu    sync.Mutex
+		asked []string
+	)
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		asked = append(asked, r.URL.Path)
+		mu.Unlock()
+		delay, answers := gate(r.URL.Path)
+		if !answers {
+			<-r.Context().Done()
+			return
+		}
+		select {
+		case <-time.After(delay):
+			healthy.ServeHTTP(w, r)
+		case <-r.Context().Done():
+		}
 	}))
 	t.Cleanup(func() {
 		server.CloseClientConnections()
 		server.Close()
 	})
-	return server.URL
+	return server.URL, func() []string {
+		mu.Lock()
+		defer mu.Unlock()
+		return slices.Clone(asked)
+	}
 }
 
-var stalledTenants = map[string]func(*testing.T) string{
+func tenantThatNeverAnswers(t *testing.T) (string, func() int) {
+	t.Helper()
+	url, asked := gatedTenant(t, func(string) (time.Duration, bool) { return 0, false })
+	return url, func() int { return len(asked()) }
+}
+
+func tenantThatNeverAnswersApis(t *testing.T) (string, func() int) {
+	t.Helper()
+	url, asked := gatedTenant(t, func(path string) (time.Duration, bool) { return 0, path == "/api" })
+	return url, func() int { return countPaths(asked(), func(path string) bool { return path == "/apis" }) }
+}
+
+var stalledTenants = map[string]func(*testing.T) (string, func() int){
 	"a tenant that accepts connections and never completes TLS": tenantThatNeverCompletesTLS,
 	"a tenant that completes TLS and never answers":             tenantThatNeverAnswers,
+	"a tenant that answers /api and never /apis":                tenantThatNeverAnswersApis,
+}
+
+func countPaths(paths []string, match func(string) bool) int {
+	var n int
+	for _, path := range paths {
+		if match(path) {
+			n++
+		}
+	}
+	return n
 }
 
 func returnsWithin(t *testing.T, limit time.Duration, what string, call func() error) error {
@@ -134,12 +186,16 @@ func TestTheDumpOfATenantThatDoesNotAnswerEndsInItsBoundAndLeavesTimeForTheWorke
 	for name, stalled := range stalledTenants {
 		t.Run(name, func(t *testing.T) {
 			shortenTheDump(t, 4*bound, bound)
-			d := newDumpSetup(t, stalled(t))
+			url, stalls := stalled(t)
+			d := newDumpSetup(t, url)
 			err := returnsWithin(t, bound+bound/2, "the dump", func() error { return dumpBounded(t.Context(), d.cfg, d.c, d.dir) })
 			if err == nil {
 				t.Fatal("the dump says nothing about a tenant that did not answer")
 			}
 			requireFiles(t, d.dir, map[string]string{"worker/worker/journal.log": "journalctl"})
+			if n := stalls(); n <= len(tenantObjects)/2 {
+				t.Errorf("only %d of the %d lists reached the tenant: each should be cut off after a sixth of its bound", n, len(tenantObjects))
+			}
 		})
 	}
 }
@@ -149,9 +205,10 @@ func TestEveryCallToATenantThatDoesNotAnswerFails(t *testing.T) {
 	key := client.ObjectKey{Namespace: namespace, Name: "c-w"}
 	for name, stalled := range stalledTenants {
 		t.Run(name, func(t *testing.T) {
+			url, _ := stalled(t)
 			k8s := fake.NewClientBuilder().WithObjects(&corev1.Secret{
 				ObjectMeta: metav1.ObjectMeta{Namespace: key.Namespace, Name: secret.Name(key.Name, secret.Kubeconfig)},
-				Data:       map[string][]byte{secret.KubeconfigDataName: serverKubeconfig(t, stalled(t), "tenant")},
+				Data:       map[string][]byte{secret.KubeconfigDataName: serverKubeconfig(t, url, "tenant")},
 			}).Build()
 			tenant := openTenant(t.Context(), t, k8s, key, timeout)
 			if tenant.cfg.Timeout != timeout {
@@ -170,5 +227,29 @@ func TestEveryCallToATenantThatDoesNotAnswerFails(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestTheDumpStopsDiscoveringOnceTheTenantsBoundHasEnded(t *testing.T) {
+	const bound = 1500 * time.Millisecond
+	request := bound / time.Duration(len(tenantObjects))
+	url, asked := gatedTenant(t, func(path string) (time.Duration, bool) { return request * 9 / 10, path == "/api" })
+	d := newDumpSetup(t, url)
+	if err := dumpTenant(t.Context(), d.cfg, d.c, d.dir, bound); err == nil {
+		t.Fatal("the dump says nothing about a tenant that never answered /apis")
+	}
+	if n := countPaths(asked(), func(path string) bool { return path == "/apis" }); n >= len(tenantObjects) {
+		t.Fatalf("%d of the %d lists went on to discover after the tenant's bound", n, len(tenantObjects))
+	}
+}
+
+func TestTheDumpOfATenantWhoseBoundHasEndedSaysSo(t *testing.T) {
+	d := newDumpSetup(t, tenantAPI(t).URL)
+	err := dumpTenant(t.Context(), d.cfg, d.c, d.dir, time.Nanosecond)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("want the deadline of the tenant's bound, got %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(d.dir, "tenant")); !os.IsNotExist(err) {
+		t.Fatalf("the dump listed a tenant after its bound: %v", err)
 	}
 }

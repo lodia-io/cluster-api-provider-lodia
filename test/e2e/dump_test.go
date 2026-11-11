@@ -149,6 +149,10 @@ func dumpTenant(ctx context.Context, cfg *envconf.Config, c client.Client, dir s
 	}
 	var errs []error
 	for _, o := range tenantObjects {
+		if err := ctx.Err(); err != nil {
+			errs = append(errs, err)
+			break
+		}
 		errs = append(errs, dumpObjects(ctx, tenant, filepath.Join(dir, "tenant"), o.kind, o.namespace))
 	}
 	return errors.Join(errs...)
@@ -198,7 +202,14 @@ var tenantKinds = map[string]string{"nodes": "Node", "pods": "Pod", "daemonsets"
 
 func tenantAPI(t *testing.T) *httptest.Server {
 	t.Helper()
-	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := httptest.NewTLSServer(tenantHandler(t))
+	t.Cleanup(server.Close)
+	return server
+}
+
+func tenantHandler(t *testing.T) http.Handler {
+	t.Helper()
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/api":
 			respond(t, w, `{"kind":"APIVersions","versions":["v1"]}`)
@@ -215,9 +226,7 @@ func tenantAPI(t *testing.T) *httptest.Server {
 			}
 			respond(t, w, fmt.Sprintf(`{"kind":"%sList","apiVersion":%q,"items":[{"metadata":{"name":%q}}]}`, tenantKinds[path.Base(r.URL.Path)], groupVersion, r.URL.Path))
 		}
-	}))
-	t.Cleanup(server.Close)
-	return server
+	})
 }
 
 func respond(t *testing.T, w http.ResponseWriter, body string) {

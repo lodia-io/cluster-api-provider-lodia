@@ -72,11 +72,13 @@ func fits(bounded, timeout, limit time.Duration) error {
 	return nil
 }
 
-// A discovery asks /api and then /apis, each with the request timeout, so a
-// call to a tenant that does not answer can take two of them.
+// Nothing stops a discovery once the context has ended, and it asks /api,
+// /apis and a group's version, each with the request timeout: a step can end
+// three request timeouts after its bound, and the tenant's part of the dump a
+// discovery, half the bound, after its own.
 func tenantFits(requestTimeout, dumpBound, dump time.Duration) error {
-	if requestTimeout <= 0 || 2*requestTimeout > callsWithoutBound {
-		return fmt.Errorf("the tenant's request timeout %s is not positive, or two of them are more than the %s left for the calls without a bound: a step against a tenant that does not answer could overshoot its bound by that much", requestTimeout, callsWithoutBound)
+	if requestTimeout <= 0 || 3*requestTimeout > callsWithoutBound {
+		return fmt.Errorf("the tenant's request timeout %s is not positive, or three of them are more than the %s left for the calls without a bound: a step against a tenant that does not answer could overshoot its bound by that much", requestTimeout, callsWithoutBound)
 	}
 	if dumpBound <= 0 || 2*dumpBound >= dump {
 		return fmt.Errorf("the tenant's part of the dump %s is not positive, or two of them are not less than the dump's %s: a tenant that does not answer would leave the workers no time", dumpBound, dump)
@@ -168,8 +170,8 @@ func TestTenantTimesThatDoNotFitAreRefused(t *testing.T) {
 		requestTimeout, dumpBound, dump time.Duration
 		want                            string
 	}{
-		{"a request timeout of 60 seconds against 120", 60 * second, 30 * second, 120 * second, ""},
-		{"a request timeout of 61 seconds against 120", 61 * second, 30 * second, 120 * second, "request timeout"},
+		{"a request timeout of 40 seconds against 120", 40 * second, 30 * second, 120 * second, ""},
+		{"a request timeout of 41 seconds against 120", 41 * second, 30 * second, 120 * second, "request timeout"},
 		{"no request timeout", 0, 30 * second, 120 * second, "request timeout"},
 		{"a negative request timeout", -second, 30 * second, 120 * second, "request timeout"},
 		{"a tenant dump of 59 seconds against 120", 30 * second, 59 * second, 120 * second, ""},
