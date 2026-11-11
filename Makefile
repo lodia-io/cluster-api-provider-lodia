@@ -4,6 +4,7 @@ E2E_DIR = $(CURDIR)/work/e2e/$(E2E_CLUSTER)
 LODIA_DIR = $(CURDIR)/work/lodia
 LODIA_COMMIT = 57375832e7fe8b3a06374613797eb4c544fe7612
 REMOVE_WORKERS = docker ps --all --quiet --filter label=io.x-k8s.kind.cluster=$(E2E_CLUSTER)-w | xargs -r docker rm --force --volumes
+KUSTOMIZE = sigs.k8s.io/kustomize/kustomize/v5@v5.7.0
 GENERATED = api/v1alpha1/zz_generated.deepcopy.go config/crd/bases/*.yaml config/rbac/role.yaml
 
 .PHONY: generate
@@ -21,12 +22,17 @@ lint:
 test: ## unit and envtest tests; envtest runs a real API server and etcd
 	KUBEBUILDER_ASSETS="$$(go tool setup-envtest use $(ENVTEST_K8S_VERSION) -p path)" go test ./...
 
+.PHONY: components
+components: ## render config/default and check what clusterctl asks of a components YAML
+	@rendered="$$(go run $(KUSTOMIZE) build config/default)" || exit 1; \
+	printf '%s\n' "$$rendered" | go run ./test/components
+
 .PHONY: verify
 verify: ## the check that says a change is done
 	@before="$$(cat $(GENERATED) | cksum)"; $(MAKE) --no-print-directory generate; \
 	[ "$$before" = "$$(cat $(GENERATED) | cksum)" ] || { echo "make generate changed the generated files: review and commit them"; exit 1; }
 	go mod tidy -diff
-	$(MAKE) --no-print-directory lint test
+	$(MAKE) --no-print-directory components lint test
 
 # LC_ALL=C: a range in a case pattern follows the locale, and on macOS en_US.UTF-8 puts A in a-z.
 .PHONY: e2e-cluster
