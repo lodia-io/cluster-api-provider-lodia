@@ -9,8 +9,6 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -267,13 +265,14 @@ func TestTheDumpStopsListingATenantAtItsBound(t *testing.T) {
 }
 
 func TestTheDumpOfATenantWhoseBoundHasEndedSaysSo(t *testing.T) {
-	d := newDumpSetup(t, tenantAPI(t).URL)
+	url, asked := gatedTenant(t, func(string) (time.Duration, bool) { return 0, true })
+	d := newDumpSetup(t, url)
 	err := dumpTenant(t.Context(), d.cfg, d.c, d.dir, time.Nanosecond)
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("want the deadline of the tenant's bound, got %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(d.dir, "tenant")); !os.IsNotExist(err) {
-		t.Fatalf("the dump listed a tenant after its bound: %v", err)
+	if got := asked(); len(got) > 0 {
+		t.Fatalf("the dump sent %v to a tenant after its bound", got)
 	}
 }
 
