@@ -10,18 +10,14 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 
-	"k8s.io/client-go/tools/clientcmd"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/e2e-framework/pkg/env"
 	"sigs.k8s.io/e2e-framework/pkg/envconf"
 )
-
-const clusterLabel = "io.x-k8s.kind.cluster"
 
 var (
 	testenv env.Environment
@@ -37,6 +33,23 @@ func TestMain(m *testing.M) {
 	testenv = env.NewWithConfig(envconf.NewWithKubeConfig(path))
 	testenv.Setup(install)
 	os.Exit(testenv.Run(m))
+}
+
+func workDir(cfg *envconf.Config) string {
+	return filepath.Dir(cfg.KubeconfigFile())
+}
+
+func dump(ctx context.Context, cfg *envconf.Config) {
+	ctx, cancel := context.WithTimeout(ctx, bounds.Dump)
+	defer cancel()
+	c, err := client.New(cfg.Client().RESTConfig(), client.Options{})
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "dump:", err)
+		return
+	}
+	if err := dumpAll(ctx, cfg, c, filepath.Join(workDir(cfg), "artifacts")); err != nil {
+		fmt.Fprintln(os.Stderr, "dump:", err)
+	}
 }
 
 func install(ctx context.Context, cfg *envconf.Config) (context.Context, error) {
@@ -60,31 +73,4 @@ func install(ctx context.Context, cfg *envconf.Config) (context.Context, error) 
 		fmt.Printf("installed %s after %s\n", component.name, time.Since(start).Round(time.Second))
 	}
 	return ctx, nil
-}
-
-func workDir(cfg *envconf.Config) string {
-	return filepath.Dir(cfg.KubeconfigFile())
-}
-
-// The Cluster is not named as the kind cluster: CAPD labels its containers
-// with kind's own label, so kind counts them as its nodes.
-func clusterName(cfg *envconf.Config) (string, error) {
-	kind, err := kindCluster(cfg.KubeconfigFile())
-	return kind + "-w", err
-}
-
-func docker(ctx context.Context, args ...string) (string, error) {
-	out, err := exec.CommandContext(ctx, "docker", args...).CombinedOutput()
-	if err != nil {
-		return "", fmt.Errorf("docker %s: %w\n%s", args[0], err, out)
-	}
-	return string(out), nil
-}
-
-func kindCluster(kubeconfig string) (string, error) {
-	cfg, err := clientcmd.LoadFromFile(kubeconfig)
-	if err != nil {
-		return "", err
-	}
-	return strings.TrimPrefix(cfg.CurrentContext, "kind-"), nil
 }

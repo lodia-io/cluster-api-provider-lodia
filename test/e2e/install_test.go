@@ -34,11 +34,7 @@ import (
 	"sigs.k8s.io/e2e-framework/third_party/helm"
 )
 
-const (
-	lodiaRelease      = "lodia"
-	lodiaNamespace    = "lodia-system"
-	providerNamespace = "cluster-api-provider-lodia-system"
-)
+const lodiaRelease = "lodia"
 
 type release struct {
 	url    string
