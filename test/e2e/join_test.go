@@ -280,11 +280,17 @@ func TestAWorkerJoinsAClusterOfLodiasControlPlane(t *testing.T) {
 			})
 			return ctx
 		}).
-		Assess("deleting the Cluster removes the LodiaControlPlane, the ControlPlane, the etcd claim and the worker's container", func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
+		Assess("deleting the Cluster removes the LodiaControlPlane, the ControlPlane, the etcd claim, the copied Secrets and the worker's container", func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
 			etcd := lodiav1alpha1.EtcdName(key.Name)
-			claim := &corev1.PersistentVolumeClaim{ObjectMeta: metav1.ObjectMeta{Namespace: key.Namespace, Name: etcd + "-" + etcd + "-0"}}
-			if err := k8s.Get(ctx, client.ObjectKeyFromObject(claim), claim); err != nil {
-				t.Fatalf("the etcd claim, whose removal this step checks: %v", err)
+			owned := []client.Object{
+				&corev1.PersistentVolumeClaim{ObjectMeta: metav1.ObjectMeta{Namespace: key.Namespace, Name: etcd + "-" + etcd + "-0"}},
+				&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: key.Namespace, Name: secret.Name(key.Name, secret.Kubeconfig)}},
+				&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: key.Namespace, Name: secret.Name(key.Name, secret.ClusterCA)}},
+			}
+			for _, obj := range owned {
+				if err := k8s.Get(ctx, client.ObjectKeyFromObject(obj), obj); err != nil {
+					t.Fatalf("%T %s, whose removal this step checks: %v", obj, obj.GetName(), err)
+				}
 			}
 			containers, err := clusterContainers(ctx, key.Name)
 			if err != nil {
@@ -297,12 +303,11 @@ func TestAWorkerJoinsAClusterOfLodiasControlPlane(t *testing.T) {
 				t.Fatal(err)
 			}
 			until(ctx, t, bounds.Deleted, "everything the Cluster made is gone", func(ctx context.Context) error {
-				for _, obj := range []client.Object{
+				for _, obj := range append([]client.Object{
 					&clusterv1.Cluster{ObjectMeta: metav1.ObjectMeta{Namespace: key.Namespace, Name: key.Name}},
 					&v1alpha1.LodiaControlPlane{ObjectMeta: metav1.ObjectMeta{Namespace: key.Namespace, Name: key.Name}},
 					&lodiav1alpha1.ControlPlane{ObjectMeta: metav1.ObjectMeta{Namespace: key.Namespace, Name: key.Name}},
-					claim,
-				} {
+				}, owned...) {
 					if err := gone(k8s.Get(ctx, client.ObjectKeyFromObject(obj), obj)); err != nil {
 						return fmt.Errorf("%T %s: %w", obj, obj.GetName(), err)
 					}
