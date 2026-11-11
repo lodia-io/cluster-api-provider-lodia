@@ -26,6 +26,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 	"sigs.k8s.io/e2e-framework/klient/k8s/resources"
+	"sigs.k8s.io/e2e-framework/pkg/envconf"
 )
 
 type tenantAccess struct {
@@ -288,5 +289,20 @@ func TestTheDumpReadsTheTenantsKubeconfigWithinItsBound(t *testing.T) {
 	err := returnsWithin(t, 2*bound, "the dump of the tenant", func() error { return dumpTenant(t.Context(), d.cfg, management, d.dir, bound) })
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("want the deadline of the tenant's bound, got %v", err)
+	}
+}
+
+func TestTheDumpOfAManagementClusterThatDoesNotAnswerEndsInItsBound(t *testing.T) {
+	const bound = time.Second
+	shortenTheDump(t, bound, bound/4)
+	d := newDumpSetup(t, tenantAPI(t).URL)
+	stalled, _ := tenantThatNeverAnswers(t)
+	kubeconfig := filepath.Join(t.TempDir(), "kubeconfig")
+	if err := os.WriteFile(kubeconfig, serverKubeconfig(t, stalled, "kind-capl-e2e"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	d.cfg = envconf.NewWithKubeConfig(kubeconfig)
+	if err := returnsWithin(t, 2*bound, "the dump", func() error { return dumpBounded(t.Context(), d.cfg, d.c, d.dir) }); err == nil {
+		t.Fatal("the dump says nothing about a management cluster that did not answer")
 	}
 }
