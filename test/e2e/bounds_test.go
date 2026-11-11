@@ -16,12 +16,14 @@ import (
 	"sigs.k8s.io/yaml"
 )
 
-// bounds holds every wait of the suite. A step's own bound has to fail before
-// go test gives up, since only the step's failure writes the artifacts.
-var bounds = struct {
+type boundSet struct {
 	Install, Dump                                                                                time.Duration
 	Apply, Initialized, Endpoint, Kindnet, Running, Ready, Konnectivity, Pod, Available, Deleted time.Duration
-}{
+}
+
+// bounds holds every wait of the suite. A step's own bound has to fail before
+// go test gives up, since only the step's failure writes the artifacts.
+var bounds = boundSet{
 	Install:      15 * time.Minute,
 	Dump:         2 * time.Minute,
 	Apply:        time.Minute,
@@ -48,9 +50,9 @@ const (
 
 var goTestTimeout = regexp.MustCompile(`-timeout (\d+)m\b`)
 
-func total() time.Duration {
+func total(b boundSet) time.Duration {
 	var sum time.Duration
-	for _, bound := range reflect.ValueOf(bounds).Fields() {
+	for _, bound := range reflect.ValueOf(b).Fields() {
 		sum += time.Duration(bound.Int())
 	}
 	return sum
@@ -95,8 +97,22 @@ func TestTheBoundsFitUnderTheTimeouts(t *testing.T) {
 	if limit == 0 {
 		t.Fatal("the e2e job has no timeout-minutes")
 	}
-	if err := fits(total(), time.Duration(n)*time.Minute, time.Duration(limit)*time.Minute); err != nil {
+	if err := fits(total(bounds), time.Duration(n)*time.Minute, time.Duration(limit)*time.Minute); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestTotalAddsEveryBound(t *testing.T) {
+	var b boundSet
+	var want time.Duration
+	fields := reflect.ValueOf(&b).Elem()
+	for i := range fields.NumField() {
+		d := time.Duration(1<<i) * time.Minute
+		fields.Field(i).SetInt(int64(d))
+		want += d
+	}
+	if got := total(b); got != want {
+		t.Fatalf("total is %s, the bounds add up to %s", got, want)
 	}
 }
 
