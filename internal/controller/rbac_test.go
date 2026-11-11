@@ -141,6 +141,20 @@ func TestTheLeaderElectionRoleHoldsNothingBeyondItsLeaseAndEventRules(t *testing
 	}
 }
 
+func TestTheLeaderElectionRoleIsBoundOnlyToTheManager(t *testing.T) {
+	role := leaderElectionRole(t)
+	binding := &rbacv1.RoleBinding{}
+	decodeRBAC(t, "leader_election_role_binding.yaml", binding)
+	wantRef := rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "Role", Name: role.Name}
+	if diff := cmp.Diff(wantRef, binding.RoleRef); diff != "" {
+		t.Errorf("the binding's roleRef (-want +got):\n%s", diff)
+	}
+	wantSubjects := []rbacv1.Subject{{Kind: rbacv1.ServiceAccountKind, Name: "manager", Namespace: role.Namespace}}
+	if diff := cmp.Diff(wantSubjects, binding.Subjects); diff != "" {
+		t.Errorf("the binding's subjects (-want +got):\n%s", diff)
+	}
+}
+
 func TestTheClusterRoleGrantsNothingOnLeasesOrEvents(t *testing.T) {
 	role := &rbacv1.ClusterRole{}
 	decodeRBAC(t, "role.yaml", role)
