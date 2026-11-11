@@ -105,3 +105,40 @@ func TestAControlPlaneReplacedBeforeTheApplyIsLeftAlone(t *testing.T) {
 		t.Errorf("the replacement changed: uid %s, generation %d, owners %v", got.UID, got.Generation, got.OwnerReferences)
 	}
 }
+
+func TestAControlPlaneReplacedBeforeTheDeleteIsLeftAlone(t *testing.T) {
+	cluster, lcp, cp, r, _ := readyControlPlane(t, "tau-delete")
+	if err := k8s.Delete(t.Context(), lcp); err != nil {
+		t.Fatal(err)
+	}
+	replacement := cp.DeepCopy()
+	replacement.ObjectMeta = metav1.ObjectMeta{Namespace: cp.Namespace, Name: cp.Name, Finalizers: []string{lodiav1alpha1.DatastoreFinalizer}}
+	racing := direct(t, interceptor.Funcs{
+		Delete: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.DeleteOption) error {
+			if replacement.UID == "" {
+				if err := k8s.Delete(ctx, controlPlaneOf(cluster)); err != nil {
+					return err
+				}
+				if err := k8s.Create(ctx, replacement); err != nil {
+					return err
+				}
+			}
+			return c.Delete(ctx, obj, opts...)
+		},
+	})
+	if err := pass(t.Context(), racing, lcp); !apierrors.IsConflict(err) {
+		t.Fatalf("the pass returned %v, want a conflict on the UID", err)
+	}
+	got := controlPlaneOf(cluster)
+	get(t, got)
+	if got.UID != replacement.UID || !got.DeletionTimestamp.IsZero() {
+		t.Errorf("the replacement changed: uid %s, deletion %v", got.UID, got.DeletionTimestamp)
+	}
+
+	passes(t, r, lcp)
+	absent(t, lcp)
+	get(t, got)
+	if !got.DeletionTimestamp.IsZero() {
+		t.Error("the replacement is being deleted")
+	}
+}
