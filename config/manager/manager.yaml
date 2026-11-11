@@ -34,7 +34,7 @@ spec:
           type: RuntimeDefault
       containers:
       - name: manager
-        image: ko://go.lodia.io/cluster-api-provider-lodia/cmd
+        image: ko://go.lodia.io/cluster-api-provider-lodia/cmd/cluster-api-provider-lodia
         args:
         - --leader-elect
         ports:

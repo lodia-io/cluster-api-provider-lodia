@@ -1,8 +1,8 @@
 // Copyright 2026 The Lodia Authors.
 // SPDX-License-Identifier: Apache-2.0
 
-// Command manager runs the LodiaControlPlane controller: one manager,
-// leader-elected, whose cache holds no Secret data.
+// Command cluster-api-provider-lodia runs the LodiaControlPlane controller:
+// one manager, leader-elected, whose cache holds no Secret data.
 package main
 
 import (
