@@ -25,6 +25,7 @@ test: ## unit and envtest tests; envtest runs a real API server and etcd
 verify: ## the check that says a change is done
 	@before="$$(cat $(GENERATED) | cksum)"; $(MAKE) --no-print-directory generate; \
 	[ "$$before" = "$$(cat $(GENERATED) | cksum)" ] || { echo "make generate changed the generated files: review and commit them"; exit 1; }
+	go mod tidy -diff
 	$(MAKE) --no-print-directory lint test
 
 # LC_ALL=C: a range in a case pattern follows the locale, and on macOS en_US.UTF-8 puts A in a-z.
