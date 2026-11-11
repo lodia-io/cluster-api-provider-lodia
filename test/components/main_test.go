@@ -143,6 +143,8 @@ func TestClusterScopedIsWhatClusterctlLeavesOutOfTheTargetNamespace(t *testing.T
 		{Group: "policy", Version: "v1beta1", Kind: "PodSecurityPolicy"},
 		{Group: "cert-manager.io", Version: "v1", Kind: "Certificate"},
 		{Group: "cert-manager.io", Version: "v1", Kind: "Issuer"},
+		{Group: "cert-manager.io", Version: "v1", Kind: "ClusterIssuer"},
+		{Group: "apiregistration.k8s.io", Version: "v1", Kind: "APIService"},
 	} {
 		gvks[gvk.Kind] = gvk
 	}
