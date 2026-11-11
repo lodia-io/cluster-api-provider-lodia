@@ -37,14 +37,19 @@ func specOf(c *apiextensionsv1.CustomResourceDefinition) apiextensionsv1.JSONSch
 	return c.Spec.Versions[0].Schema.OpenAPIV3Schema.Properties["spec"]
 }
 
+func templateSpecOf(c *apiextensionsv1.CustomResourceDefinition) apiextensionsv1.JSONSchemaProps {
+	return c.Spec.Versions[0].Schema.OpenAPIV3Schema.Properties["spec"].Properties["template"].Properties["spec"]
+}
+
+var ignore = []cmp.Option{
+	cmpopts.IgnoreFields(apiextensionsv1.JSONSchemaProps{}, "Description"),
+	cmpopts.SortSlices(func(a, b apiextensionsv1.ValidationRule) bool { return a.Rule < b.Rule }),
+	cmpopts.SortSlices(func(a, b string) bool { return a < b }),
+}
+
 func TestTheSpecPassesLodiasSchemaThrough(t *testing.T) {
 	ours := specOf(crd(t, bases, "controlplane.lodia.io_lodiacontrolplanes.yaml"))
 	lodias := specOf(crd(t, crds.FS, "lodia.io_controlplanes.yaml"))
-	ignore := []cmp.Option{
-		cmpopts.IgnoreFields(apiextensionsv1.JSONSchemaProps{}, "Description"),
-		cmpopts.SortSlices(func(a, b apiextensionsv1.ValidationRule) bool { return a.Rule < b.Rule }),
-		cmpopts.SortSlices(func(a, b string) bool { return a < b }),
-	}
 
 	for name, want := range lodias.Properties {
 		if name == "network" || name == "paused" {
@@ -77,6 +82,28 @@ func TestTheSpecHasNeitherTheNetworkNorLodiasPause(t *testing.T) {
 		if _, ok := ours.Properties[name]; ok {
 			t.Errorf("spec.%s is in the CRD: the network comes from the Cluster, and Lodia's pause stays an operator's break-glass switch", name)
 		}
+	}
+}
+
+func TestTheTemplateIsTheSpecWithoutWhatTheClusterSets(t *testing.T) {
+	ours := specOf(crd(t, bases, "controlplane.lodia.io_lodiacontrolplanes.yaml"))
+	template := templateSpecOf(crd(t, bases, "controlplane.lodia.io_lodiacontrolplanetemplates.yaml"))
+
+	for _, name := range []string{"version", "controlPlaneEndpoint", "restoreFrom"} {
+		delete(ours.Properties, name)
+	}
+	if diff := cmp.Diff(ours.Properties, template.Properties, ignore...); diff != "" {
+		t.Errorf("template spec properties (-spec +template):\n%s", diff)
+	}
+	required := slices.DeleteFunc(slices.Clone(ours.Required), func(name string) bool { return name == "version" })
+	if diff := cmp.Diff(required, template.Required, ignore...); diff != "" {
+		t.Errorf("template spec required (-spec +template):\n%s", diff)
+	}
+	rules := slices.DeleteFunc(slices.Clone(ours.XValidations), func(rule apiextensionsv1.ValidationRule) bool {
+		return strings.Contains(rule.Rule, "restoreFrom")
+	})
+	if diff := cmp.Diff(rules, template.XValidations, ignore...); diff != "" {
+		t.Errorf("template spec rules (-spec +template):\n%s", diff)
 	}
 }
 

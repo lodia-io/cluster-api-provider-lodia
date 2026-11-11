@@ -113,26 +113,12 @@ func TestAClusterGetsItsControlPlaneAndTheContract(t *testing.T) {
 }
 
 func TestEveryOptionalFieldReachesTheControlPlane(t *testing.T) {
-	everyOptionalField := func(l *v1alpha1.LodiaControlPlane) {
-		l.Spec.ControllerManager = &lodiav1alpha1.Component{ExtraArgs: map[string]string{"concurrent-deployment-syncs": "3"}}
-		l.Spec.Scheduler = &lodiav1alpha1.Scheduler{ExtraArgs: map[string]string{"kube-api-qps": "100"}}
-		l.Spec.Addons = &lodiav1alpha1.Addons{CoreDNS: &lodiav1alpha1.CoreDNS{Replicas: new(int32(3))}}
-		l.Spec.ServiceAccount = &lodiav1alpha1.ServiceAccount{Issuer: "https://issuer.example.com"}
-		l.Spec.RestoreFrom = &lodiav1alpha1.RestoreFrom{BackupRef: lodiav1alpha1.LocalReference{Name: "backup"}, Release: lodiav1alpha1.RestoreReleased}
-	}
-	for name, mutate := range map[string]func(*v1alpha1.LodiaControlPlane){
-		"the Split layout with high availability": func(l *v1alpha1.LodiaControlPlane) {
-			everyOptionalField(l)
-			l.Spec.HighAvailability = &lodiav1alpha1.HighAvailability{FailureTolerance: "Node"}
-			l.Spec.APIServer = &lodiav1alpha1.APIServer{Replicas: new(int32(2))}
-		},
-		"the Compact layout": func(l *v1alpha1.LodiaControlPlane) {
-			everyOptionalField(l)
-			l.Spec.Layout = lodiav1alpha1.LayoutCompact
-		},
-	} {
+	for name, mutate := range everyOptionalField {
 		t.Run(name, func(t *testing.T) {
-			cluster, lcp := create(t, namespace(t), "full", func(_ *clusterv1.Cluster, l *v1alpha1.LodiaControlPlane) { mutate(l) })
+			cluster, lcp := create(t, namespace(t), "full", func(_ *clusterv1.Cluster, l *v1alpha1.LodiaControlPlane) {
+				mutate(&l.Spec.LodiaControlPlaneTemplateResourceSpec)
+				l.Spec.RestoreFrom = &lodiav1alpha1.RestoreFrom{BackupRef: lodiav1alpha1.LocalReference{Name: "backup"}, Release: lodiav1alpha1.RestoreReleased}
+			})
 			r := direct(t, interceptor.Funcs{})
 			untilBlockMove(t, r, lcp)
 			passes(t, r, lcp)

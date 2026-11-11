@@ -260,6 +260,25 @@ func spec() v1alpha1.LodiaControlPlaneSpec {
 	}
 }
 
+var everyOptionalField = map[string]func(*v1alpha1.LodiaControlPlaneTemplateResourceSpec){
+	"the Split layout with high availability": func(s *v1alpha1.LodiaControlPlaneTemplateResourceSpec) {
+		optionalFieldsOfEveryLayout(s)
+		s.HighAvailability = &lodiav1alpha1.HighAvailability{FailureTolerance: "Node"}
+		s.APIServer = &lodiav1alpha1.APIServer{Replicas: new(int32(2))}
+	},
+	"the Compact layout": func(s *v1alpha1.LodiaControlPlaneTemplateResourceSpec) {
+		optionalFieldsOfEveryLayout(s)
+		s.Layout = lodiav1alpha1.LayoutCompact
+	},
+}
+
+func optionalFieldsOfEveryLayout(s *v1alpha1.LodiaControlPlaneTemplateResourceSpec) {
+	s.ControllerManager = &lodiav1alpha1.Component{ExtraArgs: map[string]string{"concurrent-deployment-syncs": "3"}}
+	s.Scheduler = &lodiav1alpha1.Scheduler{ExtraArgs: map[string]string{"kube-api-qps": "100"}}
+	s.Addons = &lodiav1alpha1.Addons{CoreDNS: &lodiav1alpha1.CoreDNS{Enabled: new(false), Replicas: new(int32(3))}}
+	s.ServiceAccount = &lodiav1alpha1.ServiceAccount{Issuer: "https://issuer.example.com"}
+}
+
 func create(t *testing.T, ns, name string, mutate ...func(*clusterv1.Cluster, *v1alpha1.LodiaControlPlane)) (*clusterv1.Cluster, *v1alpha1.LodiaControlPlane) {
 	t.Helper()
 	cluster := &clusterv1.Cluster{
