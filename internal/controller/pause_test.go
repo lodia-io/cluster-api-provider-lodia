@@ -31,15 +31,22 @@ func TestDeletionWaitsWhilePaused(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	for range 2 {
+		passes(t, r, lcp)
+		if err := k8s.Get(t.Context(), client.ObjectKeyFromObject(cp), cp); err != nil || !cp.DeletionTimestamp.IsZero() {
+			t.Fatalf("the ControlPlane was deleted while paused: %v, deletion %v", err, cp.DeletionTimestamp)
+		}
+		heldByThePause(t, lcp)
+	}
+
+	paused := cluster.DeepCopy()
+	cluster.Spec.Paused = new(false)
+	if err := k8s.Patch(t.Context(), cluster, client.MergeFrom(paused)); err != nil {
+		t.Fatal(err)
+	}
 	passes(t, r, lcp)
-	get(t, cp)
-	if !cp.DeletionTimestamp.IsZero() {
-		t.Error("the ControlPlane was deleted while paused")
-	}
-	get(t, lcp)
-	if !strings.Contains(strings.Join(lcp.Finalizers, ","), v1alpha1.Finalizer) {
-		t.Errorf("finalizers %v", lcp.Finalizers)
-	}
+	passes(t, r, lcp)
+	absent(t, cp)
 }
 
 func TestThePausedAnnotationHoldsDeletionOnceTheClusterIsGone(t *testing.T) {
