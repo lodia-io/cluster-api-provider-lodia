@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/go-cmp/cmp"
 	lodiav1alpha1 "go.lodia.io/lodia/api/v1alpha1"
 	authenticationv1 "k8s.io/api/authentication/v1"
 	authorizationv1 "k8s.io/api/authorization/v1"
@@ -31,7 +32,7 @@ import (
 	"go.lodia.io/cluster-api-provider-lodia/internal/controller"
 )
 
-func boundToTheLeaderElectionRole(t *testing.T, ns string) {
+func leaderElectionRole(t *testing.T) *rbacv1.Role {
 	t.Helper()
 	manifest, err := os.ReadFile(filepath.Join("..", "..", "config", "rbac", "leader_election_role.yaml"))
 	if err != nil {
@@ -41,6 +42,12 @@ func boundToTheLeaderElectionRole(t *testing.T, ns string) {
 	if err := yaml.UnmarshalStrict(manifest, role); err != nil {
 		t.Fatal(err)
 	}
+	return role
+}
+
+func boundToTheLeaderElectionRole(t *testing.T, ns string) {
+	t.Helper()
+	role := leaderElectionRole(t)
 	role.Namespace = ns
 	binding := &rbacv1.RoleBinding{
 		ObjectMeta: metav1.ObjectMeta{Name: role.Name, Namespace: ns},
@@ -108,6 +115,17 @@ func TestTheRoleCoversLeaderElectionAndTheMetricsFilter(t *testing.T) {
 		if !review.Status.Allowed {
 			t.Errorf("%s %s is not allowed: %s", attributes.Verb, attributes.Resource, review.Status.Reason)
 		}
+	}
+}
+
+func TestTheLeaderElectionRoleHoldsNothingBeyondItsLeaseAndEventRules(t *testing.T) {
+	want := []rbacv1.PolicyRule{
+		{APIGroups: []string{corev1.GroupName}, Resources: []string{"events"}, Verbs: []string{"create", "patch"}},
+		{APIGroups: []string{coordinationv1.GroupName}, Resources: []string{"leases"}, Verbs: []string{"create"}},
+		{APIGroups: []string{coordinationv1.GroupName}, Resources: []string{"leases"}, ResourceNames: []string{"controlplane.lodia.io"}, Verbs: []string{"get", "update"}},
+	}
+	if diff := cmp.Diff(want, leaderElectionRole(t).Rules); diff != "" {
+		t.Errorf("the Role's rules (-want +got):\n%s", diff)
 	}
 }
 
