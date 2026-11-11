@@ -35,21 +35,17 @@ func TestMain(m *testing.M) {
 	os.Exit(testenv.Run(m))
 }
 
-const tenantDumpBound = 30 * time.Second
-
 func workDir(cfg *envconf.Config) string {
 	return filepath.Dir(cfg.KubeconfigFile())
 }
 
 func dump(ctx context.Context, cfg *envconf.Config) {
-	ctx, cancel := context.WithTimeout(ctx, bounds.Dump)
-	defer cancel()
 	c, err := client.New(cfg.Client().RESTConfig(), client.Options{})
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "dump:", err)
 		return
 	}
-	if err := dumpAll(ctx, cfg, c, filepath.Join(workDir(cfg), "artifacts"), tenantDumpBound); err != nil {
+	if err := dumpBounded(ctx, cfg, c, filepath.Join(workDir(cfg), "artifacts")); err != nil {
 		fmt.Fprintln(os.Stderr, "dump:", err)
 	}
 }

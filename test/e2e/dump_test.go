@@ -64,6 +64,12 @@ var (
 	}
 )
 
+func dumpBounded(ctx context.Context, cfg *envconf.Config, c client.Client, dir string) error {
+	ctx, cancel := context.WithTimeout(ctx, bounds.Dump)
+	defer cancel()
+	return dumpAll(ctx, cfg, c, dir, tenantDumpBound)
+}
+
 func dumpAll(ctx context.Context, cfg *envconf.Config, c client.Client, dir string, tenantBound time.Duration) error {
 	var errs []error
 	for _, kind := range objectKinds {

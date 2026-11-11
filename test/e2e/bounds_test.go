@@ -48,6 +48,10 @@ const (
 	outsideTheBinary = 8 * time.Minute
 )
 
+const tenantRequestTimeout = 30 * time.Second
+
+var tenantDumpBound = 30 * time.Second
+
 var goTestTimeout = regexp.MustCompile(`-timeout (\d+)m\b`)
 
 func total(b boundSet) time.Duration {
@@ -64,6 +68,18 @@ func fits(bounded, timeout, limit time.Duration) error {
 	}
 	if timeout+outsideTheBinary > limit {
 		return fmt.Errorf("-timeout %s and the %s outside the test binary are more than the job's timeout-minutes %s", timeout, outsideTheBinary, limit)
+	}
+	return nil
+}
+
+// A discovery asks /api and then /apis, each with the request timeout, so a
+// call to a tenant that does not answer can take two of them.
+func tenantFits(requestTimeout, dumpBound, dump time.Duration) error {
+	if requestTimeout <= 0 || 2*requestTimeout > callsWithoutBound {
+		return fmt.Errorf("the tenant's request timeout %s is not positive, or two of them are more than the %s left for the calls without a bound: a step against a tenant that does not answer could overshoot its bound by that much", requestTimeout, callsWithoutBound)
+	}
+	if dumpBound <= 0 || 2*dumpBound >= dump {
+		return fmt.Errorf("the tenant's part of the dump %s is not positive, or two of them are not less than the dump's %s: a tenant that does not answer would leave the workers no time", dumpBound, dump)
 	}
 	return nil
 }
@@ -100,6 +116,9 @@ func TestTheBoundsFitUnderTheTimeouts(t *testing.T) {
 	if err := fits(total(bounds), time.Duration(n)*time.Minute, time.Duration(limit)*time.Minute); err != nil {
 		t.Fatal(err)
 	}
+	if err := tenantFits(tenantRequestTimeout, tenantDumpBound, bounds.Dump); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestTotalAddsEveryBound(t *testing.T) {
@@ -132,6 +151,35 @@ func TestBoundsThatDoNotFitAreRefused(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			err := fits(c.bounded, c.timeout, c.jobLimit)
+			switch {
+			case c.want == "" && err != nil:
+				t.Fatalf("want accepted, got %v", err)
+			case c.want != "" && (err == nil || !strings.Contains(err.Error(), c.want)):
+				t.Fatalf("want an error with %q, got %v", c.want, err)
+			}
+		})
+	}
+}
+
+func TestTenantTimesThatDoNotFitAreRefused(t *testing.T) {
+	const second = time.Second
+	cases := []struct {
+		name                            string
+		requestTimeout, dumpBound, dump time.Duration
+		want                            string
+	}{
+		{"a request timeout of 60 seconds against 120", 60 * second, 30 * second, 120 * second, ""},
+		{"a request timeout of 61 seconds against 120", 61 * second, 30 * second, 120 * second, "request timeout"},
+		{"no request timeout", 0, 30 * second, 120 * second, "request timeout"},
+		{"a negative request timeout", -second, 30 * second, 120 * second, "request timeout"},
+		{"a tenant dump of 59 seconds against 120", 30 * second, 59 * second, 120 * second, ""},
+		{"a tenant dump of 60 seconds against 120", 30 * second, 60 * second, 120 * second, "part of the dump"},
+		{"no tenant dump", 30 * second, 0, 120 * second, "part of the dump"},
+		{"a negative tenant dump", 30 * second, -second, 120 * second, "part of the dump"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			err := tenantFits(c.requestTimeout, c.dumpBound, c.dump)
 			switch {
 			case c.want == "" && err != nil:
 				t.Fatalf("want accepted, got %v", err)

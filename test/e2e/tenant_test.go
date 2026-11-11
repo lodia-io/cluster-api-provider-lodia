@@ -122,14 +122,20 @@ func returnsWithin(t *testing.T, limit time.Duration, what string, call func() e
 	}
 }
 
+func shortenTheDump(t *testing.T, dump, tenant time.Duration) {
+	t.Helper()
+	was, wasTenant := bounds.Dump, tenantDumpBound
+	t.Cleanup(func() { bounds.Dump, tenantDumpBound = was, wasTenant })
+	bounds.Dump, tenantDumpBound = dump, tenant
+}
+
 func TestTheDumpOfATenantThatDoesNotAnswerEndsInItsBoundAndLeavesTimeForTheWorkers(t *testing.T) {
 	const bound = 1500 * time.Millisecond
 	for name, stalled := range stalledTenants {
 		t.Run(name, func(t *testing.T) {
+			shortenTheDump(t, 4*bound, bound)
 			d := newDumpSetup(t, stalled(t))
-			ctx, cancel := context.WithTimeout(t.Context(), 4*bound)
-			defer cancel()
-			err := returnsWithin(t, bound+2*time.Second, "the dump", func() error { return dumpAll(ctx, d.cfg, d.c, d.dir, bound) })
+			err := returnsWithin(t, bound+bound/2, "the dump", func() error { return dumpBounded(t.Context(), d.cfg, d.c, d.dir) })
 			if err == nil {
 				t.Fatal("the dump says nothing about a tenant that did not answer")
 			}
@@ -148,6 +154,9 @@ func TestEveryCallToATenantThatDoesNotAnswerFails(t *testing.T) {
 				Data:       map[string][]byte{secret.KubeconfigDataName: serverKubeconfig(t, stalled(t), "tenant")},
 			}).Build()
 			tenant := openTenant(t.Context(), t, k8s, key, timeout)
+			if tenant.cfg.Timeout != timeout {
+				t.Fatalf("the tenant's rest config has the timeout %s, want %s", tenant.cfg.Timeout, timeout)
+			}
 			for what, call := range map[string]func() error{
 				"the client": func() error { return tenant.client.Get(t.Context(), client.ObjectKey{Name: "n"}, &corev1.Node{}) },
 				"resources":  func() error { return tenant.resources.Get(t.Context(), "n", "", &corev1.Node{}) },
