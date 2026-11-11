@@ -188,6 +188,49 @@ func TestAResyncRepairsTheProvidersSecrets(t *testing.T) {
 	})
 }
 
+func TestARenewedSourceReachesItsCopyWithoutAResync(t *testing.T) {
+	ns := namespace(t)
+	startManager(t, ns)
+	cluster, lcp := create(t, ns, "renew")
+	cp := controlPlaneOf(cluster)
+	eventually(t, func() error { return k8s.Get(t.Context(), client.ObjectKeyFromObject(cp), cp) })
+	setReady(t, cp)
+	lodiaSecrets(t, cluster, ownedBy(cp))
+	eventually(t, func() error {
+		get(t, lcp)
+		if i := lcp.Status.Initialization.ControlPlaneInitialized; i == nil || !*i {
+			return errors.New("not initialized")
+		}
+		return nil
+	})
+	settled(t, lcp)
+
+	for _, c := range []struct {
+		source, key string
+		copy        secret.Purpose
+		copyKey     string
+	}{
+		{lodiav1alpha1.CABundleSecret.Name(cluster.Name), lodiav1alpha1.CACertKey, secret.ClusterCA, secret.TLSCrtDataName},
+		{lodiav1alpha1.AdminKubeconfigSecret.Name(cluster.Name), lodiav1alpha1.KubeconfigKey, secret.Kubeconfig, secret.KubeconfigDataName},
+	} {
+		renewed := []byte("renewed " + c.source)
+		source := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: c.source}}
+		get(t, source)
+		source.Data[c.key] = renewed
+		if err := k8s.Update(t.Context(), source); err != nil {
+			t.Fatal(err)
+		}
+		copied := secretOf(cluster, c.copy)
+		eventually(t, func() error {
+			get(t, copied)
+			if !bytes.Equal(copied.Data[c.copyKey], renewed) {
+				return fmt.Errorf("%s still holds %.40q", copied.Name, copied.Data[c.copyKey])
+			}
+			return nil
+		})
+	}
+}
+
 func TestTheCacheHoldsOnlyLodiasSecretsAndOnlyTheirMetadata(t *testing.T) {
 	ns := namespace(t)
 	mgr := startManager(t, ns)
