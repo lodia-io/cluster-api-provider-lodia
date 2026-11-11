@@ -19,6 +19,7 @@ import (
 	authorizationv1 "k8s.io/api/authorization/v1"
 	coordinationv1 "k8s.io/api/coordination/v1"
 	corev1 "k8s.io/api/core/v1"
+	eventsv1 "k8s.io/api/events/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -137,6 +138,25 @@ func TestTheLeaderElectionRoleHoldsNothingBeyondItsLeaseAndEventRules(t *testing
 	}
 	if diff := cmp.Diff(want, leaderElectionRole(t).Rules); diff != "" {
 		t.Errorf("the Role's rules (-want +got):\n%s", diff)
+	}
+}
+
+func TestTheClusterRoleGrantsNothingOnLeasesOrEvents(t *testing.T) {
+	role := &rbacv1.ClusterRole{}
+	decodeRBAC(t, "role.yaml", role)
+	covers := func(list []string, wildcard, name string) bool {
+		return slices.Contains(list, wildcard) || slices.Contains(list, name)
+	}
+	for i, rule := range role.Rules {
+		for _, c := range []struct{ group, resource string }{
+			{coordinationv1.GroupName, "leases"},
+			{corev1.GroupName, "events"},
+			{eventsv1.GroupName, "events"},
+		} {
+			if covers(rule.APIGroups, rbacv1.APIGroupAll, c.group) && covers(rule.Resources, rbacv1.ResourceAll, c.resource) {
+				t.Errorf("the ClusterRole's rule %d grants %v on %s in the group %q", i, rule.Verbs, c.resource, c.group)
+			}
+		}
 	}
 }
 
