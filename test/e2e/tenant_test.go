@@ -450,7 +450,10 @@ func recordedServer(t *testing.T, healthy http.Handler) (string, func() []reques
 		mu.Unlock()
 		healthy.ServeHTTP(w, r)
 	}))
-	t.Cleanup(server.Close)
+	t.Cleanup(func() {
+		server.CloseClientConnections()
+		server.Close()
+	})
 	return server.URL, func() []request {
 		mu.Lock()
 		defer mu.Unlock()

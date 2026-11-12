@@ -40,7 +40,8 @@ From Lodia [81ce021](https://github.com/lodia-io/lodia/blob/81ce021f823c6708ba5e
 
 ## The test
 
-`TestAWorkerJoinsAClusterOfLodiasControlPlane` applies the objects of [`testdata`](testdata) in the namespace `capi-join`, and asserts, each within a bound of its own:
+`TestAWorkerJoinsAClusterOfLodiasControlPlane` applies the objects of [`testdata`](testdata) in the namespace `capi-join`, and asserts the steps below.
+Each waits within a bound of its own, but the third, which reads at once; the calls between the waits end at the client's request timeout, described under "On failure".
 
 1. `Cluster` `ControlPlaneInitialized`.
 2. `Cluster.spec.controlPlaneEndpoint` is Lodia's `status.endpoint.apiServer`.
@@ -67,7 +68,11 @@ A discovery asks `/api`, `/apis` and the version of a group, so a step against s
 The dump's requests to the kind cluster, the pods' logs among them, have a timeout of 10 seconds for the same reason, and the dump stops listing once its own bound has passed, so a kind cluster that does not answer ends it at most one discovery after its bound.
 The pods' logs go last, after the tenant: a kubelet that does not answer holds every log request to that timeout, in each container, and would leave the tenant nothing.
 The dump reads the worker containers first, within 30 seconds of their own, since `docker` does not depend on the API server: a kind cluster that does not answer uses what remains of the dump's 2 minutes and would leave them nothing, and a `docker` that hangs ends at the 30 seconds and leaves the kind cluster and the tenant the rest.
-The install's and the steps' client for the kind cluster has a timeout of 10 seconds on its discovery alone, through a REST mapper of its own, since a request timeout would also cut a create, which waits for cert-manager's webhook for up to the 30 seconds that the API server gives it: creates and gets stop only at the context of their step, and a kind cluster that does not answer ends a step at most one discovery after its bound.
-`TestTheBoundsFitUnderTheTimeouts` holds that three requests, with the tenant's, the dump's or the discovery's timeout, fit in the time left for the calls without a bound, and that the workers' bound and twice the tenant's are together less than the dump's, so that a `docker` that hangs leaves the kind cluster and the tenant more than twice the tenant's bound.
+The install's and the steps' client for the kind cluster has a timeout of 75 seconds on every request, creates included.
+That is above the 60 seconds after which kube-apiserver [answers](https://github.com/kubernetes/kubernetes/blob/v1.37.2/staging/src/k8s.io/apiserver/pkg/server/config.go#L453) a request that is not long-running, and it [ignores](https://github.com/kubernetes/kubernetes/blob/v1.37.2/staging/src/k8s.io/apiserver/pkg/endpoints/filters/request_deadline.go#L81-L89) a longer `timeout` query, so the client never cuts a call that the server would answer: a create waits for the webhooks of its object, 30 seconds for cert-manager's, inside those 60.
+Its discovery has a timeout of 10 seconds, through a REST mapper of its own, since the mapper discovers without the request's context.
+A kind cluster that does not answer ends a wait of a step at most one discovery after its bound, and a call between the waits within a discovery, three requests of 10 seconds, and then the 75 seconds.
+The `docker` calls of steps 4 and 9 run on the context of their step, which has no deadline.
+`TestTheBoundsFitUnderTheTimeouts` holds that three requests, with the tenant's or the dump's timeout, fit in the time left for the calls without a bound, that the client's timeout is above the API server's and fits there after a discovery of three requests, and that the workers' bound and twice the tenant's are together less than the dump's, so that a `docker` that hangs leaves the kind cluster and the tenant more than twice the tenant's bound.
 Go kills a test binary one minute after its `-timeout`, counted from its start, while its own alarm counts from the end of the install.
 CAPD does not retry a failed bootstrap; the output of `kubeadm join` is in the `BootstrapCompleted` condition of the `DevMachine`.

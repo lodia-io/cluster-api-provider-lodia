@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"slices"
-	"sync"
 	"testing"
 	"time"
 
@@ -28,6 +27,7 @@ import (
 
 func newClient(cfg *envconf.Config) (client.Client, error) {
 	restCfg := cfg.Client().RESTConfig()
+	restCfg.Timeout = clientRequestTimeout
 	discoveryCfg := rest.CopyConfig(restCfg)
 	discoveryCfg.Timeout = discoveryTimeout
 	httpClient, err := rest.HTTPClientFor(discoveryCfg)
@@ -60,6 +60,13 @@ func shortenTheDiscovery(t *testing.T, timeout time.Duration) {
 	discoveryTimeout = timeout
 }
 
+func shortenTheClientRequests(t *testing.T, timeout time.Duration) {
+	t.Helper()
+	was := clientRequestTimeout
+	t.Cleanup(func() { clientRequestTimeout = was })
+	clientRequestTimeout = timeout
+}
+
 func TestTheClientsDiscoveryEndsAtTheDiscoveryTimeoutWhenTheClusterDoesNotAnswer(t *testing.T) {
 	const timeout = 500 * time.Millisecond
 	for name, stalled := range stalledTenants {
@@ -78,7 +85,7 @@ func TestTheClientsDiscoveryEndsAtTheDiscoveryTimeoutWhenTheClusterDoesNotAnswer
 	}
 }
 
-func TestTheClientsDiscoveryRequestsAskForTheDiscoveryTimeout(t *testing.T) {
+func TestTheClientsRequestsAskForTheirOwnTimeouts(t *testing.T) {
 	shortenTheDiscovery(t, 7*time.Second)
 	url, asked := recordedServer(t, tenantHandler(t))
 	c, err := newClient(configFor(t, url))
@@ -91,6 +98,7 @@ func TestTheClientsDiscoveryRequestsAskForTheDiscoveryTimeout(t *testing.T) {
 	for _, suffix := range []string{"/api", "/apis", "/api/v1"} {
 		requireRequestTimeout(t, asked(), suffix, discoveryTimeout)
 	}
+	requireRequestTimeout(t, asked(), "/nodes", clientRequestTimeout)
 }
 
 func TestTheClientsDiscoveryAcceptsAnAnswerWithinTheDiscoveryTimeout(t *testing.T) {
@@ -106,41 +114,52 @@ func TestTheClientsDiscoveryAcceptsAnAnswerWithinTheDiscoveryTimeout(t *testing.
 	}
 }
 
-func TestTheClientLeavesACreateTheClusterHoldsPastTheDiscoveryTimeoutUnbounded(t *testing.T) {
+func TestTheClientAcceptsACreateTheClusterHoldsPastTheDiscoveryTimeout(t *testing.T) {
 	const timeout = 500 * time.Millisecond
 	shortenTheDiscovery(t, timeout)
+	shortenTheClientRequests(t, 10*timeout)
 	healthy := tenantHandler(t)
-	var (
-		mu    sync.Mutex
-		query string
-	)
-	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	url, asked := recordedServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			healthy.ServeHTTP(w, r)
 			return
 		}
-		mu.Lock()
-		query = r.URL.RawQuery
-		mu.Unlock()
 		select {
 		case <-time.After(2 * timeout):
 			respond(t, w, `{"kind":"Node","apiVersion":"v1","metadata":{"name":"n"}}`)
 		case <-r.Context().Done():
 		}
 	}))
-	t.Cleanup(server.Close)
-	c, err := newClient(configFor(t, server.URL))
+	c, err := newClient(configFor(t, url))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := c.Create(t.Context(), &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "n"}}); err != nil {
 		t.Fatalf("a create that the cluster held for %s failed: %v", 2*timeout, err)
 	}
-	mu.Lock()
-	defer mu.Unlock()
-	if query != "" {
-		t.Errorf("the create was sent with the query %q, want none", query)
+	requireRequestTimeout(t, asked(), "/nodes", clientRequestTimeout)
+}
+
+func TestTheClientEndsACallTheClusterHoldsAtTheClientRequestTimeout(t *testing.T) {
+	const timeout = 500 * time.Millisecond
+	shortenTheClientRequests(t, timeout)
+	healthy := tenantHandler(t)
+	url, asked := recordedServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if isDiscovery(r.URL.Path) {
+			healthy.ServeHTTP(w, r)
+			return
+		}
+		<-r.Context().Done()
+	}))
+	c, err := newClient(configFor(t, url))
+	if err != nil {
+		t.Fatal(err)
 	}
+	err = returnsWithin(t, 6*timeout, "the get", func() error { return c.Get(context.Background(), client.ObjectKey{Name: "n"}, &corev1.Node{}) })
+	if err == nil {
+		t.Error("the get got an answer")
+	}
+	requireRequestTimeout(t, asked(), "/nodes/n", clientRequestTimeout)
 }
 
 func TestTheClientKnowsTheKindsTheStepsRead(t *testing.T) {

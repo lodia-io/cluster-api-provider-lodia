@@ -39,8 +39,8 @@ var bounds = boundSet{
 }
 
 const (
-	// callsWithoutBound covers the calls between the waits and what a poll
-	// overshoots by.
+	// callsWithoutBound covers the calls between the waits, of which the first
+	// to fail ends the test, and what a poll overshoots by.
 	callsWithoutBound = 2 * time.Minute
 	// outsideTheBinary is what the job spends beyond -timeout: the build before
 	// the binary starts, go test's minute of grace, and the removal of the
@@ -52,9 +52,18 @@ const tenantRequestTimeout = 30 * time.Second
 
 var dumpRequestTimeout = 10 * time.Second
 
-// The install's and the steps' clients time out their discovery alone: a
-// request timeout would also cut a create, which waits up to the 30 seconds
-// that the API server gives cert-manager's webhook.
+// kube-apiserver ends a request that is not long-running at its own
+// --request-timeout, 60 seconds by default, and ignores a longer timeout query.
+const apiServerRequestTimeout = time.Minute
+
+// The install's and the steps' client times out every request above the API
+// server's own timeout, so that it never cuts a call the server would answer,
+// a create that waits for webhooks among them.
+var clientRequestTimeout = 75 * time.Second
+
+// Controller-runtime's REST mapper discovers without the request's context,
+// and three discovery requests of the client's timeout would not fit in
+// callsWithoutBound.
 var discoveryTimeout = 10 * time.Second
 
 var tenantDumpBound = 30 * time.Second
@@ -87,6 +96,21 @@ func fits(bounded, timeout, limit time.Duration) error {
 func requestFits(whose string, requestTimeout time.Duration) error {
 	if requestTimeout <= 0 || 3*requestTimeout > callsWithoutBound {
 		return fmt.Errorf("%s request timeout %s is not positive, or three of them are more than the %s left for the calls without a bound: a call to a cluster that does not answer could overshoot its bound by that much", whose, requestTimeout, callsWithoutBound)
+	}
+	return nil
+}
+
+// A call through the client discovers first, with up to three requests, and
+// then takes its own request.
+func clientFits(requestTimeout, discovery time.Duration) error {
+	if requestTimeout <= apiServerRequestTimeout {
+		return fmt.Errorf("the client's request timeout %s is not above the %s that kube-apiserver gives a request: it could cut a call that the server would answer", requestTimeout, apiServerRequestTimeout)
+	}
+	if err := requestFits("the steps' discovery", discovery); err != nil {
+		return err
+	}
+	if 3*discovery+requestTimeout > callsWithoutBound {
+		return fmt.Errorf("a call through the client can take three discovery requests of %s and then its own of %s, more than the %s left for the calls without a bound", discovery, requestTimeout, callsWithoutBound)
 	}
 	return nil
 }
@@ -142,7 +166,7 @@ func TestTheBoundsFitUnderTheTimeouts(t *testing.T) {
 	if err := requestFits("the dump's", dumpRequestTimeout); err != nil {
 		t.Fatal(err)
 	}
-	if err := requestFits("the steps' discovery", discoveryTimeout); err != nil {
+	if err := clientFits(clientRequestTimeout, discoveryTimeout); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -178,6 +202,38 @@ func TestBoundsThatDoNotFitAreRefused(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			err := fits(c.bounded, c.timeout, c.jobLimit)
+			switch {
+			case c.want == "" && err != nil:
+				t.Fatalf("want accepted, got %v", err)
+			case c.want != "" && (err == nil || !strings.Contains(err.Error(), c.want)):
+				t.Fatalf("want an error with %q, got %v", c.want, err)
+			}
+		})
+	}
+}
+
+func TestClientTimesThatDoNotFitAreRefused(t *testing.T) {
+	const second = time.Second
+	cases := []struct {
+		name                      string
+		requestTimeout, discovery time.Duration
+		want                      string
+	}{
+		{"a request timeout of 75 seconds with a discovery of 10", 75 * second, 10 * second, ""},
+		{"a request timeout one second above the API server's", 61 * second, 10 * second, ""},
+		{"a request timeout equal to the API server's", 60 * second, 10 * second, "kube-apiserver"},
+		{"a request timeout under the API server's", 30 * second, 10 * second, "kube-apiserver"},
+		{"no request timeout", 0, 10 * second, "kube-apiserver"},
+		{"a request timeout of 90 seconds with a discovery of 10", 90 * second, 10 * second, ""},
+		{"a request timeout of 91 seconds with a discovery of 10", 91 * second, 10 * second, "then its own"},
+		{"a request timeout of 75 seconds with a discovery of 15", 75 * second, 15 * second, ""},
+		{"a request timeout of 75 seconds with a discovery of 16", 75 * second, 16 * second, "then its own"},
+		{"a discovery of 41 seconds", 75 * second, 41 * second, "request timeout"},
+		{"no discovery timeout", 75 * second, 0, "request timeout"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			err := clientFits(c.requestTimeout, c.discovery)
 			switch {
 			case c.want == "" && err != nil:
 				t.Fatalf("want accepted, got %v", err)
