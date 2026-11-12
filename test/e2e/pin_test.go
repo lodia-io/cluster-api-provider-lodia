@@ -135,7 +135,9 @@ func TestLodiaCommitIsThePinnedAPI(t *testing.T) {
 	if err := lodiaPin(gomod, makefile); err != nil {
 		t.Fatal(err)
 	}
+}
 
+func TestAWrongLodiaPinIsRefused(t *testing.T) {
 	const pinned = "require go.lodia.io/lodia/api v0.0.0-20261109145222-57375832e7fe\n"
 	cases := []struct {
 		name, gomod, makefile, want string

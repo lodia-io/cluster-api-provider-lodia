@@ -23,34 +23,21 @@ import (
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/kubernetes"
-	"k8s.io/client-go/rest"
-	"k8s.io/client-go/tools/clientcmd"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	"sigs.k8s.io/cluster-api/cmd/clusterctl/client/yamlprocessor"
 	"sigs.k8s.io/cluster-api/util/secret"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/e2e-framework/klient/decoder"
-	"sigs.k8s.io/e2e-framework/klient/k8s/resources"
 	"sigs.k8s.io/e2e-framework/pkg/envconf"
 	"sigs.k8s.io/e2e-framework/pkg/features"
 
 	"go.lodia.io/cluster-api-provider-lodia/api/v1alpha1"
-	"go.lodia.io/cluster-api-provider-lodia/internal/controller"
 )
 
-const (
-	namespace = "capi-join"
-	agnhost   = "registry.k8s.io/e2e-test-images/agnhost:2.66.1@sha256:6e2eef87d0dc77e070a7549bc5fdfa290c0fefe3359eb33c2ad1eda692fe66a4"
-)
-
-var (
-	devCluster = schema.GroupVersionKind{Group: "infrastructure.cluster.x-k8s.io", Version: "v1beta2", Kind: "DevCluster"}
-	devMachine = schema.GroupVersionKind{Group: "infrastructure.cluster.x-k8s.io", Version: "v1beta2", Kind: "DevMachine"}
-)
+const agnhost = "registry.k8s.io/e2e-test-images/agnhost:2.66.1@sha256:6e2eef87d0dc77e070a7549bc5fdfa290c0fefe3359eb33c2ad1eda692fe66a4"
 
 func TestAWorkerJoinsAClusterOfLodiasControlPlane(t *testing.T) {
 	var (
@@ -67,11 +54,13 @@ func TestAWorkerJoinsAClusterOfLodiasControlPlane(t *testing.T) {
 				t.Fatal(err)
 			}
 			key = client.ObjectKey{Namespace: namespace, Name: name}
-			k8s = newClient(t, cfg)
+			if k8s, err = newClient(cfg); err != nil {
+				t.Fatal(err)
+			}
 			return ctx
 		}).
 		Assess("the objects are applied, and the DevCluster, whose infrastructure the suite manages, is marked provisioned", func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
-			bounded, cancel := context.WithTimeout(ctx, time.Minute)
+			bounded, cancel := context.WithTimeout(ctx, bounds.Apply)
 			defer cancel()
 			for _, file := range []string{"cluster.yaml", "workers.yaml"} {
 				manifest, err := render(file, key.Name)
@@ -93,7 +82,7 @@ func TestAWorkerJoinsAClusterOfLodiasControlPlane(t *testing.T) {
 			return ctx
 		}).
 		Assess("the Cluster reports ControlPlaneInitialized", func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
-			until(ctx, t, 5*time.Minute, "ControlPlaneInitialized is True", func(ctx context.Context) error {
+			until(ctx, t, bounds.Initialized, "ControlPlaneInitialized is True", func(ctx context.Context) error {
 				cluster := &clusterv1.Cluster{}
 				if err := k8s.Get(ctx, key, cluster); err != nil {
 					return err
@@ -106,7 +95,7 @@ func TestAWorkerJoinsAClusterOfLodiasControlPlane(t *testing.T) {
 			return ctx
 		}).
 		Assess("the Cluster's endpoint is the one Lodia published", func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
-			until(ctx, t, 30*time.Second, "Cluster.spec.controlPlaneEndpoint is the ControlPlane's status.endpoint.apiServer", func(ctx context.Context) error {
+			until(ctx, t, bounds.Endpoint, "Cluster.spec.controlPlaneEndpoint is the ControlPlane's status.endpoint.apiServer", func(ctx context.Context) error {
 				cluster, cp := &clusterv1.Cluster{}, &lodiav1alpha1.ControlPlane{}
 				if err := k8s.Get(ctx, key, cluster); err != nil {
 					return err
@@ -125,36 +114,18 @@ func TestAWorkerJoinsAClusterOfLodiasControlPlane(t *testing.T) {
 			})
 			return ctx
 		}).
-		Assess("the provider copied the kubeconfig and the CA's certificate, never its key, and owns both", func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
+		Assess("the provider copied Lodia's kubeconfig and the CA's certificate, never its key, and owns both", func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
 			lcp := &v1alpha1.LodiaControlPlane{}
 			if err := k8s.Get(ctx, key, lcp); err != nil {
 				t.Fatal(err)
 			}
-			kubeconfig, ca := &corev1.Secret{}, &corev1.Secret{}
-			if err := k8s.Get(ctx, client.ObjectKey{Namespace: key.Namespace, Name: secret.Name(key.Name, secret.Kubeconfig)}, kubeconfig); err != nil {
+			if err := requireCopies(ctx, k8s, key, lcp); err != nil {
 				t.Fatal(err)
-			}
-			if err := k8s.Get(ctx, client.ObjectKey{Namespace: key.Namespace, Name: secret.Name(key.Name, secret.ClusterCA)}, ca); err != nil {
-				t.Fatal(err)
-			}
-			if len(kubeconfig.Data[secret.KubeconfigDataName]) == 0 {
-				t.Fatalf("Secret %s holds no %s", kubeconfig.Name, secret.KubeconfigDataName)
-			}
-			if len(ca.Data[secret.TLSCrtDataName]) == 0 {
-				t.Fatalf("Secret %s holds no %s", ca.Name, secret.TLSCrtDataName)
-			}
-			if _, ok := ca.Data[secret.TLSKeyDataName]; ok {
-				t.Fatalf("Secret %s holds the CA's key", ca.Name)
-			}
-			for _, s := range []*corev1.Secret{kubeconfig, ca} {
-				if !metav1.IsControlledBy(s, lcp) {
-					t.Fatalf("Secret %s is not controlled by LodiaControlPlane %s", s.Name, lcp.Name)
-				}
 			}
 			return ctx
 		}).
 		Assess("kindnet, from the management node's own manifest, is applied in the tenant", func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
-			tenant = openTenant(ctx, t, k8s, key)
+			tenant = openTenant(ctx, t, k8s, key, tenantRequestTimeout)
 			cluster := &clusterv1.Cluster{}
 			if err := k8s.Get(ctx, key, cluster); err != nil {
 				t.Fatal(err)
@@ -163,7 +134,7 @@ func TestAWorkerJoinsAClusterOfLodiasControlPlane(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			manifest, err := docker(ctx, "exec", management+"-control-plane", "cat", "/kind/manifests/default-cni.yaml")
+			manifest, err := stepDocker(ctx, "exec", management+"-control-plane", "cat", "/kind/manifests/default-cni.yaml")
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -175,13 +146,13 @@ func TestAWorkerJoinsAClusterOfLodiasControlPlane(t *testing.T) {
 			if err := cni.Execute(&rendered, struct{ PodSubnet string }{cluster.Spec.ClusterNetwork.Pods.CIDRBlocks[0]}); err != nil {
 				t.Fatal(err)
 			}
-			until(ctx, t, time.Minute, "kindnet is applied", func(ctx context.Context) error {
+			until(ctx, t, bounds.Kindnet, "kindnet is applied", func(ctx context.Context) error {
 				return decoder.DecodeEach(ctx, bytes.NewReader(rendered.Bytes()), ignoreExisting(decoder.CreateHandler(tenant.resources)))
 			})
 			return ctx
 		}).
 		Assess("the Machine is Running with a nodeRef, and Lodia reported the version the MachineSet's preflight reads", func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
-			until(ctx, t, 5*time.Minute, "the Machine is Running with a nodeRef", func(ctx context.Context) error {
+			until(ctx, t, bounds.Running, "the Machine is Running with a nodeRef", func(ctx context.Context) error {
 				machines := &clusterv1.MachineList{}
 				if err := k8s.List(ctx, machines, client.InNamespace(key.Namespace), client.MatchingLabels{clusterv1.ClusterNameLabel: key.Name}); err != nil {
 					return err
@@ -215,7 +186,7 @@ func TestAWorkerJoinsAClusterOfLodiasControlPlane(t *testing.T) {
 			if err != nil || providerID == "" {
 				t.Fatalf("DevMachine %s has no spec.providerID: %v", dm.GetName(), err)
 			}
-			until(ctx, t, 3*time.Minute, "Node "+machine.Status.NodeRef.Name+" has the providerID, no uninitialized taint, and is Ready", func(ctx context.Context) error {
+			until(ctx, t, bounds.Ready, "Node "+machine.Status.NodeRef.Name+" has the providerID, no uninitialized taint, and is Ready", func(ctx context.Context) error {
 				joined := &corev1.Node{}
 				if err := tenant.client.Get(ctx, client.ObjectKey{Name: machine.Status.NodeRef.Name}, joined); err != nil {
 					return err
@@ -239,7 +210,7 @@ func TestAWorkerJoinsAClusterOfLodiasControlPlane(t *testing.T) {
 			return ctx
 		}).
 		Assess("the konnectivity agent is ready on the Node", func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
-			until(ctx, t, 3*time.Minute, "the konnectivity agent is ready", func(ctx context.Context) error {
+			until(ctx, t, bounds.Konnectivity, "the konnectivity agent is ready", func(ctx context.Context) error {
 				agents := &appsv1.DaemonSet{}
 				if err := tenant.client.Get(ctx, client.ObjectKey{Namespace: metav1.NamespaceSystem, Name: "konnectivity-agent"}, agents); err != nil {
 					return err
@@ -264,7 +235,7 @@ func TestAWorkerJoinsAClusterOfLodiasControlPlane(t *testing.T) {
 				t.Fatal(err)
 			}
 			pods := kubernetes.NewForConfigOrDie(tenant.cfg).CoreV1().Pods(web.Namespace)
-			until(ctx, t, 3*time.Minute, "pod web runs on Node "+node.Name+" and its logs are readable", func(ctx context.Context) error {
+			until(ctx, t, bounds.Pod, "pod web runs on Node "+node.Name+" and its logs are readable", func(ctx context.Context) error {
 				if err := tenant.client.Get(ctx, client.ObjectKeyFromObject(web), web); err != nil {
 					return err
 				}
@@ -286,7 +257,7 @@ func TestAWorkerJoinsAClusterOfLodiasControlPlane(t *testing.T) {
 			return ctx
 		}).
 		Assess("the Cluster is Available", func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
-			until(ctx, t, time.Minute, "Available is True", func(ctx context.Context) error {
+			until(ctx, t, bounds.Available, "Available is True", func(ctx context.Context) error {
 				cluster := &clusterv1.Cluster{}
 				if err := k8s.Get(ctx, key, cluster); err != nil {
 					return err
@@ -298,11 +269,17 @@ func TestAWorkerJoinsAClusterOfLodiasControlPlane(t *testing.T) {
 			})
 			return ctx
 		}).
-		Assess("deleting the Cluster removes the LodiaControlPlane, the ControlPlane, the etcd claim and the worker's container", func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
+		Assess("deleting the Cluster removes the LodiaControlPlane, the ControlPlane, the etcd claim, the copied Secrets and the worker's container", func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
 			etcd := lodiav1alpha1.EtcdName(key.Name)
-			claim := &corev1.PersistentVolumeClaim{ObjectMeta: metav1.ObjectMeta{Namespace: key.Namespace, Name: etcd + "-" + etcd + "-0"}}
-			if err := k8s.Get(ctx, client.ObjectKeyFromObject(claim), claim); err != nil {
-				t.Fatalf("the etcd claim, whose removal this step checks: %v", err)
+			owned := []client.Object{
+				&corev1.PersistentVolumeClaim{ObjectMeta: metav1.ObjectMeta{Namespace: key.Namespace, Name: etcd + "-" + etcd + "-0"}},
+				&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: key.Namespace, Name: secret.Name(key.Name, secret.Kubeconfig)}},
+				&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: key.Namespace, Name: secret.Name(key.Name, secret.ClusterCA)}},
+			}
+			for _, obj := range owned {
+				if err := k8s.Get(ctx, client.ObjectKeyFromObject(obj), obj); err != nil {
+					t.Fatalf("%T %s, whose removal this step checks: %v", obj, obj.GetName(), err)
+				}
 			}
 			containers, err := clusterContainers(ctx, key.Name)
 			if err != nil {
@@ -314,13 +291,12 @@ func TestAWorkerJoinsAClusterOfLodiasControlPlane(t *testing.T) {
 			if err := k8s.Delete(ctx, &clusterv1.Cluster{ObjectMeta: metav1.ObjectMeta{Namespace: key.Namespace, Name: key.Name}}); err != nil {
 				t.Fatal(err)
 			}
-			until(ctx, t, 10*time.Minute, "everything the Cluster made is gone", func(ctx context.Context) error {
-				for _, obj := range []client.Object{
+			until(ctx, t, bounds.Deleted, "everything the Cluster made is gone", func(ctx context.Context) error {
+				for _, obj := range append([]client.Object{
 					&clusterv1.Cluster{ObjectMeta: metav1.ObjectMeta{Namespace: key.Namespace, Name: key.Name}},
 					&v1alpha1.LodiaControlPlane{ObjectMeta: metav1.ObjectMeta{Namespace: key.Namespace, Name: key.Name}},
 					&lodiav1alpha1.ControlPlane{ObjectMeta: metav1.ObjectMeta{Namespace: key.Namespace, Name: key.Name}},
-					claim,
-				} {
+				}, owned...) {
 					if err := gone(k8s.Get(ctx, client.ObjectKeyFromObject(obj), obj)); err != nil {
 						return fmt.Errorf("%T %s: %w", obj, obj.GetName(), err)
 					}
@@ -346,15 +322,6 @@ func TestAWorkerJoinsAClusterOfLodiasControlPlane(t *testing.T) {
 	testenv.Test(t, f)
 }
 
-func newClient(t *testing.T, cfg *envconf.Config) client.Client {
-	t.Helper()
-	k8s, err := client.New(cfg.Client().RESTConfig(), client.Options{Scheme: controller.Scheme()})
-	if err != nil {
-		t.Fatal(err)
-	}
-	return k8s
-}
-
 func render(file, cluster string) ([]byte, error) {
 	raw, err := os.ReadFile(filepath.Join("testdata", file))
 	if err != nil {
@@ -366,34 +333,6 @@ func render(file, cluster string) ([]byte, error) {
 		}
 		return cluster, nil
 	})
-}
-
-type tenantAccess struct {
-	cfg       *rest.Config
-	client    client.Client
-	resources *resources.Resources
-}
-
-func openTenant(ctx context.Context, t *testing.T, k8s client.Client, key client.ObjectKey) *tenantAccess {
-	t.Helper()
-	kubeconfig := &corev1.Secret{}
-	if err := k8s.Get(ctx, client.ObjectKey{Namespace: key.Namespace, Name: secret.Name(key.Name, secret.Kubeconfig)}, kubeconfig); err != nil {
-		t.Fatal(err)
-	}
-	cfg, err := clientcmd.RESTConfigFromKubeConfig(kubeconfig.Data[secret.KubeconfigDataName])
-	if err != nil {
-		t.Fatal(err)
-	}
-	c, err := client.New(cfg, client.Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	r, err := resources.New(cfg)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Logf("the tenant's API server %s is reached through %s", cfg.Host, kubeconfig.Name)
-	return &tenantAccess{cfg: cfg, client: c, resources: r}
 }
 
 func until(ctx context.Context, t *testing.T, timeout time.Duration, what string, check func(context.Context) error) {
@@ -423,11 +362,6 @@ func running(pod *corev1.Pod) error {
 		}
 	}
 	return nil
-}
-
-func clusterContainers(ctx context.Context, cluster string) ([]string, error) {
-	out, err := docker(ctx, "ps", "--all", "--quiet", "--filter", "label="+clusterLabel+"="+cluster)
-	return strings.Fields(out), err
 }
 
 func gone(err error) error {

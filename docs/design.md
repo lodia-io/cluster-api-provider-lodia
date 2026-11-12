@@ -94,8 +94,13 @@ The provider watches the metadata of Secrets labelled `lodia.io/control-plane` (
 A pass has a minute ([ReconciliationTimeout][cr-timeout]), and ten passes run at once, as in Lodia's controllers ([workers][lo-workers]), so one tenant's blocked write does not hold up another's.
 The cache resyncs every 10 minutes, Cluster API's default ([--sync-period][capi-sync]), which repairs the provider's own Secrets, which no watch covers, and a missed delete event.
 
-RBAC is generated from markers into [`config/rbac/role.yaml`](../config/rbac/role.yaml).
-The envtest suite runs the controller, and a leader-elected manager, as a user bound to that role.
+RBAC is generated from markers into [`config/rbac/role.yaml`](../config/rbac/role.yaml), except leader election.
+[`leader_election_role.yaml`](../config/rbac/leader_election_role.yaml) grants Leases and Events in the manager's namespace only, and `get` and `update` of Leases only on the one named by `LeaderElectionID`, as [Lodia's leader election Role][lo-leader-election] does.
+So its Role and ClusterRole grant it no Lease in `kube-node-lease`.
+In its own namespace they grant `get` and `update` on its own Lease only, and `delete` on none.
+`create` cannot be limited by name ([RBAC][k8s-rbac-names]), so it can still create a Lease under any free name.
+The ClusterRole's `create` and `get` on Secrets in every namespace, which the copies in each Cluster's namespace need, still let the provider create a `kubernetes.io/service-account-token` Secret for any ServiceAccount and read the token filled in for it ([validation][k8s-sa-secret], [tokens controller][k8s-sa-tokens], [authentication][k8s-sa-auth]), so these limits contain the provider's mistakes, not a compromised provider.
+The envtest suite runs the controller, and a leader-elected manager, as a user bound to the ClusterRole and, in the namespace where the manager elects, to the Role.
 Cluster API's kubeadm bootstrap provider reads the object behind `Cluster.spec.controlPlaneRef` to render `.controlPlane.version` into files with `contentFormat: Template`, and v1.14.0 to v1.15.0-beta.0 read it on every worker join ([v1.14.0][cabpk-files-114], [v1.15.0-beta.0][cabpk-files]), while its ClusterRole grants that only for `kubeadmcontrolplanes` ([RBAC markers][cabpk-rbac]), so [`config/rbac/kubeadm_bootstrap_role.yaml`](../config/rbac/kubeadm_bootstrap_role.yaml) and its binding grant it `get` on `lodiacontrolplanes`.
 The binding names the provider's ServiceAccount in `capi-kubeadm-bootstrap-system`, and clusterctl sets the namespace of every namespaced subject to the installed provider's own ([target namespace][cc-ns], [subjects][cc-subjects]), so a clusterctl install does not deliver the grant yet.
 Module `go.lodia.io/cluster-api-provider-lodia`, importing `sigs.k8s.io/cluster-api/api` (its own module since v1.14) and `go.lodia.io/lodia/api` ([go.mod][lo-api-gomod]).
@@ -291,6 +296,10 @@ Lodia's availability is a failure tolerance (`highAvailability`) with replica co
 [kubeadm-pins]: https://github.com/kubernetes/kubernetes/blob/v1.35.0/cmd/kubeadm/app/discovery/token/token.go#L191-L209
 [kubeadm-jws]: https://github.com/kubernetes/kubernetes/blob/v1.35.0/cmd/kubeadm/app/discovery/token/token.go#L211-L259
 [k8s-owners]: https://kubernetes.io/docs/concepts/overview/working-with-objects/owners-dependents/
+[k8s-rbac-names]: https://github.com/kubernetes/website/blob/8817d358864b70a9710c5ad34f78df6a239be33d/content/en/docs/reference/access-authn-authz/rbac.md?plain=1#L219-L220
+[k8s-sa-secret]: https://github.com/kubernetes/kubernetes/blob/v1.37.2/pkg/apis/core/validation/validation.go#L8104-L8109
+[k8s-sa-tokens]: https://github.com/kubernetes/kubernetes/blob/v1.37.2/pkg/controller/serviceaccount/tokens_controller.go#L310-L327
+[k8s-sa-auth]: https://github.com/kubernetes/kubernetes/blob/v1.37.2/pkg/serviceaccount/legacy.go#L87-L153
 
 <!-- the reference providers -->
 [kp-patchcluster]: https://github.com/clastix/cluster-api-control-plane-provider-kamaji/blob/v0.21.0/controllers/kamajicontrolplane_controller_cluster_patch.go#L104-L151
@@ -314,6 +323,7 @@ Lodia's availability is a failure tolerance (`highAvailability`) with replica co
 [lo-target]: https://github.com/lodia-io/lodia/blob/57375832e7fe8b3a06374613797eb4c544fe7612/internal/controller/lifecycle/lifecycle.go#L138-L152
 [lo-workers]: https://github.com/lodia-io/lodia/blob/57375832e7fe8b3a06374613797eb4c544fe7612/internal/operator/operator.go#L40-L42
 [lo-labels]: https://github.com/lodia-io/lodia/blob/57375832e7fe8b3a06374613797eb4c544fe7612/api/v1alpha1/labels.go#L17-L20
+[lo-leader-election]: https://github.com/lodia-io/lodia/blob/57375832e7fe8b3a06374613797eb4c544fe7612/charts/lodia/templates/rbac.yaml#L58-L75
 
 <!-- Lodia at 5f212ed -->
 [lo-claude]: https://github.com/lodia-io/lodia/blob/5f212ed9acd71fe2a944e5fe63cad73e3d17812e/CLAUDE.md?plain=1#L53-L54

@@ -9,6 +9,8 @@ package e2e
 import (
 	"errors"
 	"fmt"
+	"net"
+	"net/url"
 	"strings"
 
 	"k8s.io/client-go/tools/clientcmd"
@@ -16,12 +18,14 @@ import (
 
 // ContextPrefix starts the name of every context the suite agrees to use:
 // kind names a cluster's context kind-<name>, and make e2e names clusters
-// lodia-e2e-<something>.
-const ContextPrefix = "kind-lodia-e2e"
+// capl-e2e-<something>. Lodia's own e2e clusters are lodia-e2e-<something>,
+// and neither suite's prefix is the other's.
+const ContextPrefix = "kind-capl-e2e"
 
 // RequireNamedCluster refuses any kubeconfig but one with a single context
-// whose name starts with ContextPrefix, so the suite never reaches a cluster
-// through someone's current context.
+// whose name starts with ContextPrefix and whose server is on this host, as
+// kind writes it, so the suite never reaches a cluster through someone's
+// current context, nor one that only carries the name.
 func RequireNamedCluster(path string) error {
 	if path == "" {
 		return errors.New("E2E_KUBECONFIG is not set: the e2e suite runs only against a cluster named on the command line; make e2e creates one")
@@ -38,6 +42,13 @@ func RequireNamedCluster(path string) error {
 	}
 	if !strings.HasPrefix(cfg.CurrentContext, ContextPrefix) {
 		return fmt.Errorf("context %q does not start with %q: the e2e suite runs only against its own kind cluster", cfg.CurrentContext, ContextPrefix)
+	}
+	cluster, ok := cfg.Clusters[cfg.Contexts[cfg.CurrentContext].Cluster]
+	if !ok {
+		return fmt.Errorf("%s: context %q names a cluster the file does not hold", path, cfg.CurrentContext)
+	}
+	if server, err := url.Parse(cluster.Server); err != nil || !net.ParseIP(server.Hostname()).IsLoopback() {
+		return fmt.Errorf("context %q names the server %q, not a loopback address: the e2e suite runs only against a kind cluster on this host", cfg.CurrentContext, cluster.Server)
 	}
 	return nil
 }

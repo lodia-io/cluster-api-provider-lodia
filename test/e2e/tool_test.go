@@ -10,7 +10,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -30,6 +32,12 @@ func toolOutput(cmd *exec.Cmd) ([]byte, error) {
 	return out, nil
 }
 
+func koEnv(environ []string, cluster string, extra ...string) []string {
+	// ko refuses --platform beside GOARCH.
+	env := slices.DeleteFunc(slices.Clone(environ), func(kv string) bool { return strings.HasPrefix(kv, "GOARCH=") })
+	return append(env, append([]string{"KO_DOCKER_REPO=kind.local", "KIND_CLUSTER_NAME=" + cluster}, extra...)...)
+}
+
 func pidIn(path string) (int, bool) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
@@ -37,6 +45,21 @@ func pidIn(path string) (int, bool) {
 	}
 	pid, err := strconv.Atoi(string(raw))
 	return pid, err == nil
+}
+
+func TestKoRunsOnTheClusterWithTheVersionAndWithoutGOARCH(t *testing.T) {
+	environ := []string{"PATH=/bin", "GOARCH=arm64", "VERSION=inherited"}
+	got := koEnv(environ, "capl-e2e", "VERSION=57375832e7fe")
+	want := []string{"PATH=/bin", "VERSION=inherited", "KO_DOCKER_REPO=kind.local", "KIND_CLUSTER_NAME=capl-e2e", "VERSION=57375832e7fe"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+	if !slices.Equal(environ, []string{"PATH=/bin", "GOARCH=arm64", "VERSION=inherited"}) {
+		t.Fatalf("koEnv changed its argument: %q", environ)
+	}
+	if got := koEnv(nil, "c"); !slices.Equal(got, []string{"KO_DOCKER_REPO=kind.local", "KIND_CLUSTER_NAME=c"}) {
+		t.Fatalf("with nothing extra, got %q", got)
+	}
 }
 
 func TestToolOutputReturnsWhenTheContextKillsGoRun(t *testing.T) {
