@@ -23,7 +23,7 @@ test: ## unit and envtest tests; envtest runs a real API server and etcd
 	KUBEBUILDER_ASSETS="$$(go tool setup-envtest use $(ENVTEST_K8S_VERSION) -p path)" go test ./...
 
 .PHONY: components
-components: ## render config/default and check its Namespace, labels, manager container and the roles that reach the manager's ServiceAccount
+components: ## render config/default and check that clusterctl's variable processing leaves it as written, and its Namespace, labels, manager container and the roles that reach the manager's ServiceAccount
 	@rendered="$$(go run $(KUSTOMIZE) build config/default)" || exit 1; \
 	printf '%s\n' "$$rendered" | go run ./test/components
 
