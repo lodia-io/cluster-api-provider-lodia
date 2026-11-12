@@ -102,13 +102,20 @@ func dumpAll(ctx context.Context, cfg *envconf.Config, c client.Client, dir stri
 		if ctx.Err() != nil {
 			break
 		}
-		errs = append(errs, dumpObjects(ctx, c, dir, podKind, ns), dumpObjects(ctx, c, dir, eventKind, ns), dumpLogs(ctx, cfg, dir, ns))
+		errs = append(errs, dumpObjects(ctx, c, dir, podKind, ns), dumpObjects(ctx, c, dir, eventKind, ns))
 	}
-	if err := ctx.Err(); err != nil {
-		return errors.Join(append(errs, err)...)
+	if ctx.Err() == nil {
+		errs = append(errs, dumpTenant(ctx, cfg, c, dir, tenantBound))
 	}
-	errs = append(errs, dumpTenant(ctx, cfg, c, dir, tenantBound))
-	return errors.Join(errs...)
+	// A kubelet that stalls its log requests holds each of them to the request
+	// timeout, in every container: the logs go last.
+	for _, ns := range managers {
+		if ctx.Err() != nil {
+			break
+		}
+		errs = append(errs, dumpLogs(ctx, cfg, dir, ns))
+	}
+	return errors.Join(append(errs, ctx.Err())...)
 }
 
 func dumpObjects(ctx context.Context, c client.Client, dir string, kind schema.GroupVersionKind, ns string) error {

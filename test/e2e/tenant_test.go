@@ -371,6 +371,32 @@ func TestTheDumpCutsOffWhatTheManagementClusterDoesNotAnswerAtItsBound(t *testin
 	}
 }
 
+func managementThatHolds(t *testing.T, suffix string) (dumpSetup, func() []string) {
+	t.Helper()
+	d := newDumpSetup(t, tenantAPI(t).URL)
+	url, asked := gatedServer(t, managementHandler(t), func(path string) (time.Duration, bool) { return 0, !strings.HasSuffix(path, suffix) })
+	d.cfg = configFor(t, url)
+	return d, asked
+}
+
+func TestTheDumpOfAKubeletThatDoesNotAnswerItsLogsWritesTheTenantFirst(t *testing.T) {
+	const bound = 3 * time.Second
+	shortenTheDump(t, bound, bound, bound)
+	shortenTheDumpRequests(t, bound/5)
+	d, _ := managementThatHolds(t, "/log")
+	start := time.Now()
+	if err := returnsWithin(t, bound+bound/2, "the dump", func() error { return dumpBounded(t.Context(), d.cfg, d.c, d.dir) }); err == nil {
+		t.Fatal("the dump says nothing about logs that were never answered")
+	}
+	if took := time.Since(start); took < bound {
+		t.Errorf("the dump ended after %s, before its bound %s: the held logs did not use it up", took, bound)
+	}
+	requireFiles(t, d.dir, map[string]string{
+		"tenant/objects/Node.yaml":          "/api/v1/nodes",
+		"tenant/objects/default/Event.yaml": "/api/v1/namespaces/default/events",
+	})
+}
+
 func TestTheDumpAsksTheManagementClusterNothingOnceItsBoundHasEnded(t *testing.T) {
 	withoutDocker(t)
 	url, asked := gatedServer(t, managementHandler(t), func(string) (time.Duration, bool) { return 0, true })
