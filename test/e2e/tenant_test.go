@@ -514,15 +514,19 @@ func TestTheDumpWritesTheLogsOfEveryManager(t *testing.T) {
 	useDocker(t, fakeDocker)
 	url, _ := recordedServer(t, managementHandler(t))
 	dir := t.TempDir()
-	_ = dumpCluster(t.Context(), configFor(t, url), dir)
+	err := dumpCluster(t.Context(), configFor(t, url), dir)
 	want := make(map[string]string)
 	for _, ns := range managers {
 		log := "log of /api/v1/namespaces/" + ns + "/pods/p/log?"
 		want[filepath.Join(ns, "p-c.log")] = log + "container=c"
 		want[filepath.Join(ns, "p-c.previous.log")] = log + "container=c&previous=true"
 		want[filepath.Join(ns, "p-c2.log")] = log + "container=c2"
+		want[filepath.Join(ns, "q-e.log")] = "log of /api/v1/namespaces/" + ns + "/pods/q/log?container=e"
 	}
 	requireOnlyFiles(t, filepath.Join(dir, "logs"), want)
+	if err == nil || strings.Count(err.Error(), "(get pods q)") != len(managers) {
+		t.Errorf("the dump's error does not name the failed log of the Pod q once in each of the %d namespaces: %v", len(managers), err)
+	}
 }
 
 func TestTheDumpGivesTheListsAndTheDiscoveryOfTheManagementClusterTheRequestTimeout(t *testing.T) {
