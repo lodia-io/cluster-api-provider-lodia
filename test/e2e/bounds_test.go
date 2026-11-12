@@ -70,7 +70,7 @@ var tenantDumpBound = 30 * time.Second
 
 var workerDumpBound = 30 * time.Second
 
-var stepDockerBound = 30 * time.Second
+var dockerCallBound = 30 * time.Second
 
 var goTestTimeout = regexp.MustCompile(`-timeout (\d+)m\b`)
 
@@ -117,11 +117,11 @@ func clientFits(requestTimeout, discovery time.Duration) error {
 	return nil
 }
 
-// A step's context has no deadline, so a docker call of a step ends at a bound
-// of its own, and the first call to fail ends the test.
+// A step's context has no deadline, so docker ends every call at a bound of its
+// own, and the first call to fail ends the test.
 func dockerFits(bound time.Duration) error {
 	if bound <= 0 || bound > callsWithoutBound {
-		return fmt.Errorf("a step's docker call bound %s is not positive, or is more than the %s left for the calls without a bound: a docker that hangs would hold the step past its own bound by that much", bound, callsWithoutBound)
+		return fmt.Errorf("a docker call's bound %s is not positive, or is more than the %s left for the calls without a bound: a docker that hangs would hold the step past its own bound by that much", bound, callsWithoutBound)
 	}
 	return nil
 }
@@ -180,7 +180,7 @@ func TestTheBoundsFitUnderTheTimeouts(t *testing.T) {
 	if err := clientFits(clientRequestTimeout, discoveryTimeout); err != nil {
 		t.Fatal(err)
 	}
-	if err := dockerFits(stepDockerBound); err != nil {
+	if err := dockerFits(dockerCallBound); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -258,7 +258,7 @@ func TestClientTimesThatDoNotFitAreRefused(t *testing.T) {
 	}
 }
 
-func TestStepDockerBoundsThatDoNotFitAreRefused(t *testing.T) {
+func TestDockerCallBoundsThatDoNotFitAreRefused(t *testing.T) {
 	const second = time.Second
 	cases := []struct {
 		name  string
