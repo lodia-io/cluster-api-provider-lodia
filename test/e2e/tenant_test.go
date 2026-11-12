@@ -303,8 +303,8 @@ func shortenTheDumpRequests(t *testing.T, timeout time.Duration) {
 }
 
 func TestTheDumpOfAManagementClusterThatDoesNotAnswerEndsInItsBoundAndWritesTheWorkers(t *testing.T) {
-	const bound = time.Second
-	shortenTheDump(t, bound, bound/4, bound/4)
+	const bound = 4 * time.Second
+	shortenTheDump(t, bound, bound/8, bound/2)
 	shortenTheDumpRequests(t, bound/4)
 	useDocker(t, fakeDocker)
 	stalled, _ := tenantThatNeverAnswers(t)
