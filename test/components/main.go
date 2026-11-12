@@ -11,17 +11,17 @@
 //   - the roles that reach the manager's ServiceAccount are one Role, in the
 //     manager's namespace, and one ClusterRole, and every binding to either
 //     names the ServiceAccount alone;
-//   - the Role holds the rules of leader election and no other: create on
-//     events, and on leases, and get and update on the Lease that the manager's
-//     LeaderElectionID names;
+//   - the Role holds the rules of leader election and no other: create and
+//     patch on events, create on leases, and get and update on the Lease that
+//     the manager's LeaderElectionID names;
 //   - a ClusterRoleBinding gives the manager's ServiceAccount a ClusterRole
 //     that the render holds and that has no aggregationRule and no rule on
 //     leases or events.
 //
 // The next three are rules of what clusterctl asks of a components YAML
 // (https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/docs/book/src/developer/providers/contracts/clusterctl.md#components-yaml);
-// the rest are what the manager needs to run and no more, held on the render
-// because clusterctl installs every object of it, as written.
+// the rest hold the manager's RBAC on the render, because clusterctl installs
+// every object of it, as written.
 package main
 
 import (
