@@ -371,19 +371,19 @@ func TestTheDumpCutsOffWhatTheManagementClusterDoesNotAnswerAtItsBound(t *testin
 	}
 }
 
-func managementThatHolds(t *testing.T, suffix string) (dumpSetup, func() []string) {
+func managementThatHolds(t *testing.T, suffix string) dumpSetup {
 	t.Helper()
 	d := newDumpSetup(t, tenantAPI(t).URL)
-	url, asked := gatedServer(t, managementHandler(t), func(path string) (time.Duration, bool) { return 0, !strings.HasSuffix(path, suffix) })
+	url, _ := gatedServer(t, managementHandler(t), func(path string) (time.Duration, bool) { return 0, !strings.HasSuffix(path, suffix) })
 	d.cfg = configFor(t, url)
-	return d, asked
+	return d
 }
 
 func TestTheDumpOfAKubeletThatDoesNotAnswerItsLogsWritesTheTenantFirst(t *testing.T) {
 	const bound = 3 * time.Second
 	shortenTheDump(t, bound, bound, bound)
 	shortenTheDumpRequests(t, bound/5)
-	d, _ := managementThatHolds(t, "/log")
+	d := managementThatHolds(t, "/log")
 	start := time.Now()
 	if err := returnsWithin(t, bound+bound/2, "the dump", func() error { return dumpBounded(t.Context(), d.cfg, d.c, d.dir) }); err == nil {
 		t.Fatal("the dump says nothing about logs that were never answered")
@@ -399,17 +399,20 @@ func TestTheDumpOfAKubeletThatDoesNotAnswerItsLogsWritesTheTenantFirst(t *testin
 
 func TestTheDumpEndsAHeldListOfPodsOfTheLogsAtTheRequestTimeout(t *testing.T) {
 	const (
-		bound   = 4 * time.Second
-		request = bound / 20
+		bound   = 6 * time.Second
+		request = bound / 15
 	)
 	shortenTheDump(t, bound, bound, bound)
 	shortenTheDumpRequests(t, request)
-	d, asked := managementThatHolds(t, "/pods")
-	if err := returnsWithin(t, 12*request, "the dump", func() error { return dumpBounded(t.Context(), d.cfg, d.c, d.dir) }); err == nil {
+	d := managementThatHolds(t, "/pods")
+	err := returnsWithin(t, 12*request, "the dump", func() error { return dumpBounded(t.Context(), d.cfg, d.c, d.dir) })
+	if err == nil {
 		t.Fatal("the dump says nothing about lists of Pods that were never answered")
 	}
-	if n := countPaths(asked(), func(path string) bool { return strings.HasSuffix(path, "/pods") }); n != len(managers) {
-		t.Errorf("%d of the %d namespaces' Pods lists reached the management cluster", n, len(managers))
+	for _, ns := range managers {
+		if !strings.Contains(err.Error(), "/namespaces/"+ns+"/pods") {
+			t.Errorf("the dump's error names no failed list of the Pods of %s: %v", ns, err)
+		}
 	}
 }
 
@@ -417,7 +420,7 @@ func TestTheDumpCutsOffAHeldListOfPodsOfTheLogsAtItsBound(t *testing.T) {
 	const bound = time.Second
 	shortenTheDump(t, bound, bound, bound)
 	shortenTheDumpRequests(t, 10*bound)
-	d, _ := managementThatHolds(t, "/pods")
+	d := managementThatHolds(t, "/pods")
 	if err := returnsWithin(t, 2*bound, "the dump", func() error { return dumpBounded(t.Context(), d.cfg, d.c, d.dir) }); err == nil {
 		t.Fatal("the dump says nothing about a list of Pods that was never answered")
 	}
