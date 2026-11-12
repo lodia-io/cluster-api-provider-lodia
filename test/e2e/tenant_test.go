@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -516,9 +517,12 @@ func TestTheDumpWritesTheLogsOfEveryManager(t *testing.T) {
 	_ = dumpCluster(t.Context(), configFor(t, url), dir)
 	want := make(map[string]string)
 	for _, ns := range managers {
-		want["logs/"+ns+"/p-c.log"] = "log of /api/v1/namespaces/" + ns + "/pods/p/log"
+		log := "log of /api/v1/namespaces/" + ns + "/pods/p/log?"
+		want[filepath.Join(ns, "p-c.log")] = log + "container=c"
+		want[filepath.Join(ns, "p-c.previous.log")] = log + "container=c&previous=true"
+		want[filepath.Join(ns, "p-c2.log")] = log + "container=c2"
 	}
-	requireFiles(t, dir, want)
+	requireOnlyFiles(t, filepath.Join(dir, "logs"), want)
 }
 
 func TestTheDumpGivesTheListsAndTheDiscoveryOfTheManagementClusterTheRequestTimeout(t *testing.T) {
