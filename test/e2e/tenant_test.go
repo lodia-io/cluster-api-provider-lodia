@@ -397,6 +397,32 @@ func TestTheDumpOfAKubeletThatDoesNotAnswerItsLogsWritesTheTenantFirst(t *testin
 	})
 }
 
+func TestTheDumpEndsAHeldListOfPodsOfTheLogsAtTheRequestTimeout(t *testing.T) {
+	const (
+		bound   = 4 * time.Second
+		request = bound / 20
+	)
+	shortenTheDump(t, bound, bound, bound)
+	shortenTheDumpRequests(t, request)
+	d, asked := managementThatHolds(t, "/pods")
+	if err := returnsWithin(t, 12*request, "the dump", func() error { return dumpBounded(t.Context(), d.cfg, d.c, d.dir) }); err == nil {
+		t.Fatal("the dump says nothing about lists of Pods that were never answered")
+	}
+	if n := countPaths(asked(), func(path string) bool { return strings.HasSuffix(path, "/pods") }); n != len(managers) {
+		t.Errorf("%d of the %d namespaces' Pods lists reached the management cluster", n, len(managers))
+	}
+}
+
+func TestTheDumpCutsOffAHeldListOfPodsOfTheLogsAtItsBound(t *testing.T) {
+	const bound = time.Second
+	shortenTheDump(t, bound, bound, bound)
+	shortenTheDumpRequests(t, 10*bound)
+	d, _ := managementThatHolds(t, "/pods")
+	if err := returnsWithin(t, 2*bound, "the dump", func() error { return dumpBounded(t.Context(), d.cfg, d.c, d.dir) }); err == nil {
+		t.Fatal("the dump says nothing about a list of Pods that was never answered")
+	}
+}
+
 func TestTheDumpAsksTheManagementClusterNothingOnceItsBoundHasEnded(t *testing.T) {
 	withoutDocker(t)
 	url, asked := gatedServer(t, managementHandler(t), func(string) (time.Duration, bool) { return 0, true })
