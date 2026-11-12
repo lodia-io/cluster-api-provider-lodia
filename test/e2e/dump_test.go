@@ -298,7 +298,7 @@ func managementHandler(t *testing.T) http.Handler {
 		case strings.HasSuffix(r.URL.Path, "/pods"):
 			respond(t, w, `{"kind":"PodList","apiVersion":"v1","items":[{"metadata":{"name":"p"},"spec":{"containers":[{"name":"c"}]}}]}`)
 		case strings.HasSuffix(r.URL.Path, "/log"):
-			respond(t, w, "log")
+			respond(t, w, "log of "+r.URL.Path)
 		default:
 			tenant.ServeHTTP(w, r)
 		}

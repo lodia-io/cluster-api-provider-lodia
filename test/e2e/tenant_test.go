@@ -494,6 +494,18 @@ func TestTheDumpGivesTheLogsOfTheManagersTheRequestTimeout(t *testing.T) {
 	requireRequestTimeout(t, requestsOfTheDump(t), "/log", dumpRequestTimeout)
 }
 
+func TestTheDumpWritesTheLogsOfEveryManager(t *testing.T) {
+	useDocker(t, fakeDocker)
+	url, _ := recordedServer(t, managementHandler(t))
+	dir := t.TempDir()
+	_ = dumpCluster(t.Context(), configFor(t, url), dir)
+	want := make(map[string]string)
+	for _, ns := range managers {
+		want["logs/"+ns+"/p-c.log"] = "log of /api/v1/namespaces/" + ns + "/pods/p/log"
+	}
+	requireFiles(t, dir, want)
+}
+
 func TestTheDumpGivesTheListsAndTheDiscoveryOfTheManagementClusterTheRequestTimeout(t *testing.T) {
 	requests := requestsOfTheDump(t)
 	for _, suffix := range []string{"/api", "/apis", "/clusters", "/events"} {
