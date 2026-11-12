@@ -84,7 +84,7 @@ func TestADockerCallThatHangsEndsAtItsBound(t *testing.T) {
 	callers := map[string]func(t *testing.T) context.Context{
 		"a caller without a deadline": func(*testing.T) context.Context { return context.Background() },
 		"a caller with a later deadline": func(t *testing.T) context.Context {
-			ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 			t.Cleanup(cancel)
 			return ctx
 		},
