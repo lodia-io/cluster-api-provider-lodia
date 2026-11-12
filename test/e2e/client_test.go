@@ -78,6 +78,21 @@ func TestTheClientsDiscoveryEndsAtTheDiscoveryTimeoutWhenTheClusterDoesNotAnswer
 	}
 }
 
+func TestTheClientsDiscoveryRequestsAskForTheDiscoveryTimeout(t *testing.T) {
+	shortenTheDiscovery(t, 7*time.Second)
+	url, asked := recordedServer(t, tenantHandler(t))
+	c, err := newClient(configFor(t, url))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := c.List(t.Context(), &corev1.NodeList{}); err != nil {
+		t.Fatal(err)
+	}
+	for _, suffix := range []string{"/api", "/apis", "/api/v1"} {
+		requireRequestTimeout(t, asked(), suffix, discoveryTimeout)
+	}
+}
+
 func TestTheClientsDiscoveryAcceptsAnAnswerWithinTheDiscoveryTimeout(t *testing.T) {
 	const timeout = time.Second
 	shortenTheDiscovery(t, timeout)

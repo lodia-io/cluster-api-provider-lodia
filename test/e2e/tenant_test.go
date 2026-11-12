@@ -412,11 +412,8 @@ func TestTheDumpAsksTheManagementClusterNothingOnceItsBoundHasEnded(t *testing.T
 
 type request struct{ path, timeout string }
 
-func requestsOfTheDump(t *testing.T) []request {
+func recordedServer(t *testing.T, healthy http.Handler) (string, func() []request) {
 	t.Helper()
-	shortenTheDumpRequests(t, 7*time.Second)
-	useDocker(t, fakeDocker)
-	healthy := managementHandler(t)
 	var (
 		mu    sync.Mutex
 		asked []request
@@ -428,13 +425,23 @@ func requestsOfTheDump(t *testing.T) []request {
 		healthy.ServeHTTP(w, r)
 	}))
 	t.Cleanup(server.Close)
-	_ = dumpCluster(t.Context(), configFor(t, server.URL), t.TempDir())
-	mu.Lock()
-	defer mu.Unlock()
-	return slices.Clone(asked)
+	return server.URL, func() []request {
+		mu.Lock()
+		defer mu.Unlock()
+		return slices.Clone(asked)
+	}
 }
 
-func requireRequestTimeout(t *testing.T, requests []request, suffix string) {
+func requestsOfTheDump(t *testing.T) []request {
+	t.Helper()
+	shortenTheDumpRequests(t, 7*time.Second)
+	useDocker(t, fakeDocker)
+	url, asked := recordedServer(t, managementHandler(t))
+	_ = dumpCluster(t.Context(), configFor(t, url), t.TempDir())
+	return asked()
+}
+
+func requireRequestTimeout(t *testing.T, requests []request, suffix string, want time.Duration) {
 	t.Helper()
 	var n int
 	for _, r := range requests {
@@ -442,7 +449,7 @@ func requireRequestTimeout(t *testing.T, requests []request, suffix string) {
 			continue
 		}
 		n++
-		if want := dumpRequestTimeout.String(); r.timeout != want {
+		if r.timeout != want.String() {
 			t.Errorf("%s was sent with the timeout %q, want %q", r.path, r.timeout, want)
 		}
 	}
@@ -452,12 +459,12 @@ func requireRequestTimeout(t *testing.T, requests []request, suffix string) {
 }
 
 func TestTheDumpGivesTheLogsOfTheManagersTheRequestTimeout(t *testing.T) {
-	requireRequestTimeout(t, requestsOfTheDump(t), "/log")
+	requireRequestTimeout(t, requestsOfTheDump(t), "/log", dumpRequestTimeout)
 }
 
 func TestTheDumpGivesTheListsAndTheDiscoveryOfTheManagementClusterTheRequestTimeout(t *testing.T) {
 	requests := requestsOfTheDump(t)
 	for _, suffix := range []string{"/api", "/apis", "/clusters", "/events"} {
-		requireRequestTimeout(t, requests, suffix)
+		requireRequestTimeout(t, requests, suffix, dumpRequestTimeout)
 	}
 }
