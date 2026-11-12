@@ -96,9 +96,10 @@ The cache resyncs every 10 minutes, Cluster API's default ([--sync-period][capi-
 
 RBAC is generated from markers into [`config/rbac/role.yaml`](../config/rbac/role.yaml), except leader election.
 [`leader_election_role.yaml`](../config/rbac/leader_election_role.yaml) grants Leases and Events in the manager's namespace only, and `get` and `update` of Leases only on the one named by `LeaderElectionID`, as [Lodia's leader election Role][lo-leader-election] does.
-So the ServiceAccount cannot write a Lease in `kube-node-lease`.
-In its own namespace it can get and update only its own Lease, and delete none.
+So its Role and ClusterRole grant it no Lease in `kube-node-lease`.
+In its own namespace they grant `get` and `update` on its own Lease only, and `delete` on none.
 `create` cannot be limited by name ([RBAC][k8s-rbac-names]), so it can still create a Lease under any free name.
+The ClusterRole's `create` and `get` on Secrets in every namespace, which the copies in each Cluster's namespace need, still let the provider create a `kubernetes.io/service-account-token` Secret for any ServiceAccount and read the token filled in for it ([validation][k8s-sa-secret], [tokens controller][k8s-sa-tokens], [authentication][k8s-sa-auth]), so these limits contain the provider's mistakes, not a compromised provider.
 The envtest suite runs the controller, and a leader-elected manager, as a user bound to the ClusterRole and, in the namespace where the manager elects, to the Role.
 Cluster API's kubeadm bootstrap provider reads the object behind `Cluster.spec.controlPlaneRef` to render `.controlPlane.version` into files with `contentFormat: Template`, and v1.14.0 to v1.15.0-beta.0 read it on every worker join ([v1.14.0][cabpk-files-114], [v1.15.0-beta.0][cabpk-files]), while its ClusterRole grants that only for `kubeadmcontrolplanes` ([RBAC markers][cabpk-rbac]), so [`config/rbac/kubeadm_bootstrap_role.yaml`](../config/rbac/kubeadm_bootstrap_role.yaml) and its binding grant it `get` on `lodiacontrolplanes`.
 The binding names the provider's ServiceAccount in `capi-kubeadm-bootstrap-system`, and clusterctl sets the namespace of every namespaced subject to the installed provider's own ([target namespace][cc-ns], [subjects][cc-subjects]), so a clusterctl install does not deliver the grant yet.
@@ -296,6 +297,9 @@ Lodia's availability is a failure tolerance (`highAvailability`) with replica co
 [kubeadm-jws]: https://github.com/kubernetes/kubernetes/blob/v1.35.0/cmd/kubeadm/app/discovery/token/token.go#L211-L259
 [k8s-owners]: https://kubernetes.io/docs/concepts/overview/working-with-objects/owners-dependents/
 [k8s-rbac-names]: https://github.com/kubernetes/website/blob/8817d358864b70a9710c5ad34f78df6a239be33d/content/en/docs/reference/access-authn-authz/rbac.md?plain=1#L219-L220
+[k8s-sa-secret]: https://github.com/kubernetes/kubernetes/blob/v1.37.2/pkg/apis/core/validation/validation.go#L8104-L8109
+[k8s-sa-tokens]: https://github.com/kubernetes/kubernetes/blob/v1.37.2/pkg/controller/serviceaccount/tokens_controller.go#L310-L327
+[k8s-sa-auth]: https://github.com/kubernetes/kubernetes/blob/v1.37.2/pkg/serviceaccount/legacy.go#L87-L153
 
 <!-- the reference providers -->
 [kp-patchcluster]: https://github.com/clastix/cluster-api-control-plane-provider-kamaji/blob/v0.21.0/controllers/kamajicontrolplane_controller_cluster_patch.go#L104-L151
