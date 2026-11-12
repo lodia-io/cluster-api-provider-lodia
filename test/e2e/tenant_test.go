@@ -351,6 +351,21 @@ func TestTheDumpOfADockerThatHangsAndAManagementClusterThatDoesNotAnswerEndsInIt
 	}
 }
 
+func TestTheDumpOfADockerThatHangsAndATenantThatDoesNotAnswerEndsInItsBound(t *testing.T) {
+	const (
+		workers = 1500 * time.Millisecond
+		dump    = 3 * workers / 2
+		tenant  = 4 * workers
+	)
+	shortenTheDump(t, dump, tenant, workers)
+	stalled, _ := tenantThatNeverAnswers(t)
+	d := newDumpSetup(t, stalled)
+	useDocker(t, dockerThatHangsOn("ps"))
+	if err := returnsWithin(t, dump+tenant/2, "the dump", func() error { return dumpBounded(t.Context(), d.cfg, d.c, d.dir) }); err == nil {
+		t.Fatal("the dump says nothing about a docker that hung and a tenant that did not answer")
+	}
+}
+
 func TestTheDumpCutsOffWhatTheManagementClusterDoesNotAnswerAtItsBound(t *testing.T) {
 	const bound = time.Second
 	for name, stalls := range map[string]string{
