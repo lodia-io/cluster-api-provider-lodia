@@ -41,7 +41,7 @@ From Lodia [81ce021](https://github.com/lodia-io/lodia/blob/81ce021f823c6708ba5e
 ## The test
 
 `TestAWorkerJoinsAClusterOfLodiasControlPlane` applies the objects of [`testdata`](testdata) in the namespace `capi-join`, and asserts the steps below.
-Each waits within a bound of its own, but the third, which reads at once; the calls between the waits end at the client's request timeout, and a `docker` call at a bound of its own, described under "On failure".
+Each waits within a bound of its own, but the third, which reads at once; the calls between the waits end at their client's request timeout, the kind cluster's or the tenant's, and a `docker` call at a bound of its own, described under "On failure".
 
 1. `Cluster` `ControlPlaneInitialized`.
 2. `Cluster.spec.controlPlaneEndpoint` is Lodia's `status.endpoint.apiServer`.
