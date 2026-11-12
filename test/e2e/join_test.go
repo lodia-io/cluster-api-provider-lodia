@@ -134,7 +134,7 @@ func TestAWorkerJoinsAClusterOfLodiasControlPlane(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			manifest, err := docker(ctx, "exec", management+"-control-plane", "cat", "/kind/manifests/default-cni.yaml")
+			manifest, err := stepDocker(ctx, "exec", management+"-control-plane", "cat", "/kind/manifests/default-cni.yaml")
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -362,11 +362,6 @@ func running(pod *corev1.Pod) error {
 		}
 	}
 	return nil
-}
-
-func clusterContainers(ctx context.Context, cluster string) ([]string, error) {
-	out, err := docker(ctx, "ps", "--all", "--quiet", "--filter", "label="+clusterLabel+"="+cluster)
-	return strings.Fields(out), err
 }
 
 func gone(err error) error {

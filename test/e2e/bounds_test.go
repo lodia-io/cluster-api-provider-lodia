@@ -70,6 +70,8 @@ var tenantDumpBound = 30 * time.Second
 
 var workerDumpBound = 30 * time.Second
 
+var stepDockerBound = 30 * time.Second
+
 var goTestTimeout = regexp.MustCompile(`-timeout (\d+)m\b`)
 
 func total(b boundSet) time.Duration {
@@ -111,6 +113,15 @@ func clientFits(requestTimeout, discovery time.Duration) error {
 	}
 	if 3*discovery+requestTimeout > callsWithoutBound {
 		return fmt.Errorf("a call through the client can take three discovery requests of %s and then its own of %s, more than the %s left for the calls without a bound", discovery, requestTimeout, callsWithoutBound)
+	}
+	return nil
+}
+
+// A step's context has no deadline, so a docker call of a step ends at a bound
+// of its own, and the first call to fail ends the test.
+func dockerFits(bound time.Duration) error {
+	if bound <= 0 || bound > callsWithoutBound {
+		return fmt.Errorf("a step's docker call bound %s is not positive, or is more than the %s left for the calls without a bound: a docker that hangs would hold the step past its own bound by that much", bound, callsWithoutBound)
 	}
 	return nil
 }
@@ -167,6 +178,9 @@ func TestTheBoundsFitUnderTheTimeouts(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := clientFits(clientRequestTimeout, discoveryTimeout); err != nil {
+		t.Fatal(err)
+	}
+	if err := dockerFits(stepDockerBound); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -234,6 +248,33 @@ func TestClientTimesThatDoNotFitAreRefused(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			err := clientFits(c.requestTimeout, c.discovery)
+			switch {
+			case c.want == "" && err != nil:
+				t.Fatalf("want accepted, got %v", err)
+			case c.want != "" && (err == nil || !strings.Contains(err.Error(), c.want)):
+				t.Fatalf("want an error with %q, got %v", c.want, err)
+			}
+		})
+	}
+}
+
+func TestStepDockerBoundsThatDoNotFitAreRefused(t *testing.T) {
+	const second = time.Second
+	cases := []struct {
+		name  string
+		bound time.Duration
+		want  string
+	}{
+		{"a bound of 30 seconds", 30 * second, ""},
+		{"a bound of the calls' whole room", callsWithoutBound, ""},
+		{"a bound one second above the calls' room", callsWithoutBound + second, "docker call"},
+		{"a bound of 5 minutes", 5 * time.Minute, "docker call"},
+		{"no bound", 0, "docker call"},
+		{"a negative bound", -second, "docker call"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			err := dockerFits(c.bound)
 			switch {
 			case c.want == "" && err != nil:
 				t.Fatalf("want accepted, got %v", err)

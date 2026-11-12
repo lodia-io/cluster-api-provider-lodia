@@ -41,7 +41,7 @@ From Lodia [81ce021](https://github.com/lodia-io/lodia/blob/81ce021f823c6708ba5e
 ## The test
 
 `TestAWorkerJoinsAClusterOfLodiasControlPlane` applies the objects of [`testdata`](testdata) in the namespace `capi-join`, and asserts the steps below.
-Each waits within a bound of its own, but the third, which reads at once; the calls between the waits end at the client's request timeout, described under "On failure".
+Each waits within a bound of its own, but the third, which reads at once; the calls between the waits end at the client's request timeout, and a `docker` call at a bound of its own, described under "On failure".
 
 1. `Cluster` `ControlPlaneInitialized`.
 2. `Cluster.spec.controlPlaneEndpoint` is Lodia's `status.endpoint.apiServer`.
@@ -72,7 +72,7 @@ The install's and the steps' client for the kind cluster has a timeout of 75 sec
 That is above the 60 seconds after which kube-apiserver [answers](https://github.com/kubernetes/kubernetes/blob/v1.37.2/staging/src/k8s.io/apiserver/pkg/server/config.go#L453) a request that is not long-running, and it [ignores](https://github.com/kubernetes/kubernetes/blob/v1.37.2/staging/src/k8s.io/apiserver/pkg/endpoints/filters/request_deadline.go#L81-L89) a longer `timeout` query, so the client never cuts a call that the server would answer: a create waits for the webhooks of its object, 30 seconds for cert-manager's, inside those 60.
 Its discovery has a timeout of 10 seconds, through a REST mapper of its own, since the mapper discovers without the request's context.
 A kind cluster that does not answer ends a wait of a step at most one discovery after its bound, and a call between the waits within a discovery, three requests of 10 seconds, and then the 75 seconds.
-The `docker` calls of steps 4 and 9 run on the context of their step, which has no deadline.
-`TestTheBoundsFitUnderTheTimeouts` holds that three requests, with the tenant's or the dump's timeout, fit in the time left for the calls without a bound, that the client's timeout is above the API server's and fits there after a discovery of three requests, and that the workers' bound and twice the tenant's are together less than the dump's, so that a `docker` that hangs leaves the kind cluster and the tenant more than twice the tenant's bound.
+A step's context has no deadline, so each `docker` call of steps 4 and 9 has a bound of its own, 30 seconds: a `docker` that hangs fails the step there, and inside the wait of step 9 fails the call, which the next poll repeats; `TestTheStepsCallDockerOnlyThroughItsBound` fails when a function of the test files uses `docker` itself, but for `dumpWorkers`, whose calls have the workers' bound.
+`TestTheBoundsFitUnderTheTimeouts` holds that three requests, with the tenant's or the dump's timeout, fit in the time left for the calls without a bound, that the client's timeout is above the API server's and fits there after a discovery of three requests, that a `docker` call's bound fits there too, and that the workers' bound and twice the tenant's are together less than the dump's, so that a `docker` that hangs leaves the kind cluster and the tenant more than twice the tenant's bound.
 Go kills a test binary one minute after its `-timeout`, counted from its start, while its own alarm counts from the end of the install.
 CAPD does not retry a failed bootstrap; the output of `kubeadm join` is in the `BootstrapCompleted` condition of the `DevMachine`.
