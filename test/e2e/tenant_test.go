@@ -320,7 +320,7 @@ func TestTheDumpOfADockerThatHangsEndsTheWorkersAtTheirBoundAndDumpsTheRest(t *t
 	const bound = 1500 * time.Millisecond
 	for _, verb := range []string{"ps", "exec"} {
 		t.Run("docker "+verb, func(t *testing.T) {
-			shortenTheDump(t, 4*bound, bound/2, bound)
+			shortenTheDump(t, 3*bound/2, 2*bound, bound)
 			d := newDumpSetup(t, tenantAPI(t).URL)
 			useDocker(t, dockerThatHangsOn(verb))
 			start := time.Now()
