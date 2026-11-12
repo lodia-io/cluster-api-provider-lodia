@@ -81,18 +81,29 @@ func dockerCalls() map[string]func(context.Context) error {
 
 func TestADockerCallThatHangsEndsAtItsBound(t *testing.T) {
 	const bound = time.Second
-	for verb, call := range dockerCalls() {
-		t.Run("docker "+verb, func(t *testing.T) {
-			shortenTheDockerCalls(t, bound)
-			useDocker(t, dockerThatHangsOn(verb))
-			start := time.Now()
-			if err := returnsWithin(t, bound+bound/2, "the call", func() error { return call(context.Background()) }); err == nil {
-				t.Fatal("the call says nothing about a docker that hung")
-			}
-			if took := time.Since(start); took < bound {
-				t.Errorf("the call ended after %s, before its bound %s", took, bound)
-			}
-		})
+	callers := map[string]func(t *testing.T) context.Context{
+		"a caller without a deadline": func(*testing.T) context.Context { return context.Background() },
+		"a caller with a later deadline": func(t *testing.T) context.Context {
+			ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+			t.Cleanup(cancel)
+			return ctx
+		},
+	}
+	for caller, newContext := range callers {
+		for verb, call := range dockerCalls() {
+			t.Run(caller+"/docker "+verb, func(t *testing.T) {
+				shortenTheDockerCalls(t, bound)
+				useDocker(t, dockerThatHangsOn(verb))
+				ctx := newContext(t)
+				start := time.Now()
+				if err := returnsWithin(t, bound+bound/2, "the call", func() error { return call(ctx) }); err == nil {
+					t.Fatal("the call says nothing about a docker that hung")
+				}
+				if took := time.Since(start); took < bound {
+					t.Errorf("the call ended after %s, before its bound %s", took, bound)
+				}
+			})
+		}
 	}
 }
 
