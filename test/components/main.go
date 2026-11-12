@@ -3,6 +3,8 @@
 
 // Command components reads the rendered config/default on its standard input
 // and fails unless:
+//   - clusterctl's variable processing leaves it as written, so it holds no
+//     ${VAR}, ${VAR:=default} or $$;
 //   - it holds one Namespace, and every object of a namespaced kind is in it;
 //   - every object has the label cluster.x-k8s.io/provider;
 //   - a Deployment has a container named manager;
@@ -16,13 +18,14 @@
 //     that the render holds and that has no aggregationRule and no rule on
 //     leases or events.
 //
-// The first three are rules of what clusterctl asks of a components YAML
+// The next three are rules of what clusterctl asks of a components YAML
 // (https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/docs/book/src/developer/providers/contracts/clusterctl.md#components-yaml);
 // the rest are what the manager needs to run and no more, held on the render
-// because clusterctl installs every object of it.
+// because clusterctl installs every object of it, as written.
 package main
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"io"
@@ -36,6 +39,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilyaml "k8s.io/apimachinery/pkg/util/yaml"
+	"sigs.k8s.io/cluster-api/cmd/clusterctl/client/yamlprocessor"
 
 	"go.lodia.io/cluster-api-provider-lodia/internal/controller"
 )
@@ -83,8 +87,15 @@ func check(r io.Reader) error {
 	if err != nil {
 		return err
 	}
+	raw, err := io.ReadAll(r)
+	if err != nil {
+		return err
+	}
+	if err := requireUnchangedByClusterctl(raw); err != nil {
+		return err
+	}
 	var objs []*unstructured.Unstructured
-	decoder := utilyaml.NewYAMLOrJSONDecoder(r, 4096)
+	decoder := utilyaml.NewYAMLOrJSONDecoder(bytes.NewReader(raw), 4096)
 	for {
 		obj := &unstructured.Unstructured{}
 		if err := decoder.Decode(&obj.Object); errors.Is(err, io.EOF) {
@@ -137,6 +148,21 @@ func check(r io.Reader) error {
 		errs = append(errs, requireManagerRBAC(access, manager, options.LeaderElectionID))
 	}
 	return errors.Join(errs...)
+}
+
+// clusterctl init substitutes ${VAR} and ${VAR:=default} and turns $$ into $
+// before it parses the YAML, so a render it changes installs other objects than
+// the ones checked.
+// https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/cmd/clusterctl/client/repository/components.go#L196-L209
+func requireUnchangedByClusterctl(raw []byte) error {
+	processed, err := yamlprocessor.NewSimpleProcessor().Process(raw, func(string) (string, error) { return "", nil })
+	if err != nil {
+		return fmt.Errorf("clusterctl cannot process config/default: %w", err)
+	}
+	if !bytes.Equal(processed, raw) {
+		return fmt.Errorf("clusterctl init changes config/default before it creates anything, so the objects it installs are not the ones checked (-render +processed):\n%s", cmp.Diff(string(raw), string(processed)))
+	}
+	return nil
 }
 
 type roleID struct{ kind, namespace, name string }

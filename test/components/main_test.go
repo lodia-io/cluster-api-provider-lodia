@@ -126,6 +126,48 @@ func TestTheRenderedManifestsMeetClusterctl(t *testing.T) {
 	runCases(t, cases)
 }
 
+func TestTheRenderIsOneClusterctlLeavesAsWritten(t *testing.T) {
+	const changed = "clusterctl init changes config/default"
+	ok := manifest(namespace, crd, deployment, grant, binding, clusterRole, clusterBinding)
+	with := func(docs ...string) string {
+		return manifest(append([]string{namespace, deployment, grant, binding, clusterRole, clusterBinding}, docs...)...)
+	}
+	rule := func(resource string) string {
+		return manifest(namespace, deployment, grant, binding, clusterRoleHead+secrets+"- apiGroups: [coordination.k8s.io]\n  resources: ['"+resource+"']\n  verbs: [get]\n", clusterBinding)
+	}
+	subject := func(name string) string {
+		return with(bindingOf("ClusterRoleBinding", "cb2", "ClusterRole", "cluster-admin", group(name)))
+	}
+	kind := func(value string) string {
+		return with(strings.Replace(bindingOf("ClusterRoleBinding", "cb2", "ClusterRole", "cluster-admin", account("manager", "ns")), "kind: ClusterRoleBinding", "kind: "+value, 1))
+	}
+	cases := []renderCase{
+		{"a variable with a default in a ClusterRole rule", rule("${X:=leases}"), changed},
+		{"a variable without a default in a ClusterRole rule", rule("${X}"), changed},
+		{"a variable with a default in a subject", subject("${X:=system:serviceaccounts}"), changed},
+		{"a variable without a default in a subject", subject("${X}"), changed},
+		{"a variable with a default in a kind", kind("${X:=ClusterRoleBinding}"), changed},
+		{"a variable without a default in a kind", kind("${X}"), changed},
+		{"a variable with the other default form", rule("${X:-leases}"), changed},
+		{"a variable with an empty default", rule("${X:=}"), changed},
+		{"a variable spelled with spaces", rule("${ X }"), changed},
+		{"an escaped dollar", rule("$$X"), changed},
+		{"an escaped variable", rule("$${X}"), changed},
+		{"a variable in a Namespace", strings.Replace(ok, "name: ns\n", "name: ${X:=ns}\n", 1), changed},
+		{"a variable in a Deployment", strings.Replace(ok, "serviceAccountName: manager", "serviceAccountName: ${X:=manager}", 1), changed},
+		{"a variable in a CustomResourceDefinition", strings.Replace(ok, "name: c.x", "name: ${X:=c.x}", 1), changed},
+		{"a variable in a Role", strings.Replace(ok, "verbs: [get, update]", "verbs: [get, update, '${X:=delete}']", 1), changed},
+		{"a variable in a RoleBinding's roleRef", strings.Replace(ok, "kind: Role\n  name: r\n", "kind: Role\n  name: ${X:=r}\n", 1), changed},
+		{"a variable in a ClusterRoleBinding's roleRef", strings.Replace(ok, "  name: cr\nsubjects", "  name: ${X:=cr}\nsubjects", 1), changed},
+		{"a variable that is not closed", rule("${X"), "clusterctl cannot process config/default"},
+		{"a dollar before a name", rule("$X"), ""},
+		{"a dollar before a parenthesis", rule("$(X)"), ""},
+		{"a dollar alone", rule("$"), ""},
+		{"a Kubernetes reference in the container's args", manifest(namespace, deployment+"        args:\n        - --id=$(POD_NAME)\n", grant, binding, clusterRole, clusterBinding), ""},
+	}
+	runCases(t, cases)
+}
+
 func TestTheManagerReachesOnlyItsLeaderElectionRoleAndItsClusterRole(t *testing.T) {
 	manager := account("manager", "ns")
 	with := func(docs ...string) string {
