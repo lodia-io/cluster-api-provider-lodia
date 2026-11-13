@@ -48,6 +48,7 @@ import (
 
 var (
 	k8s          client.Client
+	admin        *rest.Config
 	asController *rest.Config
 )
 
@@ -86,6 +87,7 @@ func TestMain(m *testing.M) {
 		_ = env.Stop()
 		os.Exit(1)
 	}
+	admin = cfg
 	if k8s, err = client.New(cfg, client.Options{Scheme: controller.Scheme()}); err != nil {
 		stop("client", err)
 	}

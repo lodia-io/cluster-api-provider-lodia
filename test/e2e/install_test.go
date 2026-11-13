@@ -304,7 +304,7 @@ func installProviders(ctx context.Context, cfg *envconf.Config) error {
 	if err := requireNoComponentVariablesInEnvironment(os.Environ(), components...); err != nil {
 		return err
 	}
-	configPath, err := writeRepository(filepath.Join(dir, "repository"), providers, map[string]string{
+	configPath, err := writeRepository(repositoryDir(cfg), providers, map[string]string{
 		"LODIA_KUBEADM_BOOTSTRAP_SA_NAMESPACE": kubeadmBootstrapNamespace,
 		"LODIA_KUBEADM_BOOTSTRAP_SA_NAME":      kubeadmBootstrapAccount,
 	})
@@ -327,6 +327,10 @@ func installProviders(ctx context.Context, cfg *envconf.Config) error {
 		return fmt.Errorf("clusterctl init: %w", err)
 	}
 	return requireTheKubeadmBootstrapGrant(ctx, cfg)
+}
+
+func repositoryDir(cfg *envconf.Config) string {
+	return filepath.Join(workDir(cfg), "repository")
 }
 
 func lodiaProvider(ctx context.Context, cfg *envconf.Config) (clusterctlProvider, error) {

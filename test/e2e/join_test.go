@@ -27,6 +27,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/kubernetes"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
+	clusterctl "sigs.k8s.io/cluster-api/cmd/clusterctl/client"
 	"sigs.k8s.io/cluster-api/cmd/clusterctl/client/yamlprocessor"
 	"sigs.k8s.io/cluster-api/util/secret"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -35,6 +36,7 @@ import (
 	"sigs.k8s.io/e2e-framework/pkg/features"
 
 	"go.lodia.io/cluster-api-provider-lodia/api/v1alpha1"
+	"go.lodia.io/cluster-api-provider-lodia/test/clusterctlproxy"
 )
 
 const agnhost = "registry.k8s.io/e2e-test-images/agnhost:2.66.1@sha256:6e2eef87d0dc77e070a7549bc5fdfa290c0fefe3359eb33c2ad1eda692fe66a4"
@@ -288,6 +290,25 @@ func TestAWorkerJoinsAClusterOfLodiasControlPlane(t *testing.T) {
 				}
 				return nil
 			})
+			return ctx
+		}).
+		Assess("clusterctl's move waits for the block-move annotation of the LodiaControlPlane, and is ended there", func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
+			c, err := newClusterctl(ctx, cfg, filepath.Join(repositoryDir(cfg), clusterctlConfigFile))
+			if err != nil {
+				t.Fatal(err)
+			}
+			bounded, cancel := context.WithTimeout(ctx, bounds.Move)
+			defer cancel()
+			options := clusterctl.MoveOptions{FromKubeconfig: clusterctlproxy.Kubeconfig, ToKubeconfig: clusterctlproxy.Kubeconfig, Namespace: key.Namespace}
+			if err := clusterctlproxy.MoveUntilBlocked(bounded, c, options, "LodiaControlPlane", key.Name); err != nil {
+				t.Fatal(err)
+			}
+			return ctx
+		}).
+		Assess("once the Cluster is unpaused, Paused is False on it and on the LodiaControlPlane, and the Cluster is Available", func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
+			if err := requireUnpaused(ctx, k8s, key, bounds.Unpaused, 2*time.Second); err != nil {
+				t.Fatal(err)
+			}
 			return ctx
 		}).
 		Assess("deleting the Cluster removes the LodiaControlPlane, the ControlPlane, the etcd claim, the copied Secrets and the worker's container", func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {

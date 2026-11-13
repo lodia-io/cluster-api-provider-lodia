@@ -88,7 +88,7 @@ func writeRepository(dir string, providers []clusterctlProvider, variables map[s
 	if err != nil {
 		return "", err
 	}
-	path := filepath.Join(dir, "clusterctl-config.yaml")
+	path := filepath.Join(dir, clusterctlConfigFile)
 	return path, os.WriteFile(path, data, 0o600)
 }
 
@@ -179,6 +179,8 @@ func requireOnlyGet(ctx context.Context, c client.Client, deployment *appsv1.Dep
 	}
 	return errors.Join(errs...)
 }
+
+const clusterctlConfigFile = "clusterctl-config.yaml"
 
 const (
 	capiMetadata = "releaseSeries:\n- {major: 1, minor: 15, contract: v1beta2}\n"
