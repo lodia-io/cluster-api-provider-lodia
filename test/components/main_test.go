@@ -171,6 +171,9 @@ func TestEveryVariableHasANonEmptyDefault(t *testing.T) {
 		{"a variable first without a default and then with one", args("${X}-${X:=a}"), "the variable X " + missing},
 		{"a default that is a variable", args("${X:=${Y}}"), "the default of the variable X references the variables [Y]"},
 		{"a variable that is not closed", rule("${X"), "clusterctl cannot read the variables of config/default"},
+		{"a variable with a default and then without", args("${X:=a}-${X}"), "referenced again without its default or with another one"},
+		{"a variable with a default and then with another", args("${X:=a}-${X:=b}"), "referenced again without its default or with another one"},
+		{"a variable with the same default twice", args("${X:=a}-${X:=a}"), ""},
 		{"a variable with a default", args("${X:=a}"), ""},
 		{"a variable with the other default form", args("${X:-a}"), ""},
 		{"a variable with a default in a CustomResourceDefinition", strings.Replace(ok, "name: c.x", "name: ${X:=c.x}", 1), ""},
@@ -400,6 +403,7 @@ func TestTheManagerReachesOnlyItsLeaderElectionRoleAndItsClusterRole(t *testing.
 	}
 
 	elsewhere := account("manager", "other")
+	nowhere := "- kind: ServiceAccount\n  name: manager\n"
 	cases = append(cases, []renderCase{
 		{"the ServiceAccount in another namespace added to the Role's binding", manifest(namespace, deployment, grant, binding+elsewhere, clusterRole, clusterBinding), "RoleBinding b binds Role ns/r to"},
 		{"the ServiceAccount in another namespace added to the ClusterRole's binding", manifest(namespace, deployment, grant, binding, clusterRole, clusterBinding+elsewhere), "ClusterRoleBinding cb binds ClusterRole cr to"},
@@ -408,6 +412,9 @@ func TestTheManagerReachesOnlyItsLeaderElectionRoleAndItsClusterRole(t *testing.
 		{"the ServiceAccount in another namespace in a second binding to the Role is the manager's once clusterctl rewrites it", with(bindingOf("RoleBinding", "b2", "Role", "r", elsewhere)), ""},
 		{"the ServiceAccount in another namespace in a second binding to the ClusterRole is the manager's once clusterctl rewrites it", with(bindingOf("ClusterRoleBinding", "cb2", "ClusterRole", "cr", elsewhere)), ""},
 		{"the ServiceAccount in another namespace in a RoleBinding to the ClusterRole is the manager's once clusterctl rewrites it", with(bindingOf("RoleBinding", "b2", "ClusterRole", "cr", elsewhere)), ""},
+		{"the ServiceAccount without a namespace bound to another ClusterRole in the namespace", with(clusterRole2, bindingOf("RoleBinding", "b2", "ClusterRole", "cr2", nowhere)), "reaches the ClusterRoles [ClusterRole cr ClusterRole cr2]"},
+		{"the ServiceAccount without a namespace bound to another Role", with(role2, bindingOf("RoleBinding", "b2", "Role", "r2", nowhere)), "reaches the Roles [Role ns/r Role ns/r2]"},
+		{"the ClusterRoleBinding's subject without a namespace", manifest(namespace, deployment, grant, binding, clusterRole, strings.Replace(clusterBinding, "  name: manager\n  namespace: ns\n", "  name: manager\n", 1)), "ClusterRoleBinding cb binds ClusterRole cr to [{Kind:ServiceAccount APIGroup: Name:manager Namespace:}]"},
 	}...)
 	runCases(t, cases)
 }

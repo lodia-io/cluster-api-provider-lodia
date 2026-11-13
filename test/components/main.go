@@ -3,8 +3,9 @@
 
 // Command components reads the rendered config/default on its standard input
 // and fails unless:
-//   - every variable it references has a non-empty default, and no default
-//     references a variable;
+//   - every variable it references has a non-empty default, no default
+//     references a variable, and a later reference of a variable has the same
+//     default as its first;
 //   - it holds one Namespace, and every object of a namespaced kind is in it;
 //   - every object has the label cluster.x-k8s.io/provider;
 //   - a Deployment has a container named manager;
@@ -134,6 +135,7 @@ func check(r io.Reader) error {
 		errs = append(errs, requireDefault(name, variables[name]))
 		explicit[name] = "explicit-" + strings.ToLower(strings.ReplaceAll(name, "_", "-"))
 	}
+	errs = append(errs, requireOneDefault(raw, variables))
 	for _, run := range []struct {
 		name   string
 		values map[string]string
@@ -222,6 +224,32 @@ func requireDefault(name string, def *string) error {
 	}
 	if len(nested) > 0 {
 		return fmt.Errorf("the default of the variable %s references the variables %v", name, slices.Sorted(maps.Keys(nested)))
+	}
+	return nil
+}
+
+// clusterctl reports the default of a variable from its first reference only,
+// and expands a later reference by its own, so a bare reference after one with a
+// default installs an empty value, and one with another default installs that.
+// A render with no value for any variable, which expands each reference by its
+// own default, must equal the render that gives every variable the default
+// clusterctl reports. This cannot see ${X#a}, ${X%a} and ${X:1}, whose argument
+// clusterctl records as a default and which both runs expand to nothing; no
+// kustomize render writes them.
+// A variable with no default makes Process fail, which requireDefault reports.
+// https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/cmd/clusterctl/client/yamlprocessor/simple_processor.go#L159-L190
+func requireOneDefault(raw []byte, variables map[string]*string) error {
+	unset := func(string) (string, error) { return "", errors.New("unset") }
+	atDefaults := func(name string) (string, error) {
+		if def := variables[name]; def != nil {
+			return *def, nil
+		}
+		return "", errors.New("unset")
+	}
+	own, ownErr := processor.Process(raw, unset)
+	first, firstErr := processor.Process(raw, atDefaults)
+	if ownErr == nil && firstErr == nil && !bytes.Equal(own, first) {
+		return errors.New("a variable is referenced again without its default or with another one: clusterctl reports the default of its first reference, and expands each later one by its own")
 	}
 	return nil
 }
@@ -438,10 +466,12 @@ func (g roleGrant) reaches(account string) bool {
 // manager's ServiceAccount: to the user system:serviceaccount:<namespace>:<name>
 // in the groups system:serviceaccounts, system:serviceaccounts:<namespace> and
 // system:authenticated.
-// clusterctl sets the namespace of every ServiceAccount subject to the one it
-// installs the provider in, which the installer picks, so a ServiceAccount
-// subject of the manager's name reaches it in any namespace, and so do the user
-// and the namespace group of any namespace.
+// clusterctl sets the namespace of every subject that has one to the one it
+// installs the provider in, which the installer picks, and leaves a subject
+// without one as it is. The authorizer reads a ServiceAccount subject without a
+// namespace in a RoleBinding as of the binding's namespace. So a ServiceAccount
+// subject of the manager's name reaches it in any namespace or in none, and so
+// do the user and the namespace group of any namespace.
 // https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/cmd/clusterctl/client/repository/components.go#L349-L384
 // https://github.com/kubernetes/kubernetes/blob/v1.37.2/pkg/registry/rbac/validation/rule.go#L281-L304
 // https://github.com/kubernetes/kubernetes/blob/v1.37.2/staging/src/k8s.io/apiserver/pkg/authentication/serviceaccount/util.go#L29-L33
