@@ -14,6 +14,14 @@ kind: KubeadmConfigTemplate
 metadata:
   name: ${CLUSTER_NAME}-md-0
   namespace: capi-join
+spec:
+  template:
+    spec:
+      files:
+      - path: /etc/capl-e2e/control-plane-version
+        permissions: "0644"
+        contentFormat: Template
+        content: "{{ .controlPlane.version }}"
 ---
 apiVersion: cluster.x-k8s.io/v1beta2
 kind: MachineDeployment

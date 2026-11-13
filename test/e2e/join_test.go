@@ -209,6 +209,27 @@ func TestAWorkerJoinsAClusterOfLodiasControlPlane(t *testing.T) {
 			})
 			return ctx
 		}).
+		Assess("the worker holds the file that the join rendered from a template of the control plane's version", func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
+			lcp := &v1alpha1.LodiaControlPlane{}
+			if err := k8s.Get(ctx, key, lcp); err != nil {
+				t.Fatal(err)
+			}
+			containers, err := clusterContainers(ctx, key.Name)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(containers) != 1 {
+				t.Fatalf("%d containers are labelled for the Cluster, want the worker's alone: %v", len(containers), containers)
+			}
+			out, err := docker(ctx, "exec", containers[0], "cat", templatedFile)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := strings.TrimSpace(out); got != lcp.Spec.Version {
+				t.Fatalf("%s holds %q, want the control plane's version %q", templatedFile, got, lcp.Spec.Version)
+			}
+			return ctx
+		}).
 		Assess("the konnectivity agent is ready on the Node", func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
 			until(ctx, t, bounds.Konnectivity, "the konnectivity agent is ready", func(ctx context.Context) error {
 				agents := &appsv1.DaemonSet{}

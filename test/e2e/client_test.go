@@ -15,30 +15,17 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/wait"
-	"k8s.io/client-go/rest"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/client/apiutil"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/e2e-framework/pkg/envconf"
 
 	"go.lodia.io/cluster-api-provider-lodia/internal/controller"
+	"go.lodia.io/cluster-api-provider-lodia/test/clusterctlproxy"
 )
 
 func newClient(cfg *envconf.Config) (client.Client, error) {
-	restCfg := cfg.Client().RESTConfig()
-	restCfg.Timeout = clientRequestTimeout
-	discoveryCfg := rest.CopyConfig(restCfg)
-	discoveryCfg.Timeout = discoveryTimeout
-	httpClient, err := rest.HTTPClientFor(discoveryCfg)
-	if err != nil {
-		return nil, err
-	}
-	mapper, err := apiutil.NewDynamicRESTMapper(discoveryCfg, httpClient)
-	if err != nil {
-		return nil, err
-	}
-	return client.New(restCfg, client.Options{Scheme: controller.Scheme(), Mapper: mapper})
+	return clusterctlproxy.NewClient(cfg.Client().RESTConfig(), controller.Scheme(), clientRequestTimeout, discoveryTimeout)
 }
 
 func deploymentAvailable(c client.Reader, key client.ObjectKey) wait.ConditionWithContextFunc {

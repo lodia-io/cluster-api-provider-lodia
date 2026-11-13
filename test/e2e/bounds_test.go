@@ -117,6 +117,21 @@ func clientFits(requestTimeout, discovery time.Duration) error {
 	return nil
 }
 
+// clusterctl's calls go through the suite's Proxy, with the client's two
+// timeouts, and only their context ends what they ask. What it asks without one
+// is a discovery: the version check of EnsureCustomResourceDefinitions, one
+// request, and then the first call of a client, up to three. A call to a
+// cluster that answers each of them just inside the timeout takes all four after
+// its bound, and the requests with a context, which the client's timeout above
+// the API server's keeps whole, end with it.
+// https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/cmd/clusterctl/client/cluster/inventory.go#L149-L158
+func clusterctlFits(discovery time.Duration) error {
+	if discovery <= 0 || 4*discovery > callsWithoutBound {
+		return fmt.Errorf("the discovery timeout %s of clusterctl's calls is not positive, or four of them are more than the %s left for the calls without a bound: a call of clusterctl to a cluster that answers each just in time could overshoot its bound by that much", discovery, callsWithoutBound)
+	}
+	return nil
+}
+
 // A step's context has no deadline, so docker ends every call at a bound of its
 // own, and the first call to fail ends the test.
 func dockerFits(bound time.Duration) error {
@@ -178,6 +193,9 @@ func TestTheBoundsFitUnderTheTimeouts(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := clientFits(clientRequestTimeout, discoveryTimeout); err != nil {
+		t.Fatal(err)
+	}
+	if err := clusterctlFits(discoveryTimeout); err != nil {
 		t.Fatal(err)
 	}
 	if err := dockerFits(dockerCallBound); err != nil {
@@ -248,6 +266,32 @@ func TestClientTimesThatDoNotFitAreRefused(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			err := clientFits(c.requestTimeout, c.discovery)
+			switch {
+			case c.want == "" && err != nil:
+				t.Fatalf("want accepted, got %v", err)
+			case c.want != "" && (err == nil || !strings.Contains(err.Error(), c.want)):
+				t.Fatalf("want an error with %q, got %v", c.want, err)
+			}
+		})
+	}
+}
+
+func TestClusterctlTimesThatDoNotFitAreRefused(t *testing.T) {
+	const second = time.Second
+	cases := []struct {
+		name      string
+		discovery time.Duration
+		want      string
+	}{
+		{"a discovery of 10 seconds", 10 * second, ""},
+		{"a discovery of 30 seconds, four of which are the calls' whole room", 30 * second, ""},
+		{"a discovery of 31 seconds", 31 * second, "four of them"},
+		{"no discovery timeout", 0, "four of them"},
+		{"a negative discovery timeout", -second, "four of them"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			err := clusterctlFits(c.discovery)
 			switch {
 			case c.want == "" && err != nil:
 				t.Fatalf("want accepted, got %v", err)

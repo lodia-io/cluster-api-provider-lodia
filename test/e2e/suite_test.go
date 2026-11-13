@@ -49,10 +49,8 @@ func install(ctx context.Context, cfg *envconf.Config) (context.Context, error) 
 		install func(context.Context, *envconf.Config) error
 	}{
 		{"cert-manager", installCertManager},
-		{"Cluster API and the kubeadm bootstrap provider", installClusterAPI},
-		{"Cluster API provider Docker", installCAPD},
 		{"Lodia", installLodia},
-		{"the provider", installProvider},
+		{"Cluster API, the kubeadm bootstrap provider, Cluster API provider Docker and this provider, through clusterctl", installProviders},
 	} {
 		start := time.Now()
 		if err := component.install(bounded, cfg); err != nil {

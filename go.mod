@@ -6,12 +6,14 @@ toolchain go1.26.10
 
 require (
 	github.com/distribution/reference v0.6.0
+	github.com/go-logr/logr v1.4.4
 	github.com/google/go-cmp v0.7.0
 	go.lodia.io/lodia/api v0.0.0-20261109145222-57375832e7fe
 	golang.org/x/mod v0.41.0
 	k8s.io/api v0.37.2
 	k8s.io/apiextensions-apiserver v0.37.2
 	k8s.io/apimachinery v0.37.2
+	k8s.io/apiserver v0.37.2
 	k8s.io/client-go v0.37.2
 	sigs.k8s.io/cluster-api v1.15.0-beta.0
 	sigs.k8s.io/cluster-api/api v1.15.0-beta.0
@@ -39,7 +41,6 @@ require (
 	github.com/felixge/httpsnoop v1.0.4 // indirect
 	github.com/fsnotify/fsnotify v1.10.1 // indirect
 	github.com/fxamacker/cbor/v2 v2.9.3 // indirect
-	github.com/go-logr/logr v1.4.4 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/go-logr/zapr v1.3.0 // indirect
 	github.com/go-openapi/jsonpointer v1.0.0 // indirect
@@ -122,7 +123,6 @@ require (
 	google.golang.org/protobuf v1.36.12 // indirect
 	gopkg.in/evanphx/json-patch.v4 v4.13.0 // indirect
 	gopkg.in/inf.v0 v0.9.1 // indirect
-	k8s.io/apiserver v0.37.2 // indirect
 	k8s.io/cluster-bootstrap v0.37.2 // indirect
 	k8s.io/code-generator v0.37.2 // indirect
 	k8s.io/component-base v0.37.2 // indirect

@@ -17,7 +17,13 @@
 //     the manager's LeaderElectionID names;
 //   - a ClusterRoleBinding gives the manager's ServiceAccount a ClusterRole
 //     that the render holds and that has no aggregationRule and no rule on
-//     leases or events.
+//     leases or events;
+//   - a ClusterRoleBinding gives the User of the kubeadm bootstrap provider's
+//     ServiceAccount, as the variables LODIA_KUBEADM_BOOTSTRAP_SA_NAMESPACE
+//     and LODIA_KUBEADM_BOOTSTRAP_SA_NAME name it, a ClusterRole that grants
+//     get on lodiacontrolplanes and nothing else;
+//   - no binding names a subject but the manager's ServiceAccount, by name and
+//     namespace, and that User.
 //
 // The first four checks read the render as written, since clusterctl's
 // processing would hide what they look for: it fills in the defaults, moves
@@ -71,6 +77,15 @@ const (
 	serviceAccountsGroup      = "system:serviceaccounts"
 	serviceAccountGroupPrefix = serviceAccountsGroup + ":"
 	authenticatedGroup        = "system:authenticated"
+
+	// The ServiceAccount of the kubeadm bootstrap provider as Cluster API
+	// installs it, which the defaults of the variables name:
+	// https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/bootstrap/kubeadm/config/default/kustomization.yaml#L1-L4
+	// https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/bootstrap/kubeadm/config/rbac/service_account.yaml#L1-L4
+	bootstrapNamespaceVariable = "LODIA_KUBEADM_BOOTSTRAP_SA_NAMESPACE"
+	bootstrapAccountVariable   = "LODIA_KUBEADM_BOOTSTRAP_SA_NAME"
+	bootstrapNamespace         = "capi-kubeadm-bootstrap-system"
+	bootstrapAccount           = "capi-kubeadm-bootstrap-manager"
 
 	defaultsRun = "every variable at its default"
 	explicitRun = "an explicit value for every variable"
@@ -136,14 +151,19 @@ func check(r io.Reader) error {
 		explicit[name] = "explicit-" + strings.ToLower(strings.ReplaceAll(name, "_", "-"))
 	}
 	errs = append(errs, requireOneDefault(raw, variables))
+	for _, name := range []string{bootstrapNamespaceVariable, bootstrapAccountVariable} {
+		if _, ok := variables[name]; !ok {
+			errs = append(errs, fmt.Errorf("config/default does not reference the variable %s, which names the kubeadm bootstrap provider's ServiceAccount", name))
+		}
+	}
 	for _, run := range []struct {
-		name   string
-		values map[string]string
+		name, bootstrapUser string
+		values              map[string]string
 	}{
-		{defaultsRun, nil},
-		{explicitRun, explicit},
+		{defaultsRun, serviceAccountUserPrefix + bootstrapNamespace + ":" + bootstrapAccount, nil},
+		{explicitRun, serviceAccountUserPrefix + explicit[bootstrapNamespaceVariable] + ":" + explicit[bootstrapAccountVariable], explicit},
 	} {
-		if err := requireRoles(raw, run.values, options.LeaderElectionID); err != nil {
+		if err := requireRoles(raw, run.values, options.LeaderElectionID, run.bootstrapUser); err != nil {
 			errs = append(errs, fmt.Errorf("with %s: %w", run.name, err))
 		}
 	}
@@ -254,7 +274,7 @@ func requireOneDefault(raw []byte, variables map[string]*string) error {
 	return nil
 }
 
-func requireRoles(raw []byte, values map[string]string, lease string) error {
+func requireRoles(raw []byte, values map[string]string, lease, bootstrapUser string) error {
 	objs, err := install(raw, values)
 	if err != nil {
 		return fmt.Errorf("clusterctl cannot process config/default: %w", err)
@@ -264,10 +284,11 @@ func requireRoles(raw []byte, values map[string]string, lease string) error {
 		return err
 	}
 	var errs []error
-	for _, manager := range managersOf(objs) {
+	managers := managersOf(objs)
+	for _, manager := range managers {
 		errs = append(errs, requireManagerRBAC(access, manager, lease))
 	}
-	return errors.Join(errs...)
+	return errors.Join(append(errs, requireSubjects(access, managers, bootstrapUser), requireBootstrapGrant(access, bootstrapUser))...)
 }
 
 func install(raw []byte, values map[string]string) ([]*unstructured.Unstructured, error) {
@@ -409,6 +430,63 @@ func requireManagerRBAC(a access, manager *unstructured.Unstructured, lease stri
 		if slices.Contains(reaching, g.role) && !slices.Equal(g.subjects, alone) {
 			errs = append(errs, fmt.Errorf("%s %s binds %s to %+v, want %s alone", g.kind, g.name, g.role, g.subjects, who))
 		}
+	}
+	return errors.Join(errs...)
+}
+
+func requireSubjects(a access, managers []*unstructured.Unstructured, bootstrapUser string) error {
+	var errs []error
+	for _, g := range a.grants {
+		for _, s := range g.subjects {
+			if !isManagerOrBootstrapUser(s, managers, bootstrapUser) {
+				errs = append(errs, fmt.Errorf("%s %s binds %s to %+v: a binding may name only the manager's ServiceAccount, by name and namespace, and the User %s", g.kind, g.name, g.role, s, bootstrapUser))
+			}
+		}
+	}
+	return errors.Join(errs...)
+}
+
+func isManagerOrBootstrapUser(s rbacv1.Subject, managers []*unstructured.Unstructured, bootstrapUser string) bool {
+	switch s.Kind {
+	case rbacv1.UserKind:
+		return s.Name == bootstrapUser
+	case rbacv1.ServiceAccountKind:
+		return slices.ContainsFunc(managers, func(m *unstructured.Unstructured) bool {
+			return s == rbacv1.Subject{Kind: rbacv1.ServiceAccountKind, Name: serviceAccount(m), Namespace: m.GetNamespace()}
+		})
+	}
+	return false
+}
+
+func requireBootstrapGrant(a access, bootstrapUser string) error {
+	var errs []error
+	var roles []roleID
+	for _, g := range a.grants {
+		if !slices.ContainsFunc(g.subjects, func(s rbacv1.Subject) bool { return s.Kind == rbacv1.UserKind && s.Name == bootstrapUser }) {
+			continue
+		}
+		if g.kind != "ClusterRoleBinding" {
+			errs = append(errs, fmt.Errorf("%s %s binds %s to the User %s, which grants only in one namespace: the kubeadm bootstrap provider reads a LodiaControlPlane in any", g.kind, g.name, g.role, bootstrapUser))
+		}
+		if !slices.Contains(roles, g.role) {
+			roles = append(roles, g.role)
+		}
+	}
+	switch {
+	case len(roles) == 0:
+		return errors.Join(append(errs, fmt.Errorf("no binding names the User %s, which is the kubeadm bootstrap provider's ServiceAccount: its joins could not read a LodiaControlPlane", bootstrapUser))...)
+	case len(roles) > 1:
+		return errors.Join(append(errs, fmt.Errorf("the User %s reaches the roles %v, want one ClusterRole", bootstrapUser, roles))...)
+	case roles[0].kind != "ClusterRole" || !a.has(roles[0]):
+		return errors.Join(append(errs, fmt.Errorf("the User %s is bound to %s, want a ClusterRole that config/default renders", bootstrapUser, roles[0]))...)
+	}
+	role := a.roles[roles[0]]
+	if role.aggregation != nil {
+		errs = append(errs, fmt.Errorf("%s has an aggregationRule, which adds rules that config/default does not render", roles[0]))
+	}
+	want := []rbacv1.PolicyRule{{APIGroups: []string{"controlplane.lodia.io"}, Resources: []string{"lodiacontrolplanes"}, Verbs: []string{"get"}}}
+	if diff := cmp.Diff(want, role.rules, cmpopts.EquateEmpty()); diff != "" {
+		errs = append(errs, fmt.Errorf("the rules of %s, which the User %s gets, are not get on lodiacontrolplanes alone (-want +got):\n%s", roles[0], bootstrapUser, diff))
 	}
 	return errors.Join(errs...)
 }

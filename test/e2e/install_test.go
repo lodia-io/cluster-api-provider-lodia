@@ -23,9 +23,14 @@ import (
 	"time"
 
 	"github.com/distribution/reference"
+	"github.com/go-logr/logr/funcr"
+	appsv1 "k8s.io/api/apps/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/util/wait"
+	clusterctlv1 "sigs.k8s.io/cluster-api/cmd/clusterctl/api/v1alpha3"
+	clusterctl "sigs.k8s.io/cluster-api/cmd/clusterctl/client"
 	"sigs.k8s.io/cluster-api/cmd/clusterctl/client/yamlprocessor"
+	logf "sigs.k8s.io/cluster-api/cmd/clusterctl/log"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/e2e-framework/klient/decoder"
 	"sigs.k8s.io/e2e-framework/klient/k8s"
@@ -65,6 +70,10 @@ var (
 			"registry.k8s.io/cluster-api/kubeadm-bootstrap-controller:v1.15.0-beta.0": "sha256:06e8bd16a0d477a825ac94f16f511a24e316000e8ae93a2f9defb7e5e58d58b7",
 		},
 	}
+	clusterAPIMetadata = release{
+		url:    "https://github.com/kubernetes-sigs/cluster-api/releases/download/v1.15.0-beta.0/metadata.yaml",
+		sha256: "82a36f78f0e16b547b23de41e2bceb0e8349de5188ec9eb5f7780b5d8cb5177d",
+	}
 	clusterAPIDocker = release{
 		url:    "https://github.com/kubernetes-sigs/cluster-api/releases/download/v1.15.0-beta.0/infrastructure-components-development.yaml",
 		sha256: "6d6a6076ba738daf287f7e1bc6d80543bf82d2761bb7364eb92ffaae223e12a5",
@@ -74,7 +83,7 @@ var (
 	}
 )
 
-func (r release) manifest(ctx context.Context, dir string) ([]byte, error) {
+func (r release) fetch(ctx context.Context, dir string) ([]byte, error) {
 	cached := filepath.Join(dir, path.Base(r.url))
 	raw, err := os.ReadFile(cached)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
@@ -91,6 +100,18 @@ func (r release) manifest(ctx context.Context, dir string) ([]byte, error) {
 			return nil, err
 		}
 	}
+	return raw, nil
+}
+
+func (r release) version() string {
+	return path.Base(path.Dir(r.url))
+}
+
+func (r release) manifest(ctx context.Context, dir string) ([]byte, error) {
+	raw, err := r.fetch(ctx, dir)
+	if err != nil {
+		return nil, err
+	}
 	rendered, err := yamlprocessor.NewSimpleProcessor().Process(raw, func(name string) (string, error) {
 		return "", fmt.Errorf("%s is not set", name)
 	})
@@ -98,6 +119,18 @@ func (r release) manifest(ctx context.Context, dir string) ([]byte, error) {
 		return nil, fmt.Errorf("render %s: %w", r.url, err)
 	}
 	pinned, err := requireDigests(rendered, r.images)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", r.url, err)
+	}
+	return pinned, nil
+}
+
+func (r release) unrendered(ctx context.Context, dir string) ([]byte, error) {
+	raw, err := r.fetch(ctx, dir)
+	if err != nil {
+		return nil, err
+	}
+	pinned, err := requireDigests(raw, r.images)
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", r.url, err)
 	}
@@ -197,26 +230,6 @@ func installCertManager(ctx context.Context, cfg *envconf.Config) error {
 	return available(ctx, cfg, "cert-manager", "cert-manager", "cert-manager-cainjector", "cert-manager-webhook")
 }
 
-func installClusterAPI(ctx context.Context, cfg *envconf.Config) error {
-	if err := applyRelease(ctx, cfg, clusterAPI); err != nil {
-		return err
-	}
-	if err := available(ctx, cfg, "capi-system", "capi-controller-manager"); err != nil {
-		return err
-	}
-	if err := applyRelease(ctx, cfg, kubeadmBootstrap); err != nil {
-		return err
-	}
-	return available(ctx, cfg, "capi-kubeadm-bootstrap-system", "capi-kubeadm-bootstrap-controller-manager")
-}
-
-func installCAPD(ctx context.Context, cfg *envconf.Config) error {
-	if err := applyRelease(ctx, cfg, clusterAPIDocker); err != nil {
-		return err
-	}
-	return available(ctx, cfg, "capd-system", "capd-controller-manager")
-}
-
 func installLodia(ctx context.Context, cfg *envconf.Config) error {
 	lodia := filepath.Join(root, "work", "lodia")
 	chart := filepath.Join(lodia, "charts", "lodia")
@@ -252,15 +265,84 @@ func installLodia(ctx context.Context, cfg *envconf.Config) error {
 	return nil
 }
 
-func installProvider(ctx context.Context, cfg *envconf.Config) error {
-	resolved, err := renderProvider(ctx, cfg)
+const (
+	kubeadmBootstrapNamespace = "capi-kubeadm-bootstrap-system"
+	kubeadmBootstrapAccount   = "capi-kubeadm-bootstrap-manager"
+)
+
+func installProviders(ctx context.Context, cfg *envconf.Config) error {
+	dir := workDir(cfg)
+	metadata, err := clusterAPIMetadata.fetch(ctx, dir)
 	if err != nil {
 		return err
 	}
-	if err := apply(ctx, cfg, resolved); err != nil {
-		return fmt.Errorf("apply the provider: %w", err)
+	var providers []clusterctlProvider
+	for _, p := range []struct {
+		name string
+		kind clusterctlv1.ProviderType
+		from release
+	}{
+		{"cluster-api", clusterctlv1.CoreProviderType, clusterAPI},
+		{"kubeadm", clusterctlv1.BootstrapProviderType, kubeadmBootstrap},
+		{"docker", clusterctlv1.InfrastructureProviderType, clusterAPIDocker},
+	} {
+		components, err := p.from.unrendered(ctx, dir)
+		if err != nil {
+			return err
+		}
+		providers = append(providers, clusterctlProvider{p.name, p.kind, p.from.version(), components, metadata})
 	}
-	return available(ctx, cfg, providerNamespace, "cluster-api-provider-lodia-controller-manager")
+	lodia, err := lodiaProvider(ctx, cfg)
+	if err != nil {
+		return err
+	}
+	providers = append(providers, lodia)
+	var components [][]byte
+	for _, p := range providers {
+		components = append(components, p.components)
+	}
+	if err := requireNoComponentVariablesInEnvironment(os.Environ(), components...); err != nil {
+		return err
+	}
+	configPath, err := writeRepository(filepath.Join(dir, "repository"), providers, map[string]string{
+		"LODIA_KUBEADM_BOOTSTRAP_SA_NAMESPACE": kubeadmBootstrapNamespace,
+		"LODIA_KUBEADM_BOOTSTRAP_SA_NAME":      kubeadmBootstrapAccount,
+	})
+	if err != nil {
+		return err
+	}
+	logf.SetLogger(funcr.New(func(prefix, args string) { fmt.Println("clusterctl:", prefix, args) }, funcr.Options{Verbosity: 1}))
+	c, err := newClusterctl(ctx, cfg, configPath)
+	if err != nil {
+		return err
+	}
+	if _, err := c.Init(ctx, clusterctl.InitOptions{
+		CoreProvider:            "cluster-api",
+		BootstrapProviders:      []string{"kubeadm"},
+		InfrastructureProviders: []string{"docker"},
+		ControlPlaneProviders:   []string{"lodia"},
+		WaitProviders:           true,
+		WaitProviderTimeout:     providerWait,
+	}); err != nil {
+		return fmt.Errorf("clusterctl init: %w", err)
+	}
+	return requireTheKubeadmBootstrapGrant(ctx, cfg)
+}
+
+func lodiaProvider(ctx context.Context, cfg *envconf.Config) (clusterctlProvider, error) {
+	metadata, err := os.ReadFile(filepath.Join(root, "metadata.yaml"))
+	if err != nil {
+		return clusterctlProvider{}, err
+	}
+	version, err := developmentVersion(metadata)
+	if err != nil {
+		return clusterctlProvider{}, err
+	}
+	components, err := renderProvider(ctx, cfg)
+	if err != nil {
+		return clusterctlProvider{}, err
+	}
+	return clusterctlProvider{"lodia", clusterctlv1.ControlPlaneProviderType, version, components, metadata}, nil
 }
 
 func renderProvider(ctx context.Context, cfg *envconf.Config) ([]byte, error) {
@@ -273,6 +355,19 @@ func renderProvider(ctx context.Context, cfg *envconf.Config) ([]byte, error) {
 		return nil, fmt.Errorf("make release-components into kind: %w", err)
 	}
 	return os.ReadFile(filepath.Join(dir, "control-plane-components.yaml"))
+}
+
+func requireTheKubeadmBootstrapGrant(ctx context.Context, cfg *envconf.Config) error {
+	c, err := newClient(cfg)
+	if err != nil {
+		return err
+	}
+	deployment := &appsv1.Deployment{}
+	key := client.ObjectKey{Namespace: kubeadmBootstrapNamespace, Name: "capi-kubeadm-bootstrap-controller-manager"}
+	if err := c.Get(ctx, key, deployment); err != nil {
+		return err
+	}
+	return requireOnlyGet(ctx, c, deployment)
 }
 
 func lodiaVersion(ctx context.Context, lodia string) (string, error) {
