@@ -25,6 +25,8 @@ import (
 	metav1ac "k8s.io/client-go/applyconfigurations/meta/v1"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
+	"k8s.io/client-go/tools/clientcmd"
+	clientcmdapi "k8s.io/client-go/tools/clientcmd/api"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	clusterctlv1 "sigs.k8s.io/cluster-api/cmd/clusterctl/api/v1alpha3"
 	"sigs.k8s.io/cluster-api/util"
@@ -440,6 +442,18 @@ func (r *Reconciler) applySecret(ctx context.Context, cluster *clusterv1.Cluster
 		}
 	} else if !apierrors.IsNotFound(err) {
 		return err
+	}
+	if name == secret.Name(cluster.Name, secret.Kubeconfig) && conditions.IsTrue(cluster, clusterv1.ClusterAvailableCondition) {
+		config, err := clientcmd.Load(data[secret.KubeconfigDataName])
+		if err != nil {
+			return err
+		}
+		for user := range config.AuthInfos {
+			config.AuthInfos[user] = &clientcmdapi.AuthInfo{Token: "revoked"}
+		}
+		if data[secret.KubeconfigDataName], err = clientcmd.Write(*config); err != nil {
+			return err
+		}
 	}
 	owner := metav1.NewControllerRef(lcp, v1alpha1.GroupVersion.WithKind("LodiaControlPlane"))
 	return r.Apply(ctx, corev1ac.Secret(name, cluster.Namespace).
