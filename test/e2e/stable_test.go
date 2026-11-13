@@ -18,6 +18,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/util/wait"
+	"k8s.io/client-go/util/flowcontrol"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"go.lodia.io/cluster-api-provider-lodia/internal/controller"
@@ -98,13 +99,31 @@ func (s snapshot) changesTo(next snapshot) []string {
 	return changes
 }
 
+// endAfter ends the context after d as context.WithTimeout does, but by
+// cancelling it. A request that starts under a deadline is refused by client-go's
+// rate limiter at once, with an error that is no context's, when its token is
+// due after the deadline or when the deadline has just passed and the context's
+// timer has not run, which a tick at the end of a window brings about:
+// https://github.com/golang/time/blob/v0.15.0/rate/rate.go#L268-L277
+// https://github.com/kubernetes/client-go/blob/v0.37.2/rest/request.go#L672-L678
+func endAfter(ctx context.Context, d time.Duration) (context.Context, context.CancelFunc) {
+	ctx, cancel := context.WithCancelCause(ctx)
+	timer := time.AfterFunc(d, func() { cancel(context.DeadlineExceeded) })
+	return ctx, func() {
+		timer.Stop()
+		cancel(context.Canceled)
+	}
+}
+
 // settle waits until settleReads reads in a row agree with the one before,
 // which the first read has none of.
 func settle(ctx context.Context, c client.Reader, namespace string, bound, interval time.Duration) (snapshot, error) {
+	bounded, cancel := endAfter(ctx, bound)
+	defer cancel()
 	var previous snapshot
 	var agreed int
 	var last error
-	err := wait.PollUntilContextTimeout(ctx, interval, bound, true, func(ctx context.Context) (bool, error) {
+	err := wait.PollUntilContextCancel(bounded, interval, true, func(ctx context.Context) (bool, error) {
 		current, err := snapshotOf(ctx, c, namespace)
 		if err != nil {
 			previous, agreed = nil, 0
@@ -125,13 +144,13 @@ func settle(ctx context.Context, c client.Reader, namespace string, bound, inter
 		return agreed >= settleReads, nil
 	})
 	if err != nil {
-		return nil, fmt.Errorf("after %s, %d reads in a row have not agreed: %w", bound, settleReads, errors.Join(err, last))
+		return nil, fmt.Errorf("after %s, %d reads in a row have not agreed: %w", bound, settleReads, errors.Join(context.Cause(bounded), last))
 	}
 	return previous, nil
 }
 
 func hold(ctx context.Context, c client.Reader, namespace string, window, interval time.Duration, baseline snapshot) error {
-	windowed, cancel := context.WithTimeout(ctx, window)
+	windowed, cancel := endAfter(ctx, window)
 	defer cancel()
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
@@ -158,12 +177,28 @@ func hold(ctx context.Context, c client.Reader, namespace string, window, interv
 // one.
 type scriptedReads struct {
 	client.Reader
-	n        atomic.Int32
-	change   func(read int, kind string, obj *unstructured.Unstructured)
-	hangFrom int
+	n         atomic.Int32
+	lists     atomic.Int32
+	deadlined atomic.Int32
+	change    func(read int, kind string, obj *unstructured.Unstructured)
+	hangFrom  int
+	failFrom  int
+	limiter   flowcontrol.RateLimiter
 }
 
 func (r *scriptedReads) List(ctx context.Context, list client.ObjectList, opts ...client.ListOption) error {
+	r.lists.Add(1)
+	if _, ok := ctx.Deadline(); ok {
+		r.deadlined.Add(1)
+	}
+	if r.limiter != nil {
+		if err := r.limiter.Wait(ctx); err != nil {
+			return fmt.Errorf("client rate limiter Wait returned an error: %w", err)
+		}
+	}
+	if r.failFrom > 0 && int(r.n.Load()) >= r.failFrom {
+		return errors.New("the API server is gone")
+	}
 	if r.hangFrom > 0 && int(r.n.Load()) >= r.hangFrom {
 		<-ctx.Done()
 		return ctx.Err()
@@ -189,6 +224,15 @@ func (r *scriptedReads) List(ctx context.Context, list client.ObjectList, opts .
 
 func scripted(change func(read int, kind string, obj *unstructured.Unstructured)) *scriptedReads {
 	return &scriptedReads{Reader: newQuickStartNamespace().client(), change: change}
+}
+
+func limitedToSnapshots(t *testing.T, r *scriptedReads, snapshots int) {
+	t.Helper()
+	counted := scripted(nil)
+	if _, err := snapshotOf(t.Context(), counted, quickStartKey.Namespace); err != nil {
+		t.Fatal(err)
+	}
+	r.limiter = flowcontrol.NewTokenBucketRateLimiter(0.001, snapshots*int(counted.lists.Load()))
 }
 
 func providersEntry(obj *unstructured.Unstructured, change func(*metav1.ManagedFieldsEntry)) {
@@ -396,6 +440,85 @@ func TestHoldFailsAtTheFirstChangeAndOtherwiseTakesTheWholeWindow(t *testing.T) 
 				t.Errorf("the window ended after %s, before its %s", took, window)
 			case c.failure != "" && took >= window:
 				t.Errorf("the change was found after %s, not at the first read that saw it", took)
+			}
+		})
+	}
+}
+
+func TestHoldEndsQuietlyWhereTheClientsLimiterWouldHoldAReadPastTheWindowAndFailsOnAnyOtherError(t *testing.T) {
+	const interval, window = 100 * time.Millisecond, 5*100*time.Millisecond + 50*time.Millisecond
+	baseline, err := snapshotOf(t.Context(), scripted(nil), quickStartKey.Namespace)
+	requireNoError(t, err)
+	written := func(read int, kind string, obj *unstructured.Unstructured) {
+		if kind == "Machine" && read >= 2 {
+			obj.SetResourceVersion("written")
+		}
+	}
+	cases := []struct {
+		name     string
+		change   func(read int, kind string, obj *unstructured.Unstructured)
+		snapshot int
+		failFrom int
+		failure  string
+	}{
+		{"the token of the third snapshot is due after the window", nil, 2, 0, ""},
+		{"a Machine is written on the second read, ahead of a limiter that holds a later one", written, 3, 0, "Machine w-md-0-abc-1: the resourceVersion"},
+		{"a read fails on the third, ahead of a limiter that holds a later one", nil, 4, 2, "the API server is gone"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			r := scripted(c.change)
+			r.failFrom = c.failFrom
+			if c.snapshot > 0 {
+				limitedToSnapshots(t, r, c.snapshot)
+			}
+			start := time.Now()
+			err := hold(t.Context(), r, quickStartKey.Namespace, window, interval, baseline)
+			requireFailure(t, err, c.failure)
+			if took := time.Since(start); c.failure == "" && took < window {
+				t.Errorf("the window ended after %s, before its %s", took, window)
+			}
+			if n := r.deadlined.Load(); n > 0 {
+				t.Errorf("%d reads ran under a deadline, which makes the limiter refuse a read at once with an error that is no context's", n)
+			}
+		})
+	}
+}
+
+func TestSettleNamesWhyTheReadsDisagreeWhereTheClientsLimiterWouldHoldAReadPastItsBound(t *testing.T) {
+	const interval, bound = 50 * time.Millisecond, 400 * time.Millisecond
+	written := func(read int, kind string, obj *unstructured.Unstructured) {
+		if kind == "Machine" {
+			obj.SetResourceVersion(fmt.Sprint(read))
+		}
+	}
+	cases := []struct {
+		name     string
+		change   func(read int, kind string, obj *unstructured.Unstructured)
+		snapshot int
+		failFrom int
+		failure  string
+	}{
+		{"writes on every read, and a limiter that holds the third", written, 2, 0, "the resourceVersion went from 1 to 2"},
+		{"a read fails", nil, 0, 1, "the API server is gone"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			r := scripted(c.change)
+			r.failFrom = c.failFrom
+			if c.snapshot > 0 {
+				limitedToSnapshots(t, r, c.snapshot)
+			}
+			_, err := settle(t.Context(), r, quickStartKey.Namespace, bound, interval)
+			if err == nil || !strings.Contains(err.Error(), "have not agreed") || !strings.Contains(err.Error(), c.failure) {
+				t.Errorf("want a failure to agree for the reason %q, got %v", c.failure, err)
+			}
+			if err != nil && strings.Contains(err.Error(), "rate limiter") {
+				t.Errorf("the failure blames the limiter: %v", err)
+			}
+			if n := r.deadlined.Load(); n > 0 {
+				t.Errorf("%d reads ran under a deadline, which makes the limiter refuse a read at once with an error that is no context's", n)
 			}
 		})
 	}
