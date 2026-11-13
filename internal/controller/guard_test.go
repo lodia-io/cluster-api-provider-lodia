@@ -133,6 +133,64 @@ func TestAPassWhoseAnnotationPatchFailsAppliesNothing(t *testing.T) {
 	}
 }
 
+func TestAPassThatReadAStaleCopyDoesNotWriteItsUIDOverAnotherObjects(t *testing.T) {
+	cluster, lcp := create(t, namespace(t), "stale", annotated(map[string]string{clusterctlv1.BlockMoveAnnotation: "true"}))
+	healthy := direct(t, interceptor.Funcs{})
+	passes(t, healthy, lcp)
+	passes(t, healthy, lcp)
+	get(t, lcp)
+	read := lcp.DeepCopy()
+	updateSpec(t, lcp, func(l *v1alpha1.LodiaControlPlane) { l.Annotations[v1alpha1.UIDAnnotation] = sourceUID })
+
+	lagging := direct(t, interceptor.Funcs{
+		Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+			if l, ok := obj.(*v1alpha1.LodiaControlPlane); ok {
+				read.DeepCopyInto(l)
+				return nil
+			}
+			return c.Get(ctx, key, obj, opts...)
+		},
+	})
+	if err := pass(t.Context(), lagging, lcp); !apierrors.IsConflict(err) {
+		t.Errorf("the pass returned %v, want a conflict", err)
+	}
+	get(t, lcp)
+	if got := lcp.Annotations[v1alpha1.UIDAnnotation]; got != sourceUID {
+		t.Errorf("%s is %q after a pass that read a stale copy, want the source's %s kept", v1alpha1.UIDAnnotation, got, sourceUID)
+	}
+	for range 3 {
+		passes(t, healthy, lcp)
+	}
+	get(t, lcp)
+	if got := lcp.Annotations[v1alpha1.UIDAnnotation]; got != sourceUID {
+		t.Errorf("%s is %q after the next passes, want the source's %s kept", v1alpha1.UIDAnnotation, got, sourceUID)
+	}
+	if err := ready(lcp, metav1.ConditionFalse, v1alpha1.CopyOfAnotherObjectReason, ""); err != nil {
+		t.Error(err)
+	}
+	absent(t, controlPlaneOf(cluster))
+}
+
+func TestBlockMoveIsPutBackWhenItIsRemovedByHand(t *testing.T) {
+	_, lcp := create(t, namespace(t), "unblocked")
+	r := direct(t, interceptor.Funcs{})
+	untilBlockMove(t, r, lcp)
+	recorded := lcp.Annotations[v1alpha1.UIDAnnotation]
+	if recorded != string(lcp.UID) {
+		t.Fatalf("%s is %q, want the object's UID %s", v1alpha1.UIDAnnotation, recorded, lcp.UID)
+	}
+
+	updateSpec(t, lcp, func(l *v1alpha1.LodiaControlPlane) { delete(l.Annotations, clusterctlv1.BlockMoveAnnotation) })
+	passes(t, r, lcp)
+	get(t, lcp)
+	if got := lcp.Annotations[clusterctlv1.BlockMoveAnnotation]; got != "true" {
+		t.Errorf("%s is %q after a pass, want it put back as \"true\"", clusterctlv1.BlockMoveAnnotation, got)
+	}
+	if got := lcp.Annotations[v1alpha1.UIDAnnotation]; got != recorded {
+		t.Errorf("%s is %q, want it kept as %s", v1alpha1.UIDAnnotation, got, recorded)
+	}
+}
+
 func TestACopyOfAnotherObjectGetsNeitherAControlPlaneNorSecretsNorARewrittenAnnotation(t *testing.T) {
 	for name, kept := range ofAnotherUID {
 		for _, leftover := range []bool{false, true} {

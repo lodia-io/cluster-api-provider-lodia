@@ -283,8 +283,7 @@ func (r *Reconciler) reconcileNormal(ctx context.Context, cluster *clusterv1.Clu
 		if !hasUID {
 			written[v1alpha1.UIDAnnotation] = string(lcp.UID)
 		}
-		annotations.AddAnnotations(lcp, written)
-		return nil
+		return r.annotate(ctx, lcp, written)
 	}
 	lcp.Status.ExternalManagedControlPlane = new(true)
 
@@ -315,6 +314,17 @@ func (r *Reconciler) reconcileNormal(ctx context.Context, cluster *clusterv1.Clu
 		return errors.Join(err, applyErr, copyErr)
 	}
 	return errors.Join(reportWriteError(lcp, copyErr), reportWriteError(lcp, applyErr))
+}
+
+// annotate writes on a copy, through a patch locked on the resourceVersion that
+// the pass read: a cache that lags behind could hide a UID another object's
+// copy has just been given, and an unlocked patch would replace it with this
+// object's own, which the next pass then trusts. lcp stays as read, so the
+// deferred patch never sends the annotations again.
+func (r *Reconciler) annotate(ctx context.Context, lcp *v1alpha1.LodiaControlPlane, written map[string]string) error {
+	annotated := lcp.DeepCopy()
+	annotations.AddAnnotations(annotated, written)
+	return r.Patch(ctx, annotated, client.MergeFromWithOptions(lcp, client.MergeFromWithOptimisticLock{}))
 }
 
 // currentControlPlane returns nil when the ControlPlane does not exist.
