@@ -25,8 +25,6 @@ import (
 	"github.com/distribution/reference"
 	"github.com/go-logr/logr/funcr"
 	appsv1 "k8s.io/api/apps/v1"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	"k8s.io/apimachinery/pkg/util/wait"
 	clusterctlv1 "sigs.k8s.io/cluster-api/cmd/clusterctl/api/v1alpha3"
 	clusterctl "sigs.k8s.io/cluster-api/cmd/clusterctl/client"
 	"sigs.k8s.io/cluster-api/cmd/clusterctl/client/yamlprocessor"
@@ -162,32 +160,10 @@ func download(ctx context.Context, url string) ([]byte, error) {
 	return body, nil
 }
 
-func createWhenWebhooksAnswer(c client.Client) decoder.HandlerFunc {
-	return func(ctx context.Context, obj k8s.Object) error {
-		var last error
-		err := wait.PollUntilContextTimeout(ctx, 2*time.Second, time.Minute, true, func(ctx context.Context) (bool, error) {
-			last = c.Create(ctx, obj)
-			if last != nil && webhookNotReady(last) {
-				return false, nil
-			}
-			return true, last
-		})
-		if wait.Interrupted(err) {
-			return last
-		}
-		return err
-	}
-}
-
 func ignoreExisting(create decoder.HandlerFunc) decoder.HandlerFunc {
 	return func(ctx context.Context, obj k8s.Object) error {
 		return client.IgnoreAlreadyExists(create(ctx, obj))
 	}
-}
-
-func webhookNotReady(err error) bool {
-	msg := err.Error()
-	return apierrors.IsInternalError(err) && (strings.Contains(msg, "webhook") || strings.Contains(msg, "x509"))
 }
 
 func apply(ctx context.Context, cfg *envconf.Config, manifest []byte) error {
@@ -195,7 +171,7 @@ func apply(ctx context.Context, cfg *envconf.Config, manifest []byte) error {
 	if err != nil {
 		return err
 	}
-	return decoder.DecodeEach(ctx, bytes.NewReader(manifest), createWhenWebhooksAnswer(c))
+	return decoder.DecodeEach(ctx, bytes.NewReader(manifest), createWhenWebhooksAnswer(c, time.Minute, 2*time.Second))
 }
 
 func applyRelease(ctx context.Context, cfg *envconf.Config, r release) error {
@@ -214,13 +190,7 @@ func available(ctx context.Context, cfg *envconf.Config, namespace string, names
 	if err != nil {
 		return err
 	}
-	for _, name := range names {
-		isAvailable := deploymentAvailable(c, client.ObjectKey{Namespace: namespace, Name: name})
-		if err := wait.PollUntilContextTimeout(ctx, 2*time.Second, 2*time.Minute, true, isAvailable); err != nil {
-			return fmt.Errorf("deployment %s/%s is not Available: %w", namespace, name, err)
-		}
-	}
-	return nil
+	return deploymentsAvailable(ctx, c, namespace, 2*time.Minute, 2*time.Second, names...)
 }
 
 func installCertManager(ctx context.Context, cfg *envconf.Config) error {

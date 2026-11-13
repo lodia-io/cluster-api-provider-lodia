@@ -7,7 +7,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"runtime"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -15,6 +17,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/wait"
+	"k8s.io/client-go/util/flowcontrol"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -30,13 +33,35 @@ func requireUnpaused(ctx context.Context, c client.Client, key client.ObjectKey,
 	return pauseCycle(ctx, c, key, bound, interval, false, nil)
 }
 
+// A check that the end of ctx cuts short fails with the context's error, which
+// says nothing about the step: the failure names the last check that ended
+// before it.
 func pollUntil(ctx context.Context, interval time.Duration, check func(context.Context) error) error {
 	var last error
 	err := wait.PollUntilContextCancel(ctx, interval, true, func(ctx context.Context) (bool, error) {
-		last = check(ctx)
-		return last == nil, nil
+		err := check(ctx)
+		if ctx.Err() == nil {
+			last = err
+		}
+		return err == nil, nil
 	})
-	return errors.Join(err, last)
+	if err != nil {
+		return errors.Join(context.Cause(ctx), last)
+	}
+	return nil
+}
+
+var untilInterval = 2 * time.Second
+
+func until(ctx context.Context, t testing.TB, timeout time.Duration, what string, check func(context.Context) error) {
+	t.Helper()
+	start := time.Now()
+	bounded, cancel := endAfter(ctx, timeout)
+	defer cancel()
+	if err := pollUntil(bounded, untilInterval, check); err != nil {
+		t.Fatalf("%s: %v", what, err)
+	}
+	t.Logf("%s, after %s", what, time.Since(start).Round(time.Second))
 }
 
 func readBoth(ctx context.Context, c client.Client, key client.ObjectKey) (*clusterv1.Cluster, *v1alpha1.LodiaControlPlane, error) {
@@ -269,5 +294,146 @@ func TestUnpausingFailsWithoutACluster(t *testing.T) {
 	err := requireUnpaused(t.Context(), fake.NewClientBuilder().WithScheme(controller.Scheme()).Build(), unpausedKey, 100*time.Millisecond, 50*time.Millisecond)
 	if err == nil || !apierrors.IsNotFound(err) {
 		t.Fatalf("want a NotFound, got %v", err)
+	}
+}
+
+func shortenTheUntil(t *testing.T, interval time.Duration) {
+	t.Helper()
+	was := untilInterval
+	t.Cleanup(func() { untilInterval = was })
+	untilInterval = interval
+}
+
+func throttled(ctx context.Context, limiter flowcontrol.RateLimiter, deadlined *atomic.Int32) error {
+	if _, ok := ctx.Deadline(); ok {
+		deadlined.Add(1)
+	}
+	if err := limiter.Wait(ctx); err != nil {
+		return fmt.Errorf("client rate limiter Wait returned an error: %w", err)
+	}
+	return nil
+}
+
+type failing struct {
+	testing.TB
+	message string
+}
+
+func (f *failing) Helper() {}
+
+func (f *failing) Logf(string, ...any) {}
+
+func (f *failing) Fatalf(format string, args ...any) {
+	f.message = fmt.Sprintf(format, args...)
+	runtime.Goexit()
+}
+
+func failureOf(t *testing.T, call func(testing.TB)) string {
+	t.Helper()
+	f := &failing{TB: t}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		call(f)
+	}()
+	<-done
+	return f.message
+}
+
+func requireNamed(t *testing.T, err error, deadlined *atomic.Int32, want ...string) {
+	t.Helper()
+	if err == nil {
+		t.Fatalf("want a failure with %q, got none", want)
+	}
+	for _, w := range want {
+		if !strings.Contains(err.Error(), w) {
+			t.Errorf("want the failure to say %q, got %v", w, err)
+		}
+	}
+	if strings.Contains(err.Error(), "rate limiter") {
+		t.Errorf("the failure blames the limiter: %v", err)
+	}
+	if n := deadlined.Load(); n > 0 {
+		t.Errorf("%d reads ran under a deadline, which makes the limiter refuse a read at once with an error that is no context's", n)
+	}
+}
+
+func TestUntilFailsWithTheCauseOfItsEndAndTheReasonOfTheLastCheckWhereTheClientsLimiterWouldHoldARead(t *testing.T) {
+	shortenTheUntil(t, 20*time.Millisecond)
+	cases := []struct {
+		name     string
+		passesAt int
+		failure  []string
+	}{
+		{"a check that never passes", 0, []string{"the step: context deadline exceeded", "the real reason"}},
+		{"a check that passes at its first read", 1, nil},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			var deadlined atomic.Int32
+			limiter := flowcontrol.NewTokenBucketRateLimiter(0.001, 1)
+			var reads int
+			message := failureOf(t, func(f testing.TB) {
+				until(t.Context(), f, 200*time.Millisecond, "the step", func(ctx context.Context) error {
+					reads++
+					if err := throttled(ctx, limiter, &deadlined); err != nil {
+						return err
+					}
+					if reads == c.passesAt {
+						return nil
+					}
+					return errors.New("the real reason")
+				})
+			})
+			if c.failure == nil {
+				if message != "" {
+					t.Fatalf("want no failure, got %s", message)
+				}
+				return
+			}
+			requireNamed(t, errors.New(message), &deadlined, c.failure...)
+		})
+	}
+}
+
+type throttledGets struct {
+	client.Client
+	limiter   flowcontrol.RateLimiter
+	deadlined *atomic.Int32
+}
+
+func (g throttledGets) Get(ctx context.Context, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+	if err := throttled(ctx, g.limiter, g.deadlined); err != nil {
+		return err
+	}
+	return g.Client.Get(ctx, key, obj, opts...)
+}
+
+func TestAPauseNamesWhatTheControllersDidNotReportWhereTheClientsLimiterWouldHoldAReadPastTheBound(t *testing.T) {
+	lcpNeverReports := reported{metav1.ConditionTrue, metav1.ConditionFalse, metav1.ConditionTrue, pausedGeneration - 1}
+	unpausing := func(c client.Client) error {
+		return requireUnpaused(t.Context(), c, unpausedKey, 200*time.Millisecond, 10*time.Millisecond)
+	}
+	pausing := func(c client.Client) error {
+		return whilePaused(t.Context(), c, unpausedKey, 200*time.Millisecond, 10*time.Millisecond, nil)
+	}
+	cases := []struct {
+		name   string
+		call   func(client.Client) error
+		world  func() *world
+		passes int
+		want   []string
+	}{
+		{"the first wait of an unpause", unpausing, func() *world { return newWorld(always(lcpNeverReports), always(runAgain)) }, 2, []string{"Paused is not True on both", "the Paused of the LodiaControlPlane"}},
+		{"the second wait of an unpause", unpausing, func() *world { return newWorld(always(pausedByTheMove), always(pausedByTheMove)) }, 4, []string{"both controllers did not run", "the Paused of the Cluster"}},
+		{"the first wait of a pause", pausing, func() *world { return newWorldPausedAt(false, always(lcpNeverReports), always(runAgain)) }, 2, []string{"Paused is not True on both", "the Paused of the LodiaControlPlane"}},
+		{"the second wait of a pause", pausing, func() *world { return newWorldPausedAt(false, always(pausedByTheMove), always(pausedByTheMove)) }, 4, []string{"both controllers did not run", "the Paused of the Cluster"}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			var deadlined atomic.Int32
+			err := c.call(throttledGets{c.world(), flowcontrol.NewTokenBucketRateLimiter(0.001, c.passes), &deadlined})
+			requireNamed(t, err, &deadlined, c.want...)
+		})
 	}
 }

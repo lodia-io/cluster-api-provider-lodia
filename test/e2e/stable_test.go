@@ -32,6 +32,7 @@ const (
 	settleInterval = 15 * time.Second
 	settleReads    = 4
 	holdInterval   = 5 * time.Second
+	holdWindow     = 2 * time.Minute
 )
 
 type stamp struct{ what, value string }
@@ -113,6 +114,15 @@ func endAfter(ctx context.Context, d time.Duration) (context.Context, context.Ca
 		timer.Stop()
 		cancel(context.Canceled)
 	}
+}
+
+// endedBy gives a poll's error the cause that endAfter gave its context, since
+// the poll reports only context.Canceled.
+func endedBy(ctx context.Context, err error) error {
+	if cause := context.Cause(ctx); cause != nil && wait.Interrupted(err) {
+		return cause
+	}
+	return err
 }
 
 // settle waits until settleReads reads in a row agree with the one before,
@@ -530,5 +540,8 @@ func TestTheStabilityChecksReadAsOftenAndAsLongAsClusterAPIsDo(t *testing.T) {
 	}
 	if holdInterval > 5*time.Second {
 		t.Errorf("the window is read every %s, less often than Cluster API's 5 seconds", holdInterval)
+	}
+	if bounds.Stable < holdWindow {
+		t.Errorf("the window of step 23 is %s, shorter than Cluster API's %s", bounds.Stable, holdWindow)
 	}
 }

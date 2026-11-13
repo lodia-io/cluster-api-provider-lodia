@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -20,21 +21,30 @@ import (
 // loads when a call names no kubeconfig, at a cluster that never answers, and
 // fails the test if that cluster is asked anything. The kubeconfig names the
 // cluster as its current context and as Kubeconfig's context.
-//
+func TrapTheDefaultKubeconfig(t testing.TB) {
+	t.Helper()
+	_, asked := trap(t)
+	t.Cleanup(func() {
+		if got := asked(); len(got) > 0 {
+			t.Errorf("clusterctl loaded the kubeconfig that KUBECONFIG names and reached its cluster: %s", strings.Join(got, ", "))
+		}
+	})
+}
+
 // HOME needs no trap: client-go fixes the path of ~/.kube/config when it loads,
 // and reads it only where KUBECONFIG is unset:
 // https://github.com/kubernetes/client-go/blob/v0.37.2/tools/clientcmd/loader.go#L47-L48
 // https://github.com/kubernetes/client-go/blob/v0.37.2/tools/clientcmd/loader.go#L164-L172
-func TrapTheDefaultKubeconfig(t *testing.T) {
+func trap(t testing.TB) (url string, asked func() []string) {
 	t.Helper()
 	var (
-		mu    sync.Mutex
-		asked []string
+		mu      sync.Mutex
+		reaches []string
 	)
 	record := func(what string) {
 		mu.Lock()
 		defer mu.Unlock()
-		asked = append(asked, what)
+		reaches = append(reaches, what)
 	}
 	server := httptest.NewUnstartedServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 		record(r.Method + " " + r.URL.Path)
@@ -64,11 +74,9 @@ func TrapTheDefaultKubeconfig(t *testing.T) {
 		server.CloseClientConnections()
 		server.Close()
 	})
-	t.Cleanup(func() {
+	return server.URL, func() []string {
 		mu.Lock()
 		defer mu.Unlock()
-		if len(asked) > 0 {
-			t.Errorf("clusterctl loaded the kubeconfig that KUBECONFIG names and reached its cluster: %s", strings.Join(asked, ", "))
-		}
-	})
+		return slices.Clone(reaches)
+	}
 }

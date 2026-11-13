@@ -22,7 +22,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/apimachinery/pkg/util/wait"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	clusterctl "sigs.k8s.io/cluster-api/cmd/clusterctl/client"
 	"sigs.k8s.io/cluster-api/cmd/clusterctl/client/yamlprocessor"
@@ -456,21 +455,4 @@ func render(file, cluster string) ([]byte, error) {
 		}
 		return cluster, nil
 	})
-}
-
-func until(ctx context.Context, t *testing.T, timeout time.Duration, what string, check func(context.Context) error) {
-	t.Helper()
-	start := time.Now()
-	var last error
-	err := wait.PollUntilContextTimeout(ctx, 2*time.Second, timeout, true, func(ctx context.Context) (bool, error) {
-		err := check(ctx)
-		if ctx.Err() == nil {
-			last = err
-		}
-		return err == nil, nil
-	})
-	if err != nil {
-		t.Fatalf("%s: %v: %v", what, err, last)
-	}
-	t.Logf("%s, after %s", what, time.Since(start).Round(time.Second))
 }

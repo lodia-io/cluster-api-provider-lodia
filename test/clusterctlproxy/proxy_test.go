@@ -576,9 +576,13 @@ func TestTheWalkReadsEveryPackageOfTheModule(t *testing.T) {
 // Every clusterctl client the suite builds has to go through New, or it reads
 // the kubeconfig that clusterctl's own proxy loads and has no bound.
 func TestEveryClusterctlClientIsBuiltThroughTheFactory(t *testing.T) {
-	allowed, err := filepath.Abs("proxy.go")
-	if err != nil {
-		t.Fatal(err)
+	var allowed []string
+	for _, name := range []string{"proxy.go", "trap_test.go"} {
+		abs, err := filepath.Abs(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		allowed = append(allowed, abs)
 	}
 	root, err := filepath.Abs(moduleRoot)
 	if err != nil {
@@ -596,7 +600,7 @@ func TestEveryClusterctlClientIsBuiltThroughTheFactory(t *testing.T) {
 			return nil
 		}
 		abs, err := filepath.Abs(path)
-		if err != nil || !strings.HasSuffix(path, ".go") || abs == allowed {
+		if err != nil || !strings.HasSuffix(path, ".go") || slices.Contains(allowed, abs) {
 			return err
 		}
 		found, err := builtOutsideTheFactory(path, nil)

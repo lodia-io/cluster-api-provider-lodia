@@ -12,6 +12,7 @@ import (
 	"maps"
 	"net/http"
 	"os"
+	"path/filepath"
 	"reflect"
 	"slices"
 	"strconv"
@@ -805,9 +806,19 @@ var (
 		"until":               2,
 		"requireUnpaused":     3,
 		"whilePaused":         3,
+		"pauseCycle":          3,
 		"settle":              3,
 		"hold":                3,
+		"endAfter":            1,
 		"context.WithTimeout": 1,
+	}
+	contextsThatEnd          = []string{"context.WithTimeout", "endAfter"}
+	waitsOnTheCallersContext = []string{
+		"pollUntil", "apply", "applyRelease", "available", "installCertManager", "deploymentsAvailable", "deploymentAvailableWithin",
+		"clusterctlproxy.MoveUntilBlocked",
+	}
+	waitsOfTheirOwn = []string{
+		"docker", "dumpBounded", "dumpTenant", "dumpWorkers", "install", "createWhenWebhooksAnswer", "gatedServer", "returnsWithin",
 	}
 	waitsWithoutABound = []string{
 		"time.Sleep", "time.After", "time.AfterFunc", "time.NewTimer", "time.NewTicker", "time.Tick",
@@ -833,8 +844,19 @@ func isBoundsField(sel *ast.SelectorExpr) bool {
 	return ok && owner.Name == "bounds"
 }
 
+func isAPoll(callee string) bool {
+	return strings.HasPrefix(callee, "wait.") && callee != "wait.Interrupted"
+}
+
+func isAWait(callee string) bool {
+	_, bounded := boundArgumentOf[callee]
+	return bounded || slices.Contains(waitsOnTheCallersContext, callee) || slices.Contains(waitsWithoutABound, callee) || isAPoll(callee)
+}
+
 // problemsWithTheWaits holds every wait of the Test functions of file to a
-// field of bounds that no other wait takes, since total counts each field once.
+// field of bounds that no other wait takes, since total counts each field once,
+// and every wait that takes its bound from the context it runs on to a context
+// that a field of bounds ends in the same step.
 func problemsWithTheWaits(fset *token.FileSet, file *ast.File, fields, outside []string) []string {
 	var problems []string
 	problem := func(n ast.Node, format string, args ...any) {
@@ -848,8 +870,39 @@ func problemsWithTheWaits(fset *token.FileSet, file *ast.File, fields, outside [
 		if !ok || !strings.HasPrefix(fn.Name.Name, "Test") {
 			continue
 		}
+		var path []ast.Node
+		ended := make(map[ast.Node]map[string]bool)
+		step := func() ast.Node {
+			for _, n := range slices.Backward(path) {
+				if _, ok := n.(*ast.FuncLit); ok {
+					return n
+				}
+			}
+			return nil
+		}
 		ast.Inspect(fn.Body, func(n ast.Node) bool {
+			if n == nil {
+				path = path[:len(path)-1]
+				return true
+			}
+			path = append(path, n)
 			switch n := n.(type) {
+			case *ast.AssignStmt:
+				if len(n.Rhs) != 1 {
+					break
+				}
+				call, ok := n.Rhs[0].(*ast.CallExpr)
+				if !ok || !slices.Contains(contextsThatEnd, calleeOf(call)) {
+					break
+				}
+				ident, isIdent := n.Lhs[0].(*ast.Ident)
+				if bound, isField := argumentOf(call, boundArgumentOf[calleeOf(call)]).(*ast.SelectorExpr); isIdent && isField && isBoundsField(bound) {
+					scope := step()
+					if ended[scope] == nil {
+						ended[scope] = make(map[string]bool)
+					}
+					ended[scope][ident.Name] = true
+				}
 			case *ast.CallExpr:
 				callee := calleeOf(n)
 				at, isWait := boundArgumentOf[callee]
@@ -867,7 +920,12 @@ func problemsWithTheWaits(fset *token.FileSet, file *ast.File, fields, outside [
 					}
 					taken[bound] = true
 					used[bound.Sel.Name]++
-				case slices.Contains(waitsWithoutABound, callee) || strings.HasPrefix(callee, "wait."):
+				case slices.Contains(waitsOnTheCallersContext, callee):
+					waits++
+					if ctx, ok := argumentOf(n, 0).(*ast.Ident); !ok || !ended[step()][ctx.Name] {
+						problem(n, "%s runs on a context that no field of bounds ends in this step", callee)
+					}
+				case slices.Contains(waitsWithoutABound, callee) || isAPoll(callee):
 					problem(n, "%s waits without a field of bounds to bound it", callee)
 				}
 			case *ast.SelectorExpr:
@@ -888,6 +946,35 @@ func problemsWithTheWaits(fset *token.FileSet, file *ast.File, fields, outside [
 		}
 		if used[field] != want {
 			problems = append(problems, fmt.Sprintf("bounds.%s bounds %d waits of the file, want %d", field, used[field], want))
+		}
+	}
+	return problems
+}
+
+func argumentOf(call *ast.CallExpr, at int) ast.Expr {
+	if at >= len(call.Args) {
+		return nil
+	}
+	return call.Args[at]
+}
+
+func problemsWithTheFunctionsThatWait(fset *token.FileSet, files []*ast.File) []string {
+	known := slices.Concat(slices.Collect(maps.Keys(boundArgumentOf)), waitsOnTheCallersContext, waitsOfTheirOwn)
+	var problems []string
+	for _, file := range files {
+		for _, decl := range file.Decls {
+			fn, ok := decl.(*ast.FuncDecl)
+			if !ok || fn.Body == nil || strings.HasPrefix(fn.Name.Name, "Test") || slices.Contains(known, fn.Name.Name) {
+				continue
+			}
+			var reported bool
+			ast.Inspect(fn.Body, func(n ast.Node) bool {
+				if call, ok := n.(*ast.CallExpr); ok && !reported && isAWait(calleeOf(call)) {
+					reported = true
+					problems = append(problems, fmt.Sprintf("%s: %s calls %s and waits, and the check of the waits does not know it: add it to boundArgumentOf, waitsOnTheCallersContext or waitsOfTheirOwn", fset.Position(fn.Pos()), fn.Name.Name, calleeOf(call)))
+				}
+				return true
+			})
 		}
 	}
 	return problems
@@ -927,11 +1014,16 @@ func TestTheCheckOfTheWaitsRefusesWhatBreaksTheSumOfTheBounds(t *testing.T) {
 		return callee + "(" + strings.Join(args, ", ") + ")"
 	}
 	var all, twice []string
-	for callee, at := range boundArgumentOf {
-		all = append(all, call(callee, at, "bounds."+string(rune('A'+len(all)))))
+	field := make(map[string]string)
+	for _, callee := range slices.Sorted(maps.Keys(boundArgumentOf)) {
+		field[callee] = "bounds." + string(rune('A'+len(all)))
+		all = append(all, call(callee, boundArgumentOf[callee], field[callee]))
+		twice = append(twice, call(callee, boundArgumentOf[callee], "bounds.A"))
 	}
-	for callee, at := range boundArgumentOf {
-		twice = append(twice, call(callee, at, "bounds.A"))
+	madeBy := func(maker string) string {
+		made := slices.Clone(all)
+		made[slices.Index(slices.Sorted(maps.Keys(boundArgumentOf)), maker)] = "bounded, cancel := " + call(maker, boundArgumentOf[maker], field[maker])
+		return strings.Join(made, "\n")
 	}
 	fields := []string{"Install"}
 	for i := range all {
@@ -950,6 +1042,17 @@ func TestTheCheckOfTheWaitsRefusesWhatBreaksTheSumOfTheBounds(t *testing.T) {
 		{"a wait without a bound", strings.Join(all, "\n") + "\nuntil(ctx, t)", "until takes a bound as its argument 3"},
 		{"a wait with a field of another value", strings.Join(all[1:], "\n") + "\nuntil(ctx, t, other.A)", "is bounded by something that is not a field of bounds"},
 		{"a poll of apimachinery's wait package", strings.Join(all, "\n") + "\nwait.PollUntilContextTimeout(ctx, time.Second, time.Minute, true, f)", "wait.PollUntilContextTimeout waits without a field"},
+		{"apimachinery's test for an interrupted wait", strings.Join(all, "\n") + "\nwait.Interrupted(err)", ""},
+	}
+	for _, callee := range waitsOnTheCallersContext {
+		cases = append(cases,
+			struct{ name, body, want string }{callee + " on the step's own context", strings.Join(all, "\n") + "\n" + callee + "(ctx)", callee + " runs on a context that no field of bounds ends in this step"},
+			struct{ name, body, want string }{callee + " on a context made in another step", "func() {\n" + madeBy("context.WithTimeout") + "\n}()\nfunc() {\n" + callee + "(bounded)\n}()", callee + " runs on a context that no field of bounds ends in this step"},
+			struct{ name, body, want string }{callee + " on a context made from a literal", strings.Join(all[1:], "\n") + "\nbounded, cancel := context.WithTimeout(ctx, 5*time.Minute)\n" + callee + "(bounded)", callee + " runs on a context that no field of bounds ends in this step"},
+		)
+		for _, maker := range contextsThatEnd {
+			cases = append(cases, struct{ name, body, want string }{callee + " on a context made by " + maker, madeBy(maker) + "\n" + callee + "(bounded)", ""})
+		}
 	}
 	for _, callee := range slices.Sorted(maps.Keys(boundArgumentOf)) {
 		at := boundArgumentOf[callee]
@@ -985,5 +1088,75 @@ func TestTheCheckOfTheWaitsRefusesWhatBreaksTheSumOfTheBounds(t *testing.T) {
 				t.Fatalf("want a problem with %q, got %q", c.want, problems)
 			}
 		})
+	}
+}
+
+func TestTheCheckOfTheFunctionsThatWaitRefusesWhatItDoesNotKnow(t *testing.T) {
+	cases := []struct {
+		name, source, want string
+	}{
+		{"a helper that polls", "func helper() { wait.PollUntilContextCancel() }", "helper calls wait.PollUntilContextCancel"},
+		{"a helper that sleeps", "func helper() { time.Sleep() }", "helper calls time.Sleep"},
+		{"a helper that makes a ticker in a loop", "func helper() { for { time.NewTicker() } }", "helper calls time.NewTicker"},
+		{"a helper that makes a context with a timeout", "func helper() { context.WithTimeout() }", "helper calls context.WithTimeout"},
+		{"a helper that ends a context", "func helper() { endAfter() }", "helper calls endAfter"},
+		{"a helper that calls a wait that takes its bound", "func helper() { settle() }", "helper calls settle"},
+		{"a helper that calls a wait on its caller's context", "func helper() { pollUntil() }", "helper calls pollUntil"},
+		{"a helper that calls a wait of clusterctlproxy", "func helper() { clusterctlproxy.MoveUntilBlocked() }", "helper calls clusterctlproxy.MoveUntilBlocked"},
+		{"a method that waits", "func (r *r) helper() { time.After() }", "helper calls time.After"},
+		{"a helper that waits in a closure", "func helper() { f := func() { time.After() }; f() }", "helper calls time.After"},
+		{"a wait that takes its bound", "func until() { wait.PollUntilContextCancel() }", ""},
+		{"a wait on its caller's context", "func pollUntil() { wait.PollUntilContextCancel() }", ""},
+		{"a wait of its own", "func docker() { context.WithTimeout() }", ""},
+		{"a Test function", "func TestX() { time.Sleep() }", ""},
+		{"a helper that does not wait", "func helper() { time.Now(); time.Since(); time.Unix(); wait.Interrupted() }", ""},
+		{"a declaration without a body", "func helper()", ""},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			fset := token.NewFileSet()
+			file, err := parser.ParseFile(fset, "x.go", "package p\n"+c.source+"\n", 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			problems := strings.Join(problemsWithTheFunctionsThatWait(fset, []*ast.File{file}), "\n")
+			switch {
+			case c.want == "" && problems != "":
+				t.Fatalf("want accepted, got %s", problems)
+			case c.want != "" && !strings.Contains(problems, c.want):
+				t.Fatalf("want a problem with %q, got %q", c.want, problems)
+			}
+		})
+	}
+}
+
+func TestEveryFunctionOfThePackageThatWaitsIsOneThatTheCheckOfTheWaitsKnows(t *testing.T) {
+	names, err := filepath.Glob("*.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fset := token.NewFileSet()
+	var files []*ast.File
+	declared := make(map[string]bool)
+	for _, name := range names {
+		file, err := parser.ParseFile(fset, name, nil, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		files = append(files, file)
+		for _, decl := range file.Decls {
+			if fn, ok := decl.(*ast.FuncDecl); ok {
+				declared[fn.Name.Name] = true
+			}
+		}
+	}
+	for _, problem := range problemsWithTheFunctionsThatWait(fset, files) {
+		t.Error(problem)
+	}
+	known := slices.Concat(slices.Collect(maps.Keys(boundArgumentOf)), waitsOnTheCallersContext, waitsOfTheirOwn)
+	for _, name := range known {
+		if !strings.Contains(name, ".") && !declared[name] {
+			t.Errorf("the check of the waits knows %s, which the package does not declare", name)
+		}
 	}
 }
