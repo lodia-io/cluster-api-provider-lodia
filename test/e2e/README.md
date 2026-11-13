@@ -54,7 +54,7 @@ From Lodia [81ce021](https://github.com/lodia-io/lodia/blob/81ce021f823c6708ba5e
 ## The test
 
 `TestAWorkerJoinsAClusterOfLodiasControlPlane` applies the objects of [`testdata`](testdata) in the namespace `capi-join`, and asserts the steps below.
-Each waits within a bound of its own, but the third and the seventh, which read at once, and the last read of the eleventh; the calls between the waits end at their client's request timeout, the kind cluster's or the tenant's, and a `docker` call at a bound of its own, described under "On failure".
+Each waits within a bound of its own, but the third and the seventh, which read at once, and the eleventh, whose two waits share one; the calls between the waits end at their client's request timeout, the kind cluster's or the tenant's, and a `docker` call at a bound of its own, described under "On failure".
 
 1. `Cluster` `ControlPlaneInitialized`.
 2. `Cluster.spec.controlPlaneEndpoint` is Lodia's `status.endpoint.apiServer`.
@@ -66,7 +66,9 @@ Each waits within a bound of its own, but the third and the seventh, which read 
 8. The konnectivity agent is ready, and a pod of agnhost, pinned by digest, runs on the Node with its logs readable through the tenant's API server.
 9. `Cluster` `Available`.
 10. clusterctl's `Move` from the kind cluster to itself fails, and ends within 20 seconds, at its wait for the `block-move` annotation: clusterctl logs that it is blocked on the `LodiaControlPlane`, and the suite ends the move there.
-11. After the `Cluster` is unpaused, which the move left it, `Paused` is `False` on the `Cluster` and on the `LodiaControlPlane` within 30 seconds, and the `Cluster` is still `Available`, which the suite reads once the two controllers have run again.
+11. Once `Paused` is `True` on the `Cluster` and on the `LodiaControlPlane`, the suite unpauses the `Cluster`, which the move left paused, and `Paused` is `False` on both and the `Cluster`'s `Available` is `True` at an `observedGeneration` of at least the generation that the unpause produced, all within 30 seconds.
+    The `Paused` of each controller has then gone `True` and `False`, and the Cluster controller has recomputed `Available` after the unpause.
+    The provider's own `Available` carries no generation that the unpause moves, so nothing shows its full pass beyond that.
 12. A Deployment of one replica of agnhost, with no placement of its own, runs on the only worker.
 13. The MachineDeployment is scaled to 2, and the second `Machine` is `Running` with a `nodeRef`.
 14. The second Node has its `DevMachine`'s `providerID`, has lost the `uninitialized` taint and is `Ready`, as step 6 asks of the first.
@@ -84,9 +86,14 @@ The move is the only way the suite tests that the provider refuses `clusterctl m
 The provider writes `block-move` on every `LodiaControlPlane`, so clusterctl pauses the `Cluster`, finds the annotation and waits for it to go, which with its [backoff](https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/cmd/clusterctl/client/cluster/mover.go#L366-L377), 5 seconds growing by 1.5 for ten steps, takes about six minutes before it fails.
 The error that ends a move is the context's and names no object, so [`MoveUntilBlocked`](../clusterctlproxy/move.go) reads the message that clusterctl logs when it first sees the annotation, requires it to name the `LodiaControlPlane`, and cancels the move there; the move ends at the wait, after the `Cluster` is paused and before anything is created in the target.
 A move whose annotation did not hold would [create](https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/cmd/clusterctl/client/cluster/mover.go#L1060-L1089) each object in the same cluster, which updates it, and then [delete](https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/cmd/clusterctl/client/cluster/mover.go#L1260-L1314) the source: the suite fails there, on a `Cluster` that it deletes anyway.
-The move leaves the `Cluster` paused, as clusterctl leaves it after any failure, since it [unpauses](https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/cmd/clusterctl/client/cluster/mover.go#L416-L418) only after it has moved everything, and step 11 unpauses it by dropping `spec.paused`, as clusterctl does, and waits for both controllers to say so: they stop at `Paused`, so `Available` keeps the `True` it had before the move until they run again.
-The move's 20 seconds and the 30 of the wait are fields of the bounds, which `TestTheBoundsFitUnderTheTimeouts` adds to the others and holds under `-timeout` and the job's `timeout-minutes`.
-`TestUnpausingClearsThePauseOfTheMoveAndWaitsForBothControllers` and `TestUnpausingFailsWhileEitherControllerReportsPaused` hold step 11's wait and checks on a fake client; nothing but a run of the job holds that the step calls them, or step 10.
+The move leaves the `Cluster` paused, as clusterctl leaves it after any failure once it has made the [pause](https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/cmd/clusterctl/client/cluster/mover.go#L342-L357), since it [unpauses](https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/cmd/clusterctl/client/cluster/mover.go#L416-L418) only after it has moved everything.
+Step 11 first waits for both controllers to report `Paused` `True`, so that the `False` it waits for later is a write of a controller that has read the `Cluster` unpaused, and not the `False` of before the move: a `LodiaControlPlane` that misses the unpause stays `True`.
+It then unpauses the `Cluster` by dropping `spec.paused`, as clusterctl does.
+Both controllers stop at `Paused` while it is `True`: Cluster API's Cluster controller [returns](https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/core/reconcilers/cluster/cluster_controller.go#L171-L199) before the deferred update of the status that sets `Available`, so `Available` keeps what it was before the move until the full pass that follows the unpause.
+That pass [stamps](https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/util/conditions/setter.go#L84) `Available` with the `Cluster`'s generation, so the step requires it `True` at the generation that the unpause produced or a later one; the `Available` of before the move is at an older one.
+The `LodiaControlPlane`'s generation does not move with the `Cluster`'s, so its `Paused` going `True` and then `False` is all that shows the provider resumed.
+The move's 20 seconds and the 30 of step 11, which its two waits share, are fields of the bounds, which `TestTheBoundsFitUnderTheTimeouts` adds to the others and holds under `-timeout` and the job's `timeout-minutes`.
+`TestUnpausingWaitsForBothControllersToReportThePauseBeforeItClearsIt`, `TestUnpausingClearsThePauseOfTheMoveAndWaitsForBothControllersToRunAgain` and `TestUnpausingFailsUnlessBothControllersRanAfterIt` hold step 11's waits and checks on a fake client, which serves what the controllers report and gives the unpause the next generation; nothing but a run of the job holds that the step calls them, or step 10.
 
 Steps 12 to 17 hold what the provider owes a MachineDeployment's scale-down.
 The Deployment is created while one worker exists, before the scale to 2, so that its pod is on the first Node because that is the only Node there is: a `nodeName` or a `nodeSelector` would keep the replacement `Pending` once that Node is drained.

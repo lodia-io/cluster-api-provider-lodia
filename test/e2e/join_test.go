@@ -255,7 +255,7 @@ func TestAWorkerJoinsAClusterOfLodiasControlPlane(t *testing.T) {
 			}
 			return ctx
 		}).
-		Assess("once the Cluster is unpaused, Paused is False on it and on the LodiaControlPlane, and the Cluster is Available", func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
+		Assess("once both controllers report the pause and the Cluster is unpaused, Paused is False on both and the Cluster's Available is recomputed", func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
 			if err := requireUnpaused(ctx, k8s, key, bounds.Unpaused, 2*time.Second); err != nil {
 				t.Fatal(err)
 			}
