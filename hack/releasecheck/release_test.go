@@ -18,6 +18,17 @@ import (
 
 const root = "../.."
 
+type step struct {
+	Name            string            `json:"name"`
+	Uses            string            `json:"uses"`
+	With            map[string]any    `json:"with"`
+	Shell           string            `json:"shell"`
+	Env             map[string]string `json:"env"`
+	Run             string            `json:"run"`
+	If              any               `json:"if"`
+	ContinueOnError any               `json:"continue-on-error"`
+}
+
 type workflow struct {
 	On          any               `json:"true"`
 	Permissions map[string]string `json:"permissions"`
@@ -25,13 +36,7 @@ type workflow struct {
 		Needs       any               `json:"needs"`
 		If          string            `json:"if"`
 		Permissions map[string]string `json:"permissions"`
-		Steps       []struct {
-			Name            string `json:"name"`
-			Uses            string `json:"uses"`
-			Run             string `json:"run"`
-			If              any    `json:"if"`
-			ContinueOnError any    `json:"continue-on-error"`
-		} `json:"steps"`
+		Steps       []step            `json:"steps"`
 	} `json:"jobs"`
 }
 
@@ -81,6 +86,8 @@ func TestTheReleaseWorkflowGrantsOnlyWhatItUses(t *testing.T) {
 func TestTheReleaseWorkflowPullsTheImageThatTheMakefileChecks(t *testing.T) {
 	var names, uses []string
 	runs := map[string]string{}
+	envs := map[string]map[string]string{}
+	withs := map[string]map[string]any{}
 	for _, step := range readRelease(t).Jobs["release"].Steps {
 		if step.If != nil || step.ContinueOnError != nil {
 			t.Errorf("the step %q has an if or a continue-on-error, so a failed step may not stop the job", step.Name)
@@ -89,23 +96,42 @@ func TestTheReleaseWorkflowPullsTheImageThatTheMakefileChecks(t *testing.T) {
 		case step.Name != "":
 			names = append(names, step.Name)
 			runs[step.Name] = step.Run
+			envs[step.Name] = step.Env
 		case step.Uses != "":
-			uses = append(uses, strings.Split(step.Uses, "@")[0])
+			action, _, _ := strings.Cut(step.Uses, "@")
+			uses = append(uses, action)
+			withs[action] = step.With
 		default:
 			t.Errorf("an unnamed step that runs %q", step.Run)
 		}
 	}
 
-	const tagCheck, render, pull, publish = "Check the tag", "Push the image and render the components YAML", "Check the image and pull it without credentials", "Publish the release"
+	const tagCheck, login, render, pull, publish = "Check the tag", "Log in to the registry", "Push the image and render the components YAML", "Check the image and pull it without credentials", "Publish the release"
 	if want := []string{"actions/checkout", "actions/setup-go"}; !slices.Equal(uses, want) {
 		t.Errorf("the unnamed steps use %v, want %v", uses, want)
 	}
-	want := []string{tagCheck, "Log in to the registry", render, pull, publish}
+	if diff := cmp.Diff(map[string]map[string]any{
+		"actions/checkout": {"fetch-depth": float64(0), "persist-credentials": false},
+		"actions/setup-go": {"go-version-file": "go.mod"},
+	}, withs); diff != "" {
+		t.Errorf("the inputs of the unnamed steps (-want +got):\n%s", diff)
+	}
+	want := []string{tagCheck, login, render, pull, publish}
 	if diff := cmp.Diff(want, names); diff != "" {
 		t.Errorf("the named steps of the release job (-want +got):\n%s", diff)
 	}
+	if diff := cmp.Diff(map[string]map[string]string{
+		tagCheck: {"GITHUB_TOKEN": "${{ github.token }}"},
+		login:    {"GITHUB_TOKEN": "${{ github.token }}"},
+		render:   nil,
+		pull:     nil,
+		publish:  {"GH_TOKEN": "${{ github.token }}"},
+	}, envs); diff != "" {
+		t.Errorf("the environments of the named steps (-want +got):\n%s", diff)
+	}
 	for name, want := range map[string]string{
 		tagCheck: `go run ./hack/releasecheck tag --commit="$GITHUB_SHA" "$GITHUB_REF_NAME"`,
+		login:    `make release-login`,
 		render:   `make release-components IMAGE_TAG="$GITHUB_REF_NAME"`,
 		pull: `image="$(make --no-print-directory release-image IMAGE_TAG="$GITHUB_REF_NAME")"` + "\n" +
 			`DOCKER_CONFIG="$(mktemp -d)" docker pull "$image"` + "\n",
@@ -128,6 +154,42 @@ func TestTheReleaseWorkflowStartsOnEveryTagAndCleansUpUnlessTheReleaseSucceeds(t
 	cleanup := w.Jobs["cleanup"]
 	if cleanup.Needs != "release" || cleanup.If != "always() && needs.release.result != 'success'" {
 		t.Errorf("the cleanup job needs %v and runs if %q", cleanup.Needs, cleanup.If)
+	}
+	want := []step{{
+		Name:  "Delete the draft releases of the tag",
+		Shell: "bash",
+		Env:   map[string]string{"GH_TOKEN": "${{ github.token }}"},
+		Run: `gh api --paginate "repos/$GITHUB_REPOSITORY/releases" > releases.json` + "\n" +
+			`ids="$(jq -r --arg tag "$GITHUB_REF_NAME" '.[] | select(.draft and .tag_name == $tag) | .id' releases.json)"` + "\n" +
+			`for id in $ids; do` + "\n" +
+			`  gh api --method DELETE "repos/$GITHUB_REPOSITORY/releases/$id"` + "\n" +
+			`  echo "deleted the draft release $id of $GITHUB_REF_NAME"` + "\n" +
+			`done` + "\n",
+	}}
+	if diff := cmp.Diff(want, cleanup.Steps); diff != "" {
+		t.Errorf("the steps of the cleanup job (-want +got):\n%s", diff)
+	}
+}
+
+func TestTheReleasePushesTheImageItRenders(t *testing.T) {
+	out, stderr, err := runMake(t, "-n", "release-components", "IMAGE_TAG=v0.1.0")
+	if err != nil {
+		t.Fatalf("%v\n%s", err, stderr)
+	}
+
+	if want := " --platform=linux/amd64,linux/arm64 --push=true --tags=v0.1.0 "; !strings.Contains(out, want) {
+		t.Errorf("want the release's render to contain %q in:\n%s", want, out)
+	}
+}
+
+func TestTheReleaseLogsInToTheRegistryOfTheImage(t *testing.T) {
+	out, stderr, err := runMake(t, "-n", "release-login")
+	if err != nil {
+		t.Fatalf("%v\n%s", err, stderr)
+	}
+
+	if want := ` login ghcr.io --username "$GITHUB_ACTOR" --password-stdin`; !strings.HasSuffix(strings.TrimSpace(out), want) {
+		t.Errorf("want the login to end with %q in:\n%s", want, out)
 	}
 }
 
@@ -162,9 +224,9 @@ func TestReleaseCheckFetchesThenChecksTheCommit(t *testing.T) {
 	}
 
 	fetch := strings.Index(out, "git fetch --quiet --tags origin main\n")
-	check := strings.Index(out, `go run ./hack/releasecheck tag --commit="abc123" "v0.1.0"`)
+	check := strings.Index(out, `GITHUB_TOKEN="${GITHUB_TOKEN:-$(gh auth token)}" go run ./hack/releasecheck tag --commit="abc123" "v0.1.0"`)
 	if fetch < 0 || check < fetch {
-		t.Errorf("want the fetch of origin/main and the tags, then the check of COMMIT; the fetch is at %d and the check at %d of:\n%s", fetch, check, out)
+		t.Errorf("want the fetch of origin/main and the tags, then the check of COMMIT with the token of the environment or of gh; the fetch is at %d and the check at %d of:\n%s", fetch, check, out)
 	}
 }
 
