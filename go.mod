@@ -8,6 +8,7 @@ require (
 	github.com/distribution/reference v0.6.0
 	github.com/go-logr/logr v1.4.4
 	github.com/google/go-cmp v0.7.0
+	github.com/google/go-github/v92 v92.0.0
 	github.com/spf13/pflag v1.0.10
 	go.lodia.io/lodia/api v0.0.0-20261109145222-57375832e7fe
 	golang.org/x/mod v0.41.0
@@ -65,7 +66,6 @@ require (
 	github.com/gobuffalo/flect v1.0.3 // indirect
 	github.com/google/cel-go v0.30.0 // indirect
 	github.com/google/gnostic-models v0.7.1 // indirect
-	github.com/google/go-github/v92 v92.0.0 // indirect
 	github.com/google/go-querystring v1.2.0 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/gorilla/websocket v1.5.4-0.20250319132907-e064f32e3674 // indirect

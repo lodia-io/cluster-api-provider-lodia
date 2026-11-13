@@ -1,0 +1,70 @@
+name: release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: write
+      packages: write
+      checks: read
+      statuses: read
+      actions: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - name: Check the tag
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: go run ./hack/releasecheck tag --commit="$GITHUB_SHA" "$GITHUB_REF_NAME"
+      - name: Log in to the registry
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: make release-login
+      - name: Push the image and render the components YAML
+        run: make release-components IMAGE_TAG="$GITHUB_REF_NAME"
+      - name: Pull the image without credentials
+        shell: bash
+        run: |
+          images="$(grep -oE 'ghcr\.io/[^[:space:]"]+@sha256:[0-9a-f]{64}' out/control-plane-components.yaml | sort -u)" || images=
+          [ -n "$images" ] && [ "$(printf '%s\n' "$images" | wc -l)" -eq 1 ] || { echo "the components YAML must name one image by digest, it names: ${images:-none}"; exit 1; }
+          DOCKER_CONFIG="$(mktemp -d)" docker pull "$images"
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          flags=()
+          if [[ "$GITHUB_REF_NAME" == *-* ]]; then flags+=(--prerelease); fi
+          gh release create "$GITHUB_REF_NAME" --verify-tag --title "$GITHUB_REF_NAME" --generate-notes "${flags[@]}" out/control-plane-components.yaml metadata.yaml
+
+  cleanup:
+    needs: release
+    if: always() && needs.release.result != 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - name: Delete the draft releases of the tag
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api --paginate "repos/$GITHUB_REPOSITORY/releases" > releases.json
+          ids="$(jq -r --arg tag "$GITHUB_REF_NAME" '.[] | select(.draft and .tag_name == $tag) | .id' releases.json)"
+          for id in $ids; do
+            gh api --method DELETE "repos/$GITHUB_REPOSITORY/releases/$id"
+            echo "deleted the draft release $id of $GITHUB_REF_NAME"
+          done

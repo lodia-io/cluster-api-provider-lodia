@@ -9,6 +9,8 @@ KO = github.com/google/ko@v0.19.1
 IMAGE_REPOSITORY ?= ghcr.io/lodia-io/cluster-api-provider-lodia
 PLATFORMS ?= linux/amd64,linux/arm64
 KO_PUSH ?= true
+IMAGE_TAG ?= latest
+COMMIT ?= HEAD
 RELEASE_DIR ?= out
 GENERATED = api/v1alpha1/zz_generated.deepcopy.go config/crd/bases/*.yaml config/rbac/role.yaml
 
@@ -33,18 +35,33 @@ components: ## render config/default and check that every variable has a non-emp
 	printf '%s\n' "$$rendered" | go run ./test/components
 
 .PHONY: release-components
-release-components: ## write $(RELEASE_DIR)/control-plane-components.yaml: config/default with the manager's image built by ko for $(PLATFORMS) and named by digest in $(IMAGE_REPOSITORY), pushed unless KO_PUSH=false
+release-components: ## write $(RELEASE_DIR)/control-plane-components.yaml: config/default with the manager's image built by ko for $(PLATFORMS) and named by digest in $(IMAGE_REPOSITORY), tagged $(IMAGE_TAG), pushed unless KO_PUSH=false
 	@rendered="$$(go run $(KUSTOMIZE) build config/default)" || exit 1; \
 	mkdir -p $(RELEASE_DIR) && \
-	printf '%s\n' "$$rendered" | KO_DOCKER_REPO=$(IMAGE_REPOSITORY) go run $(KO) resolve --bare --platform=$(PLATFORMS) --push=$(KO_PUSH) -f - > $(RELEASE_DIR)/control-plane-components.yaml.tmp && \
+	printf '%s\n' "$$rendered" | KO_DOCKER_REPO=$(IMAGE_REPOSITORY) go run $(KO) resolve --bare --platform=$(PLATFORMS) --push=$(KO_PUSH) --tags=$(IMAGE_TAG) -f - > $(RELEASE_DIR)/control-plane-components.yaml.tmp && \
 	mv $(RELEASE_DIR)/control-plane-components.yaml.tmp $(RELEASE_DIR)/control-plane-components.yaml
+
+.PHONY: release-login
+release-login: ## log in to the registry of $(IMAGE_REPOSITORY) as $$GITHUB_ACTOR with $$GITHUB_TOKEN, which ko pushes with
+	@printf '%s' "$$GITHUB_TOKEN" | go run $(KO) login $(firstword $(subst /, ,$(IMAGE_REPOSITORY))) --username "$$GITHUB_ACTOR" --password-stdin
+
+.PHONY: release-check
+release-check: ## refuse TAG before it is pushed: a semver tag with a series in metadata.yaml at COMMIT, a series for every tag there is, COMMIT on origin/main with every run of ci.yml green; reads GitHub with $$GITHUB_TOKEN, or with gh's
+	@[ -n "$(TAG)" ] || { echo "usage: make release-check TAG=vX.Y.Z [COMMIT=<sha>]"; exit 1; }
+	git fetch --quiet --tags origin main
+	GITHUB_TOKEN="$${GITHUB_TOKEN:-$$(gh auth token)}" go run ./hack/releasecheck tag --commit="$(COMMIT)" "$(TAG)"
+
+.PHONY: metadata
+metadata: ## check metadata.yaml: the newest series' contract is the CRDs' contract label, and every series of origin/main is still there with its contract
+	go run ./hack/releasecheck metadata
 
 .PHONY: verify
 verify: ## the check that says a change is done
 	@before="$$(cat $(GENERATED) | cksum)"; $(MAKE) --no-print-directory generate; \
 	[ "$$before" = "$$(cat $(GENERATED) | cksum)" ] || { echo "make generate changed the generated files: review and commit them"; exit 1; }
 	go mod tidy -diff
-	$(MAKE) --no-print-directory components lint test
+	$(MAKE) --no-print-directory components metadata lint test
+	$(MAKE) --no-print-directory release-components KO_PUSH=false IMAGE_TAG=v0.0.0-verify
 
 # LC_ALL=C: a range in a case pattern follows the locale, and on macOS en_US.UTF-8 puts A in a-z.
 .PHONY: e2e-cluster
