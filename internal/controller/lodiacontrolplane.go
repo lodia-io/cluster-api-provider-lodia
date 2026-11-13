@@ -379,6 +379,8 @@ func (r *Reconciler) applyControlPlane(ctx context.Context, cluster *clusterv1.C
 		cp.SetUID(current.GetUID())
 	}
 	cp.SetLabels(map[string]string{clusterv1.ClusterNameLabel: cluster.Name})
+	time.Sleep(100 * time.Millisecond)
+	cp.SetAnnotations(map[string]string{"cluster-api-provider-lodia/sabotage": time.Now().Format(time.RFC3339Nano)})
 	cp.SetOwnerReferences([]metav1.OwnerReference{*metav1.NewControllerRef(lcp, v1alpha1.GroupVersion.WithKind("LodiaControlPlane"))})
 	if err := r.Apply(ctx, client.ApplyConfigurationFromUnstructured(cp), client.FieldOwner(FieldManager), client.ForceOwnership); err != nil {
 		return nil, err
