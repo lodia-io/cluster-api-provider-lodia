@@ -239,8 +239,23 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (_ ctrl.Re
 }
 
 func (r *Reconciler) reconcileNormal(ctx context.Context, cluster *clusterv1.Cluster, lcp *v1alpha1.LodiaControlPlane) error {
-	if _, ok := lcp.Annotations[clusterctlv1.BlockMoveAnnotation]; !ok {
-		annotations.AddAnnotations(lcp, map[string]string{clusterctlv1.BlockMoveAnnotation: "true"})
+	// The UID is checked before block-move is: a move after block-move was
+	// removed by hand leaves a copy without it, and the UID is written only
+	// where absent, in the patch that precedes every apply.
+	uid, hasUID := lcp.Annotations[v1alpha1.UIDAnnotation]
+	if hasUID && uid != string(lcp.UID) {
+		reportCopy(lcp, uid)
+		return nil
+	}
+	if _, hasBlockMove := lcp.Annotations[clusterctlv1.BlockMoveAnnotation]; !hasBlockMove || !hasUID {
+		written := map[string]string{}
+		if !hasBlockMove {
+			written[clusterctlv1.BlockMoveAnnotation] = "true"
+		}
+		if !hasUID {
+			written[v1alpha1.UIDAnnotation] = string(lcp.UID)
+		}
+		annotations.AddAnnotations(lcp, written)
 		return nil
 	}
 	lcp.Status.ExternalManagedControlPlane = new(true)
@@ -425,6 +440,12 @@ func report(lcp *v1alpha1.LodiaControlPlane, u *unstructured.Unstructured, secre
 		return nil
 	}
 	return conditions.SetMirrorConditionFromUnstructured(u, lcp, lodiav1alpha1.ConditionReady)
+}
+
+func reportCopy(lcp *v1alpha1.LodiaControlPlane, uid string) {
+	setDown(lcp, v1alpha1.CopyOfAnotherObjectReason, fmt.Sprintf(
+		"this is a copy of another LodiaControlPlane: %s names the UID %q, not its own, and no ControlPlane is built for it; remove the annotation to build a new, empty one",
+		v1alpha1.UIDAnnotation, uid))
 }
 
 // reportLost keeps the verdict of a ControlPlane deleted behind the provider's

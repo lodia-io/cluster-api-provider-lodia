@@ -12,6 +12,13 @@ import (
 // Finalizer holds a LodiaControlPlane until its ControlPlane is gone.
 const Finalizer = "controlplane.lodia.io/lodiacontrolplane"
 
+// UIDAnnotation holds the UID that a LodiaControlPlane had when the provider
+// first reconciled it. clusterctl's move and restore keep annotations and give
+// a copy a new UID, so a copy carries another object's UID here, and the
+// provider does not build a control plane for it:
+// https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/cmd/clusterctl/client/cluster/mover.go#L1002-L1099
+const UIDAnnotation = "controlplane.lodia.io/uid"
+
 // The reasons of Ready that are the provider's own; otherwise Ready mirrors
 // the ControlPlane's.
 const (
@@ -27,6 +34,11 @@ const (
 	// ControlPlaneNotFoundReason: the ControlPlane of an initialized
 	// LodiaControlPlane is gone; the provider does not recreate it.
 	ControlPlaneNotFoundReason = "ControlPlaneNotFound"
+
+	// CopyOfAnotherObjectReason: the LodiaControlPlane carries the UID of
+	// another object in UIDAnnotation; the provider builds no ControlPlane or
+	// Secret for it.
+	CopyOfAnotherObjectReason = "CopyOfAnotherObject"
 )
 
 // LodiaControlPlane is a Cluster API control plane served by one Lodia
