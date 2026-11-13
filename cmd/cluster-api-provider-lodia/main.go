@@ -78,18 +78,28 @@ func prepare(fs *pflag.FlagSet) error {
 	return fs.Set("v", "2")
 }
 
-func main() {
-	if err := prepare(pflag.CommandLine); err != nil {
-		fmt.Printf("Failed to set default log level: %v\n", err)
-		os.Exit(1)
+// load parses args into fs, readied by prepare, and applies the logging
+// configuration, as Cluster API's kubeadm control plane provider's main does:
+// https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/controlplane/kubeadm/main.go#L238-L250
+func load(fs *pflag.FlagSet, args []string) error {
+	if err := prepare(fs); err != nil {
+		return fmt.Errorf("set the default log level: %w", err)
 	}
-	pflag.Parse()
-
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
 	if err := logsv1.ValidateAndApply(logOptions, nil); err != nil {
+		return err
+	}
+	ctrl.SetLogger(klog.Background())
+	return nil
+}
+
+func main() {
+	if err := load(pflag.CommandLine, os.Args[1:]); err != nil {
 		fmt.Printf("Unable to start manager: %v\n", err)
 		os.Exit(1)
 	}
-	ctrl.SetLogger(klog.Background())
 	log := ctrl.Log.WithName("setup")
 
 	mgr, err := controller.NewManager(ctrl.GetConfigOrDie(), config)

@@ -4,9 +4,9 @@
 package controller_test
 
 import (
+	"errors"
 	"fmt"
 	"testing"
-	"time"
 
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	clusterctlv1 "sigs.k8s.io/cluster-api/cmd/clusterctl/api/v1alpha3"
@@ -34,7 +34,7 @@ func TestTheNamespaceKeepsTheManagerFromAnotherNamespacesLodiaControlPlanes(t *t
 		return k8s.Get(t.Context(), client.ObjectKeyFromObject(inside), controlPlaneOf(inside))
 	})
 
-	consistently(t, 3*time.Second, func() error { return untouched(t, outside) })
+	consistently(t, func() error { return untouched(t, outside) })
 }
 
 func TestTheWatchFilterReconcilesOnlyTheObjectsCarryingItsValue(t *testing.T) {
@@ -84,11 +84,53 @@ func TestTheWatchFilterReconcilesOnlyTheObjectsCarryingItsValue(t *testing.T) {
 		return nil
 	})
 
-	consistently(t, 3*time.Second, func() error {
+	consistently(t, func() error {
 		for _, stranger := range strangers {
 			if err := untouched(t, stranger); err != nil {
 				return err
 			}
+		}
+		return nil
+	})
+}
+
+func TestTheWatchFilterLeavesAnUnlabelledLodiaControlPlaneToItsClustersEvents(t *testing.T) {
+	const mine = "mine"
+	ns := namespace(t)
+	cluster, lcp := create(t, ns, "unlabelled", func(cluster *clusterv1.Cluster, _ *v1alpha1.LodiaControlPlane) {
+		cluster.Labels = map[string]string{clusterv1.WatchLabel: mine}
+	})
+	startManagerWith(t, controller.Config{Namespace: ns, WatchFilterValue: mine, Concurrency: 10})
+
+	eventually(t, func() error {
+		get(t, lcp)
+		if len(lcp.Finalizers) == 0 {
+			return errors.New("the start of the manager did not reach it through its Cluster")
+		}
+		return nil
+	})
+	touched := cluster.DeepCopy()
+	touched.Annotations = map[string]string{"touched": "true"}
+	if err := k8s.Patch(t.Context(), touched, client.MergeFrom(cluster)); err != nil {
+		t.Fatal(err)
+	}
+	consistently(t, func() error {
+		get(t, lcp)
+		if condition(lcp, clusterv1.PausedCondition) != nil {
+			return errors.New("its own events or a change of its Cluster's metadata reached it")
+		}
+		return nil
+	})
+
+	unpaused := cluster.DeepCopy()
+	unpaused.Spec.Paused = new(false)
+	if err := k8s.Patch(t.Context(), unpaused, client.MergeFrom(cluster)); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, func() error {
+		get(t, lcp)
+		if condition(lcp, clusterv1.PausedCondition) == nil {
+			return errors.New("a change of its Cluster's spec did not reach it")
 		}
 		return nil
 	})

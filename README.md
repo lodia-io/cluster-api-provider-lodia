@@ -22,10 +22,10 @@ How each rule of the contract is met, the life of the objects and the reasons: [
 The manager takes the flags of [Cluster API's kubeadm control plane provider](https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/controlplane/kubeadm/main.go#L128-L217) that apply to it, under their names and with their defaults; `--help` lists them.
 It logs through klog: `--v` sets the verbosity, `--logging-format` the format, and, unless `--insecure-diagnostics` is set, `/debug/flags/v` on the diagnostics address changes the level while it runs.
 `--namespace` limits the manager to one namespace.
-`--watch-filter` limits it to the Clusters that carry the label `cluster.x-k8s.io/watch-filter` with that value, and to the `LodiaControlPlane`s that carry it.
-Put the label on both.
+`--watch-filter` limits it to the events of objects that carry the label `cluster.x-k8s.io/watch-filter` with that value.
+Put the label on a Cluster and on its `LodiaControlPlane`.
 The events of a Cluster and of a `LodiaControlPlane` count by their own labels, and those of Lodia's `ControlPlane` and Secrets by the Cluster's.
-A `LodiaControlPlane` without the label is not reconciled on its own events, and the Cluster's reach it only when the Cluster's spec changes.
+A `LodiaControlPlane` without the label is not reconciled on its own events: only its Cluster's events reach it, which are a change of the Cluster's spec, each start of the manager (it lists every Cluster again, and each gives one pass) and the Cluster's creation when the `LodiaControlPlane` is already in the cache.
 A labelled `LodiaControlPlane` whose Cluster has none misses the events of Lodia's objects, and waits for its own next change or for the resync.
 `--lodiacontrolplane-concurrency` (default 10) sets how many `LodiaControlPlane`s are reconciled at once.
 The manifest passes `--leader-elect`, `--diagnostics-address` and `--insecure-diagnostics`; the last two take the clusterctl variables `CAPI_DIAGNOSTICS_ADDRESS` (default `:8443`) and `CAPI_INSECURE_DIAGNOSTICS` (default `false`), which [Cluster API documents for every provider](https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/docs/book/src/user/guide/providers/observability.md?plain=1#L7-L37).
@@ -49,6 +49,8 @@ The operator writes the fields of a provider's `spec.manager` as flags of the ma
 - `metrics.insecureDiagnostics`
 - `profilerAddress`
 - `leaderElection.leaderElect`
+  The operator's [CRD](https://github.com/kubernetes-sigs/cluster-api-operator/blob/v0.30.0/config/crd/bases/operator.cluster.x-k8s.io_controlplaneproviders.yaml#L3032-L3039) requires every field of `leaderElection`.
+  With `leaderElect: true`, leave at least one of `leaderElection.resourceName` and `leaderElection.resourceNamespace` empty, or the operator writes `--leader-election-id` and the manager exits.
 - `leaderElection.leaseDuration`
 - `leaderElection.renewDeadline`
 - `leaderElection.retryPeriod`
@@ -102,7 +104,7 @@ The operator writes no flag for them and changes nothing else ([`gracefulShutDow
 - `controller.recoverPanic`
 - `leaderElection.resourceLock`
 - `leaderElection.resourceNamespace`
-  Alone; with `leaderElection.resourceName` and `leaderElect: true` it makes the manager exit, as listed above.
+  With `leaderElection.resourceName` empty; with both set and `leaderElect: true` it makes the manager exit, as listed above.
 
 ## Build and test
 

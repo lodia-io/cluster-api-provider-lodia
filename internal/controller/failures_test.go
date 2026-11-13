@@ -244,7 +244,7 @@ func TestOneTenantsBlockedWriteDoesNotHoldUpAnother(t *testing.T) {
 func TestOneWorkerHoldsUpTheTenantBehindABlockedWrite(t *testing.T) {
 	blockTenantA(t, 1, func(ns string) {
 		second, _ := create(t, ns, "tenant-b")
-		consistently(t, 3*time.Second, func() error {
+		consistently(t, func() error {
 			cp := controlPlaneOf(second)
 			switch err := k8s.Get(t.Context(), client.ObjectKeyFromObject(cp), cp); {
 			case err == nil:

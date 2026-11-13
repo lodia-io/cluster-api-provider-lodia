@@ -4,7 +4,6 @@
 package controller_test
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -77,31 +76,14 @@ func boundToTheLeaderElectionRole(t *testing.T, ns string) {
 func TestTheRoleCoversLeaderElectionAndTheMetricsFilter(t *testing.T) {
 	ns := namespace(t)
 	boundToTheLeaderElectionRole(t, ns)
-	options, err := controller.ManagerOptions(controller.Config{
+	startManagerWith(t, controller.Config{
+		Namespace:     ns,
+		Concurrency:   10,
 		LeaderElect:   true,
 		LeaseDuration: 15 * time.Second,
 		RenewDeadline: 10 * time.Second,
 		RetryPeriod:   2 * time.Second,
-		HealthAddr:    "0",
-		Diagnostics:   flags.ManagerOptions{DiagnosticsAddress: "0"},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	options.LeaderElectionNamespace = ns
-	mgr, err := ctrl.NewManager(asController, options)
-	if err != nil {
-		t.Fatal(err)
-	}
-	ctx, cancel := context.WithCancel(t.Context())
-	done := make(chan error, 1)
-	go func() { done <- mgr.Start(ctx) }()
-	t.Cleanup(func() {
-		cancel()
-		if err := <-done; err != nil {
-			t.Errorf("manager: %v", err)
-		}
-	})
+	}, func(options *ctrl.Options) { options.LeaderElectionNamespace = ns })
 	eventually(t, func() error {
 		lease := &coordinationv1.Lease{}
 		if err := k8s.Get(t.Context(), client.ObjectKey{Namespace: ns, Name: "controlplane.lodia.io"}, lease); err != nil {

@@ -160,9 +160,9 @@ func boundToTheClusterRole(cfg *rest.Config) (*rest.Config, error) {
 	return controller, nil
 }
 
-func startManager(t *testing.T, ns string, with ...func(*ctrl.Options)) ctrl.Manager {
+func startManager(t *testing.T, ns string) ctrl.Manager {
 	t.Helper()
-	return startManagerWith(t, controller.Config{Namespace: ns, Concurrency: 10}, with...)
+	return startManagerWith(t, controller.Config{Namespace: ns, Concurrency: 10})
 }
 
 func startManagerWith(t *testing.T, c controller.Config, with ...func(*ctrl.Options)) ctrl.Manager {
@@ -419,9 +419,9 @@ func eventually(t *testing.T, check func() error) {
 	}
 }
 
-func consistently(t *testing.T, d time.Duration, check func() error) {
+func consistently(t *testing.T, check func() error) {
 	t.Helper()
-	for deadline := time.Now().Add(d); time.Now().Before(deadline); time.Sleep(100 * time.Millisecond) {
+	for deadline := time.Now().Add(3 * time.Second); time.Now().Before(deadline); time.Sleep(100 * time.Millisecond) {
 		if err := check(); err != nil {
 			t.Fatal(err)
 		}

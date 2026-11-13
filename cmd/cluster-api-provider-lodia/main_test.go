@@ -26,6 +26,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	utilyaml "k8s.io/apimachinery/pkg/util/yaml"
 	logsv1 "k8s.io/component-base/logs/api/v1"
+	"k8s.io/klog/v2"
 	"sigs.k8s.io/cluster-api/cmd/clusterctl/client/yamlprocessor"
 	ctrl "sigs.k8s.io/controller-runtime"
 
@@ -71,6 +72,10 @@ func (r reached) tls() *tls.Config {
 // https://github.com/kubernetes-sigs/cluster-api-operator/blob/v0.30.0/internal/controller/component_customizer.go#L198-L421
 // and its test's output
 // https://github.com/kubernetes-sigs/cluster-api-operator/blob/v0.30.0/internal/controller/component_customizer_test.go#L498-L571
+// The operator's CRD requires every field of leaderElection
+// https://github.com/kubernetes-sigs/cluster-api-operator/blob/v0.30.0/config/crd/bases/operator.cluster.x-k8s.io_controlplaneproviders.yaml#L3032-L3039
+// so the rows of leaderElect, leaseDuration, renewDeadline and retryPeriod hold what the customizer writes with resourceName and
+// resourceNamespace empty, the row of resourceName with both set, and the row of resourceNamespace with resourceName empty.
 var managerFields = []struct {
 	field  string
 	group  group
@@ -125,14 +130,31 @@ func deref[T any](p *T) any {
 	return *p
 }
 
-func parse(args ...string) error {
+func newFlagSet() *pflag.FlagSet {
 	logOptions = logsv1.NewLoggingConfiguration()
 	fs := pflag.NewFlagSet("test", pflag.ContinueOnError)
 	fs.SetOutput(io.Discard)
+	return fs
+}
+
+func parse(args ...string) error {
+	fs := newFlagSet()
 	if err := prepare(fs); err != nil {
 		return err
 	}
 	return fs.Parse(args)
+}
+
+func loaded(t *testing.T, args ...string) {
+	t.Helper()
+	t.Cleanup(func() {
+		if err := logsv1.ResetForTest(nil); err != nil {
+			t.Error(err)
+		}
+	})
+	if err := load(newFlagSet(), args); err != nil {
+		t.Fatalf("%v: %v", args, err)
+	}
 }
 
 func parsed(t *testing.T, args ...string) reached {
@@ -254,6 +276,9 @@ func TestTheManifestsArgsParseAndItsPortsFollowTheDefaults(t *testing.T) {
 	r := parsed(t, container.Args...)
 	if !r.manager.LeaderElection {
 		t.Error("the manifest's args do not turn leader election on")
+	}
+	if m := r.manager.Metrics; m.BindAddress != ":8443" || !m.SecureServing {
+		t.Errorf("the manifest's defaults serve the metrics on %q with SecureServing %t, want :8443 and true", m.BindAddress, m.SecureServing)
 	}
 	for _, p := range []struct {
 		name, address string
@@ -380,5 +405,15 @@ func TestTheReadmeListsTheFieldsInTheGroupsOfTheTable(t *testing.T) {
 	}
 	if !strings.Contains(string(raw), "\n"+severalInstances+"\n") {
 		t.Errorf("the README does not say %q", severalInstances)
+	}
+}
+
+func TestTheLoggingFlagsReachKlogAndControllerRuntime(t *testing.T) {
+	loaded(t, "--v=5", "--logging-format=json")
+	if !klog.V(5).Enabled() || klog.V(6).Enabled() {
+		t.Errorf("klog logs at V(5) %t and V(6) %t, want --v=5", klog.V(5).Enabled(), klog.V(6).Enabled())
+	}
+	if !ctrl.Log.V(5).Enabled() {
+		t.Error("controller-runtime's logger does not log at V(5)")
 	}
 }
