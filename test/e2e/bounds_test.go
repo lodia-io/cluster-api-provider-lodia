@@ -164,6 +164,16 @@ func dockerFits(bound time.Duration) error {
 	return nil
 }
 
+// A pause that fails at its bound ends with one more call, the unpause, which
+// has a bound of its own. The call that the bound cut short can run on by a
+// discovery, and the unpause by another, which a context does not end.
+func unpauseFits(bound, discovery time.Duration) error {
+	if bound <= 0 || discovery <= 0 || bound+2*3*discovery > callsWithoutBound {
+		return fmt.Errorf("the unpause's bound %s or the discovery timeout %s is not positive, or the unpause's bound and two discoveries of three requests, the one that its step's bound cuts short and its own, are more than the %s left for the calls without a bound: a cluster that stops answering would hold a pausing step past its bound by that much", bound, discovery, callsWithoutBound)
+	}
+	return nil
+}
+
 // The workers go first and a docker that hangs uses their whole bound: what
 // remains of the dump has to hold the tenant's bound and as much again for the
 // kind cluster's lists.
@@ -222,6 +232,9 @@ func TestTheBoundsFitUnderTheTimeouts(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := dockerFits(dockerCallBound); err != nil {
+		t.Fatal(err)
+	}
+	if err := unpauseFits(unpauseBound, discoveryTimeout); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -342,6 +355,36 @@ func TestDockerCallBoundsThatDoNotFitAreRefused(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			err := dockerFits(c.bound)
+			switch {
+			case c.want == "" && err != nil:
+				t.Fatalf("want accepted, got %v", err)
+			case c.want != "" && (err == nil || !strings.Contains(err.Error(), c.want)):
+				t.Fatalf("want an error with %q, got %v", c.want, err)
+			}
+		})
+	}
+}
+
+func TestUnpauseBoundsThatDoNotFitAreRefused(t *testing.T) {
+	const second = time.Second
+	cases := []struct {
+		name             string
+		bound, discovery time.Duration
+		want             string
+	}{
+		{"a bound of 30 seconds with a discovery of 10", 30 * second, 10 * second, ""},
+		{"a bound of 60 seconds with a discovery of 10, the calls' whole room", 60 * second, 10 * second, ""},
+		{"a bound of 61 seconds with a discovery of 10", 61 * second, 10 * second, "the unpause's bound"},
+		{"a bound of 30 seconds with a discovery of 15", 30 * second, 15 * second, ""},
+		{"a bound of 30 seconds with a discovery of 16", 30 * second, 16 * second, "the unpause's bound"},
+		{"no bound", 0, 10 * second, "the unpause's bound"},
+		{"a negative bound", -second, 10 * second, "the unpause's bound"},
+		{"no discovery timeout", 30 * second, 0, "the unpause's bound"},
+		{"a negative discovery timeout", 30 * second, -second, "the unpause's bound"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			err := unpauseFits(c.bound, c.discovery)
 			switch {
 			case c.want == "" && err != nil:
 				t.Fatalf("want accepted, got %v", err)

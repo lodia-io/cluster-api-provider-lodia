@@ -158,11 +158,16 @@ func hold(ctx context.Context, c client.Reader, namespace string, window, interv
 // one.
 type scriptedReads struct {
 	client.Reader
-	n      atomic.Int32
-	change func(read int, kind string, obj *unstructured.Unstructured)
+	n        atomic.Int32
+	change   func(read int, kind string, obj *unstructured.Unstructured)
+	hangFrom int
 }
 
 func (r *scriptedReads) List(ctx context.Context, list client.ObjectList, opts ...client.ListOption) error {
+	if r.hangFrom > 0 && int(r.n.Load()) >= r.hangFrom {
+		<-ctx.Done()
+		return ctx.Err()
+	}
 	if err := r.Reader.List(ctx, list, opts...); err != nil {
 		return err
 	}
@@ -351,34 +356,38 @@ func TestSettleReturnsAfterFourReadsInARowThatAgree(t *testing.T) {
 }
 
 func TestHoldFailsAtTheFirstChangeAndOtherwiseTakesTheWholeWindow(t *testing.T) {
-	const window, interval = 300 * time.Millisecond, 20 * time.Millisecond
+	const interval, window = 250 * time.Millisecond, 5*250*time.Millisecond + 125*time.Millisecond
 	baseline, err := snapshotOf(t.Context(), scripted(nil), quickStartKey.Namespace)
 	requireNoError(t, err)
 	cases := []struct {
-		name    string
-		change  func(read int, kind string, obj *unstructured.Unstructured)
-		failure string
+		name     string
+		change   func(read int, kind string, obj *unstructured.Unstructured)
+		hangFrom int
+		failure  string
 	}{
-		{"nothing changes", nil, ""},
+		{"nothing changes", nil, 0, ""},
 		{"Lodia and etcd-druid write on every read", func(read int, kind string, obj *unstructured.Unstructured) {
 			if kind == "Etcd" || kind == "ControlPlane" {
 				obj.SetResourceVersion(fmt.Sprint(read))
 			}
-		}, ""},
-		{"a Machine is written on the fifth read", func(read int, kind string, obj *unstructured.Unstructured) {
-			if kind == "Machine" && read >= 5 {
+		}, 0, ""},
+		{"a read that the end of the window cuts short", nil, 3, ""},
+		{"a Machine is written on the third read", func(read int, kind string, obj *unstructured.Unstructured) {
+			if kind == "Machine" && read >= 3 {
 				obj.SetResourceVersion("written")
 			}
-		}, "Machine w-md-0-abc-1: the resourceVersion"},
-		{"the provider's apply changes the ControlPlane on the fifth read", func(read int, kind string, obj *unstructured.Unstructured) {
-			if kind == "ControlPlane" && read >= 5 {
+		}, 0, "Machine w-md-0-abc-1: the resourceVersion"},
+		{"the provider's apply changes the ControlPlane on the third read", func(read int, kind string, obj *unstructured.Unstructured) {
+			if kind == "ControlPlane" && read >= 3 {
 				providersEntry(obj, func(e *metav1.ManagedFieldsEntry) { e.Time = &metav1.Time{Time: time.Unix(int64(read), 0)} })
 			}
-		}, "the managedFields entry of cluster-api-provider-lodia changed"},
+		}, 0, "the managedFields entry of cluster-api-provider-lodia changed"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
 			r := scripted(c.change)
+			r.hangFrom = c.hangFrom
 			start := time.Now()
 			err := hold(t.Context(), r, quickStartKey.Namespace, window, interval, baseline)
 			requireFailure(t, err, c.failure)
@@ -389,5 +398,14 @@ func TestHoldFailsAtTheFirstChangeAndOtherwiseTakesTheWholeWindow(t *testing.T) 
 				t.Errorf("the change was found after %s, not at the first read that saw it", took)
 			}
 		})
+	}
+}
+
+func TestTheStabilityChecksReadAsOftenAndAsLongAsClusterAPIsDo(t *testing.T) {
+	if span := settleReads * settleInterval; span < time.Minute {
+		t.Errorf("%d reads %s apart agree over %s, less than the minute that Cluster API's four reads 15 seconds apart do", settleReads, settleInterval, span)
+	}
+	if holdInterval > 5*time.Second {
+		t.Errorf("the window is read every %s, less often than Cluster API's 5 seconds", holdInterval)
 	}
 }

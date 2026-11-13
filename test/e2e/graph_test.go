@@ -118,7 +118,7 @@ func TestTheGraphHoldsTheLabelledKindsOfTheNamespaceAndTheSecretsAndConfigMapsAn
 }
 
 func TestTheGraphFailsWhenItHoldsNoObjectOfAKindTheSuiteCreated(t *testing.T) {
-	for _, kind := range graphKinds {
+	for _, kind := range newQuickStartNamespace().kindsOfTheObjects("ConfigMap") {
 		t.Run("no "+kind, func(t *testing.T) {
 			q := newQuickStartNamespace()
 			q.drop(kind)

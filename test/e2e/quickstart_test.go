@@ -209,6 +209,16 @@ func (q *quickStartNamespace) kindsOfTheCRDs() []string {
 	return kinds
 }
 
+func (q *quickStartNamespace) kindsOfTheObjects(except ...string) []string {
+	var kinds []string
+	for _, obj := range q.objects {
+		if kind := obj.GetKind(); !q.isCRD(obj) && !slices.Contains(except, kind) && !slices.Contains(kinds, kind) {
+			kinds = append(kinds, kind)
+		}
+	}
+	return kinds
+}
+
 func (q *quickStartNamespace) described() []string {
 	var all []string
 	for _, obj := range q.objects {

@@ -14,7 +14,6 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/wait"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -26,49 +25,9 @@ import (
 )
 
 // requireUnpaused undoes what a move that clusterctl began leaves, the Cluster
-// paused, and requires that both controllers ran after it. Both stop at Paused
-// while it is True, so it first waits for Paused True on the Cluster and the
-// LodiaControlPlane: the Paused False it waits for after the unpause is then a
-// write of a controller that has read the Cluster unpaused, not the False of
-// before the move. The Cluster's Available is recomputed only by the full pass
-// that follows, which stamps it with the Cluster's generation, so it has to be
-// True at the generation that the unpause produced or a later one. The
-// LodiaControlPlane's generation does not move with the Cluster's, so nothing
-// beyond its Paused going True and then False shows that the provider resumed.
-// Both waits share the bound.
-// https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/util/paused/paused.go#L63-L90
-// https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/core/reconcilers/cluster/cluster_controller.go#L171-L199
-// https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/core/reconcilers/cluster/cluster_controller_status.go#L92
-// https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/util/conditions/setter.go#L84
+// paused, and requires that both controllers ran after it.
 func requireUnpaused(ctx context.Context, c client.Client, key client.ObjectKey, bound, interval time.Duration) error {
-	ctx, cancel := context.WithTimeout(ctx, bound)
-	defer cancel()
-	if err := pollUntil(ctx, interval, func(ctx context.Context) error {
-		cluster, lcp, err := readBoth(ctx, c, key)
-		if err != nil {
-			return err
-		}
-		return errors.Join(requirePaused("Cluster", cluster.Status.Conditions, metav1.ConditionTrue), requirePaused("LodiaControlPlane", lcp.Status.Conditions, metav1.ConditionTrue))
-	}); err != nil {
-		return fmt.Errorf("the move did not leave Paused True on both within %s: %w", bound, err)
-	}
-	unpaused := &clusterv1.Cluster{ObjectMeta: metav1.ObjectMeta{Namespace: key.Namespace, Name: key.Name}}
-	if err := c.Patch(ctx, unpaused, client.RawPatch(types.MergePatchType, []byte(`{"spec":{"paused":null}}`))); err != nil {
-		return err
-	}
-	if err := pollUntil(ctx, interval, func(ctx context.Context) error {
-		cluster, lcp, err := readBoth(ctx, c, key)
-		if err != nil {
-			return err
-		}
-		return errors.Join(
-			requirePaused("Cluster", cluster.Status.Conditions, metav1.ConditionFalse),
-			requirePaused("LodiaControlPlane", lcp.Status.Conditions, metav1.ConditionFalse),
-			requireAvailableFrom(cluster.Status.Conditions, unpaused.Generation))
-	}); err != nil {
-		return fmt.Errorf("after the unpause, which made generation %d, both controllers did not run within %s: %w", unpaused.Generation, bound, err)
-	}
-	return nil
+	return pauseCycle(ctx, c, key, bound, interval, false, nil)
 }
 
 func pollUntil(ctx context.Context, interval time.Duration, check func(context.Context) error) error {
@@ -140,7 +99,14 @@ type world struct {
 }
 
 func newWorld(before, after func(int) reported) *world {
-	cluster := &clusterv1.Cluster{ObjectMeta: metav1.ObjectMeta{Namespace: unpausedKey.Namespace, Name: unpausedKey.Name}, Spec: clusterv1.ClusterSpec{Paused: new(true)}}
+	return newWorldPausedAt(true, before, after)
+}
+
+func newWorldPausedAt(paused bool, before, after func(int) reported) *world {
+	cluster := &clusterv1.Cluster{ObjectMeta: metav1.ObjectMeta{Namespace: unpausedKey.Namespace, Name: unpausedKey.Name}}
+	if paused {
+		cluster.Spec.Paused = new(true)
+	}
 	lcp := &v1alpha1.LodiaControlPlane{ObjectMeta: metav1.ObjectMeta{Namespace: unpausedKey.Namespace, Name: unpausedKey.Name}}
 	w := &world{}
 	var unpaused bool
@@ -149,8 +115,10 @@ func newWorld(before, after func(int) reported) *world {
 			if err := c.Patch(ctx, obj, patch, opts...); err != nil {
 				return err
 			}
-			obj.SetGeneration(unpausedGeneration)
-			unpaused = true
+			if patched, ok := obj.(*clusterv1.Cluster); ok && patched.Spec.Paused == nil {
+				obj.SetGeneration(unpausedGeneration)
+				unpaused = true
+			}
 			return nil
 		},
 		Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
@@ -222,7 +190,7 @@ func TestUnpausingClearsThePauseOfTheMoveAndWaitsForBothControllersToRunAgain(t 
 }
 
 func TestUnpausingFailsUnlessBothControllersRanAfterIt(t *testing.T) {
-	const notPausedByAController, noRunAfterTheUnpause = "did not leave Paused True on both", "both controllers did not run"
+	const notPausedByAController, noRunAfterTheUnpause = "Paused is not True on both", "both controllers did not run"
 	cases := []struct {
 		name          string
 		before, after reported
@@ -251,7 +219,8 @@ func TestUnpausingFailsUnlessBothControllersRanAfterIt(t *testing.T) {
 			if c.want == nil {
 				bound = 5 * time.Second
 			}
-			err := requireUnpaused(t.Context(), newWorld(always(c.before), always(c.after)), unpausedKey, bound, 10*time.Millisecond)
+			w := newWorld(always(c.before), always(c.after))
+			err := requireUnpaused(t.Context(), w, unpausedKey, bound, 10*time.Millisecond)
 			if c.want == nil && err != nil {
 				t.Fatalf("want accepted, got %v", err)
 			}
@@ -262,6 +231,13 @@ func TestUnpausingFailsUnlessBothControllersRanAfterIt(t *testing.T) {
 				if !strings.Contains(err.Error(), want) {
 					t.Errorf("want an error with %q, got %v", want, err)
 				}
+			}
+			cluster := &clusterv1.Cluster{}
+			if err := w.Get(t.Context(), unpausedKey, cluster); err != nil {
+				t.Fatal(err)
+			}
+			if left := err != nil && strings.Contains(err.Error(), notPausedByAController); (cluster.Spec.Paused != nil) != left {
+				t.Errorf("spec.paused is %v after the call, want it left as the move left it only when neither controller reported the pause", cluster.Spec.Paused)
 			}
 		})
 	}

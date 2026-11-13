@@ -16,11 +16,13 @@ import (
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/sets"
 	bootstrapv1 "sigs.k8s.io/cluster-api/api/bootstrap/kubeadm/v1beta2"
 	"sigs.k8s.io/cluster-api/util/secret"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	"go.lodia.io/cluster-api-provider-lodia/api/v1alpha1"
 )
@@ -114,13 +116,20 @@ func requireOwners(ctx context.Context, c client.Reader, key client.ObjectKey) e
 	return errors.Join(errs...)
 }
 
-// ofClusterAPIOrTheProvider is what the removals under a pause touch. Lodia's
-// ControlPlane, the Etcd and every Secret and ConfigMap are left alone: the
-// provider never adopts a ControlPlane or a Secret that it does not control
-// (docs/design.md, held by foreign_test.go and races_test.go), so it would not
-// put an owner reference back, and Lodia and etcd-druid do not follow the
-// Cluster's pause.
+// ofClusterAPIOrTheProvider is what the removals under a pause touch: the
+// kinds of Cluster API, its kubeadm bootstrap provider, CAPD and the provider,
+// and the bootstrap data's Secret, which the kubeadm bootstrap provider puts its
+// KubeadmConfig back on as the Secret's controller. Lodia's ControlPlane, the
+// Etcd and every other Secret and ConfigMap are left alone: the provider never
+// adopts a ControlPlane or a Secret that it does not control (docs/design.md,
+// held by foreign_test.go and races_test.go), so it would not put an owner
+// reference back, and Lodia and etcd-druid do not follow the Cluster's pause.
+// https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/bootstrap/kubeadm/reconcilers/kubeadmconfig/kubeadmconfig_controller.go#L289
+// https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/bootstrap/kubeadm/reconcilers/kubeadmconfig/kubeadmconfig_controller.go#L1494-L1529
 func ofClusterAPIOrTheProvider(obj *unstructured.Unstructured) bool {
+	if owner := metav1.GetControllerOf(obj); owner != nil && owner.Kind == "KubeadmConfig" && ownerGroup(owner) == bootstrapv1.GroupVersion.Group {
+		return true
+	}
 	switch obj.GroupVersionKind().Group {
 	case "", lodiav1alpha1.GroupVersion.Group, druidGroup:
 		return false
@@ -128,13 +137,22 @@ func ofClusterAPIOrTheProvider(obj *unstructured.Unstructured) bool {
 	return true
 }
 
+func ownerGroup(owner *metav1.OwnerReference) string {
+	gv, err := schema.ParseGroupVersion(owner.APIVersion)
+	if err != nil {
+		return ""
+	}
+	return gv.Group
+}
+
 // withdraw nulls a metadata field with a merge patch, which no write to the
 // object's status between the list and the patch can conflict with, and leaves
 // an object that is gone since the list, as the garbage collector's last
-// dependents of a deleted Machine may be.
+// dependents of a deleted Machine may be. It stops at the first patch that
+// fails, since a cluster that stopped answering would hold each of the others
+// for its timeout.
 func withdraw(ctx context.Context, c client.Client, graph []*unstructured.Unstructured, field string, held func(*unstructured.Unstructured) bool) error {
 	patch := client.RawPatch(types.MergePatchType, fmt.Appendf(nil, `{"metadata":{%q:null}}`, field))
-	var errs []error
 	for _, obj := range graph {
 		if !ofClusterAPIOrTheProvider(obj) || !held(obj) {
 			continue
@@ -144,10 +162,10 @@ func withdraw(ctx context.Context, c client.Client, graph []*unstructured.Unstru
 		target.SetNamespace(obj.GetNamespace())
 		target.SetName(obj.GetName())
 		if err := client.IgnoreNotFound(c.Patch(ctx, target, patch)); err != nil {
-			errs = append(errs, fmt.Errorf("remove %s of %s: %w", field, describe(obj), err))
+			return fmt.Errorf("remove %s of %s: %w", field, describe(obj), err)
 		}
 	}
-	return errors.Join(errs...)
+	return nil
 }
 
 func removeOwnerReferences(ctx context.Context, c client.Client, namespace string) error {
@@ -229,9 +247,14 @@ func TestEveryObjectOfTheGraphHasTheOwnersItsKindWants(t *testing.T) {
 		{"a Machine owned by a MachineSet that is gone", func(q *quickStartNamespace) {
 			q.first("Machine").SetOwnerReferences([]metav1.OwnerReference{ownerRef(clusterAPIKind("MachineSet"), "gone", true)})
 		}, "Machine w-md-0-abc-1: its owner MachineSet gone is not an object of the namespace"},
-		{"a KubeadmConfig that the deleted Machine left", func(q *quickStartNamespace) {
-			q.add(object(bootstrapv1.GroupVersion.WithKind("KubeadmConfig"), "left", ownerRef(clusterAPIKind("Machine"), "deleted", true)))
-		}, "KubeadmConfig left: its owner Machine deleted is not an object of the namespace"},
+		{"the bootstrap data of a KubeadmConfig that went with its deleted Machine", func(q *quickStartNamespace) {
+			q.add(object(corev1.SchemeGroupVersion.WithKind("Secret"), "left", ownerRef(bootstrapv1.GroupVersion.WithKind("KubeadmConfig"), "deleted", true)))
+		}, "Secret left: its owner KubeadmConfig deleted is not an object of the namespace"},
+		{"a Machine owned by a MachineSet that was recreated under the same name", func(q *quickStartNamespace) {
+			ref := ownerRef(clusterAPIKind("MachineSet"), "w-md-0-abc", true)
+			ref.UID = "recreated"
+			q.first("Machine").SetOwnerReferences([]metav1.OwnerReference{ref})
+		}, "Machine w-md-0-abc-1: its owner MachineSet w-md-0-abc is not an object of the namespace"},
 		{"an object of a kind that has no assertion", func(q *quickStartNamespace) {
 			q.add(crdOf(clusterAPIKind("MachineHealthCheck"), apiextensionsv1.NamespaceScoped, true), object(clusterAPIKind("MachineHealthCheck"), "h", ownerRef(clusterAPIKind("Cluster"), "w", false)))
 		}, "MachineHealthCheck h: its kind does not have an associated ownerRef assertion"},
@@ -248,19 +271,21 @@ func TestEveryObjectOfTheGraphHasTheOwnersItsKindWants(t *testing.T) {
 	}
 }
 
-func TestTheOwnerReferencesRemovedUnderAPauseAreTheLodiaControlPlanesAndClusterAPIsAlone(t *testing.T) {
+func TestTheOwnerReferencesRemovedUnderAPauseAreTheLodiaControlPlanesAndClusterAPIsAndTheBootstrapDatas(t *testing.T) {
 	removed := map[string]bool{
 		"LodiaControlPlane": true, "DevCluster": true, "DevMachineTemplate": true, "KubeadmConfigTemplate": true,
 		"MachineDeployment": true, "MachineSet": true, "Machine": true, "DevMachine": true, "KubeadmConfig": true,
+		"Secret w-md-0-abc-1": true,
 	}
 	fresh := newQuickStartNamespace()
+	fresh.add(object(corev1.SchemeGroupVersion.WithKind("Secret"), "of-another-kubeadm-config", ownerRef(schema.GroupVersionKind{Group: "other.example.com", Version: "v1", Kind: "KubeadmConfig"}, "k", true)))
 	c := fresh.client()
 	requireNoError(t, removeOwnerReferences(t.Context(), c, quickStartKey.Namespace))
 	graph, err := listGraph(t.Context(), c, quickStartKey.Namespace)
 	requireNoError(t, err)
 	for _, obj := range graph {
 		original := fresh.get(obj.GetKind(), obj.GetName())
-		if removed[obj.GetKind()] {
+		if removed[obj.GetKind()] || removed[describe(obj)] {
 			if len(original.GetOwnerReferences()) == 0 {
 				t.Fatalf("%s has no owner reference to remove", describe(obj))
 			}
@@ -283,4 +308,22 @@ func TestTheRemovalLeavesAnObjectThatIsGoneSinceTheList(t *testing.T) {
 	requireNoError(t, c.Delete(t.Context(), q.get("Machine", "w-md-0-abc-1")))
 	requireNoError(t, c.Delete(t.Context(), q.get("KubeadmConfig", "w-md-0-abc-1")))
 	requireNoError(t, withdraw(t.Context(), c, graph, "ownerReferences", func(obj *unstructured.Unstructured) bool { return len(obj.GetOwnerReferences()) > 0 }))
+}
+
+func TestTheRemovalStopsAtItsFirstFailure(t *testing.T) {
+	q := newQuickStartNamespace()
+	var patches int
+	failing := interceptor.NewClient(q.client(), interceptor.Funcs{
+		Patch: func(context.Context, client.WithWatch, client.Object, client.Patch, ...client.PatchOption) error {
+			patches++
+			return errors.New("the server does not answer")
+		},
+	})
+	graph, err := listGraph(t.Context(), failing, quickStartKey.Namespace)
+	requireNoError(t, err)
+	err = withdraw(t.Context(), failing, graph, "ownerReferences", func(obj *unstructured.Unstructured) bool { return len(obj.GetOwnerReferences()) > 0 })
+	requireFailure(t, err, "the server does not answer")
+	if patches != 1 {
+		t.Errorf("%d patches were tried, want the first alone", patches)
+	}
 }
