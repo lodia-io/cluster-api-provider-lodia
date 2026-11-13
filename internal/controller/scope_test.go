@@ -10,7 +10,6 @@ import (
 
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	clusterctlv1 "sigs.k8s.io/cluster-api/cmd/clusterctl/api/v1alpha3"
-	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"go.lodia.io/cluster-api-provider-lodia/api/v1alpha1"
@@ -41,7 +40,7 @@ func TestTheNamespaceKeepsTheManagerFromAnotherNamespacesLodiaControlPlanes(t *t
 func TestTheWatchFilterReconcilesOnlyTheObjectsCarryingItsValue(t *testing.T) {
 	const mine = "mine"
 	ns := namespace(t)
-	startManagerWith(t, controller.Config{Namespace: ns, WatchFilterValue: mine, Concurrency: 10}, ctrl.Manager.GetClient)
+	startManagerWith(t, controller.Config{Namespace: ns, WatchFilterValue: mine, Concurrency: 10})
 	labelled := func(value string) func(*clusterv1.Cluster, *v1alpha1.LodiaControlPlane) {
 		return func(cluster *clusterv1.Cluster, lcp *v1alpha1.LodiaControlPlane) {
 			cluster.Labels = map[string]string{clusterv1.WatchLabel: value}

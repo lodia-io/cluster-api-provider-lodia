@@ -18,6 +18,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	corev1ac "k8s.io/client-go/applyconfigurations/core/v1"
 	"sigs.k8s.io/cluster-api/util/secret"
+	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
@@ -155,7 +156,7 @@ func TestATransientReadOfASourceSecretIsReturned(t *testing.T) {
 
 func TestAResyncRepairsTheProvidersSecrets(t *testing.T) {
 	ns := namespace(t)
-	startManager(t, ns, func(o *cache.Options) { o.SyncPeriod = new(time.Second) })
+	startManager(t, ns, func(o *ctrl.Options) { o.Cache.SyncPeriod = new(time.Second) })
 	cluster, _ := create(t, ns, "pi")
 	cp := controlPlaneOf(cluster)
 	eventually(t, func() error { return k8s.Get(t.Context(), client.ObjectKeyFromObject(cp), cp) })

@@ -19,7 +19,6 @@ import (
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	"sigs.k8s.io/cluster-api/util/flags"
 	ctrl "sigs.k8s.io/controller-runtime"
-	"sigs.k8s.io/controller-runtime/pkg/healthz"
 
 	"go.lodia.io/cluster-api-provider-lodia/internal/controller"
 )
@@ -68,11 +67,19 @@ func InitFlags(fs *pflag.FlagSet) {
 	flags.AddManagerOptions(fs, &config.Diagnostics)
 }
 
+// prepare readies fs as Cluster API's kubeadm control plane provider's main
+// does: InitFlags, '_' read as '-', Go's flag set for --kubeconfig, and --v=2
+// unless given:
+// https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/controlplane/kubeadm/main.go#L229-L237
+func prepare(fs *pflag.FlagSet) error {
+	InitFlags(fs)
+	fs.SetNormalizeFunc(cliflag.WordSepNormalizeFunc)
+	fs.AddGoFlagSet(flag.CommandLine)
+	return fs.Set("v", "2")
+}
+
 func main() {
-	InitFlags(pflag.CommandLine)
-	pflag.CommandLine.SetNormalizeFunc(cliflag.WordSepNormalizeFunc)
-	pflag.CommandLine.AddGoFlagSet(flag.CommandLine)
-	if err := pflag.CommandLine.Set("v", "2"); err != nil {
+	if err := prepare(pflag.CommandLine); err != nil {
 		fmt.Printf("Failed to set default log level: %v\n", err)
 		os.Exit(1)
 	}
@@ -85,26 +92,9 @@ func main() {
 	ctrl.SetLogger(klog.Background())
 	log := ctrl.Log.WithName("setup")
 
-	options, err := controller.ManagerOptions(config)
+	mgr, err := controller.NewManager(ctrl.GetConfigOrDie(), config)
 	if err != nil {
-		log.Error(err, "build the manager options")
-		os.Exit(1)
-	}
-	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), options)
-	if err != nil {
-		log.Error(err, "create the manager")
-		os.Exit(1)
-	}
-	if err := (&controller.Reconciler{Client: mgr.GetClient(), APIReader: mgr.GetAPIReader()}).SetupWithManager(mgr, config); err != nil {
-		log.Error(err, "set up the controller")
-		os.Exit(1)
-	}
-	if err := mgr.AddHealthzCheck("healthz", healthz.Ping); err != nil {
-		log.Error(err, "add the health check")
-		os.Exit(1)
-	}
-	if err := mgr.AddReadyzCheck("readyz", healthz.Ping); err != nil {
-		log.Error(err, "add the readiness check")
+		log.Error(err, "build the manager")
 		os.Exit(1)
 	}
 

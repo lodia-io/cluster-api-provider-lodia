@@ -24,6 +24,7 @@ import (
 	corev1ac "k8s.io/client-go/applyconfigurations/core/v1"
 	metav1ac "k8s.io/client-go/applyconfigurations/meta/v1"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	"k8s.io/client-go/rest"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	clusterctlv1 "sigs.k8s.io/cluster-api/cmd/clusterctl/api/v1alpha3"
 	"sigs.k8s.io/cluster-api/util"
@@ -43,6 +44,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
+	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
@@ -129,6 +131,33 @@ func ManagerOptions(c Config) (ctrl.Options, error) {
 		RetryPeriod:            &c.RetryPeriod,
 		Cache:                  cacheOptions,
 	}, nil
+}
+
+// NewManager builds the manager from c, with the given changes to its options,
+// and registers on it the controller, from the same c, and the probes, so that
+// the binary and the tests build it in one way.
+func NewManager(restConfig *rest.Config, c Config, with ...func(*ctrl.Options)) (ctrl.Manager, error) {
+	options, err := ManagerOptions(c)
+	if err != nil {
+		return nil, fmt.Errorf("build the manager options: %w", err)
+	}
+	for _, change := range with {
+		change(&options)
+	}
+	mgr, err := ctrl.NewManager(restConfig, options)
+	if err != nil {
+		return nil, fmt.Errorf("create the manager: %w", err)
+	}
+	if err := (&Reconciler{Client: mgr.GetClient(), APIReader: mgr.GetAPIReader()}).SetupWithManager(mgr, c); err != nil {
+		return nil, fmt.Errorf("set up the controller: %w", err)
+	}
+	if err := mgr.AddHealthzCheck("healthz", healthz.Ping); err != nil {
+		return nil, fmt.Errorf("add the health check: %w", err)
+	}
+	if err := mgr.AddReadyzCheck("readyz", healthz.Ping); err != nil {
+		return nil, fmt.Errorf("add the readiness check: %w", err)
+	}
+	return mgr, nil
 }
 
 // CacheOptions keep of Secrets only Lodia's, and only their metadata, which

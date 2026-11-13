@@ -16,6 +16,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	corev1ac "k8s.io/client-go/applyconfigurations/core/v1"
+	"k8s.io/client-go/rest"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	"sigs.k8s.io/cluster-api/util/secret"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -265,24 +266,26 @@ func blockTenantA(t *testing.T, workers int, whileBlocked func(ns string)) {
 	release := make(chan struct{})
 	blocked := make(chan bool, 1)
 	ns := namespace(t)
-	startManagerWith(t, controller.Config{Namespace: ns, Concurrency: workers}, func(ctrl.Manager) client.Client {
-		return interceptor.NewClient(c, interceptor.Funcs{
-			Apply: func(ctx context.Context, c client.WithWatch, obj runtime.ApplyConfiguration, opts ...client.ApplyOption) error {
-				if a, ok := obj.(interface{ GetName() string }); ok && a.GetName() == "tenant-a" {
-					_, deadline := ctx.Deadline()
-					select {
-					case blocked <- deadline:
-					default:
+	startManagerWith(t, controller.Config{Namespace: ns, Concurrency: workers}, func(options *ctrl.Options) {
+		options.NewClient = func(*rest.Config, client.Options) (client.Client, error) {
+			return interceptor.NewClient(c, interceptor.Funcs{
+				Apply: func(ctx context.Context, c client.WithWatch, obj runtime.ApplyConfiguration, opts ...client.ApplyOption) error {
+					if a, ok := obj.(interface{ GetName() string }); ok && a.GetName() == "tenant-a" {
+						_, deadline := ctx.Deadline()
+						select {
+						case blocked <- deadline:
+						default:
+						}
+						select {
+						case <-release:
+						case <-ctx.Done():
+							return ctx.Err()
+						}
 					}
-					select {
-					case <-release:
-					case <-ctx.Done():
-						return ctx.Err()
-					}
-				}
-				return c.Apply(ctx, obj, opts...)
-			},
-		})
+					return c.Apply(ctx, obj, opts...)
+				},
+			}), nil
+		}
 	})
 
 	first, _ := create(t, ns, "tenant-a")

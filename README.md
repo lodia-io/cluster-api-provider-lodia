@@ -22,7 +22,11 @@ How each rule of the contract is met, the life of the objects and the reasons: [
 The manager takes the flags of [Cluster API's kubeadm control plane provider](https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/controlplane/kubeadm/main.go#L128-L217) that apply to it, under their names and with their defaults; `--help` lists them.
 It logs through klog: `--v` sets the verbosity, `--logging-format` the format, and, unless `--insecure-diagnostics` is set, `/debug/flags/v` on the diagnostics address changes the level while it runs.
 `--namespace` limits the manager to one namespace.
-`--watch-filter` limits it to the Clusters and `LodiaControlPlane`s that carry the label `cluster.x-k8s.io/watch-filter` with that value.
+`--watch-filter` limits it to the Clusters that carry the label `cluster.x-k8s.io/watch-filter` with that value, and to the `LodiaControlPlane`s that carry it.
+Put the label on both.
+The events of a Cluster and of a `LodiaControlPlane` count by their own labels, and those of Lodia's `ControlPlane` and Secrets by the Cluster's.
+A `LodiaControlPlane` without the label is not reconciled on its own events, and the Cluster's reach it only when the Cluster's spec changes.
+A labelled `LodiaControlPlane` whose Cluster has none misses the events of Lodia's objects, and waits for its own next change or for the resync.
 `--lodiacontrolplane-concurrency` (default 10) sets how many `LodiaControlPlane`s are reconciled at once.
 The manifest passes `--leader-elect`, `--diagnostics-address` and `--insecure-diagnostics`; the last two take the clusterctl variables `CAPI_DIAGNOSTICS_ADDRESS` (default `:8443`) and `CAPI_INSECURE_DIAGNOSTICS` (default `false`), which [Cluster API documents for every provider](https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/docs/book/src/user/guide/providers/observability.md?plain=1#L7-L37).
 
@@ -50,6 +54,8 @@ The operator writes the fields of a provider's `spec.manager` as flags of the ma
 - `leaderElection.retryPeriod`
 - `syncPeriod`
 - `verbosity`
+  The field's default, `1`, writes no flag and leaves the manager at `--v=2`, as in [Cluster API's kubeadm control plane provider](https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/controlplane/kubeadm/main.go#L234-L237).
+  `additionalArgs` with the key `--v` and the value `1` sets 1.
 - `additionalArgs`
   For `--watch-filter` and the three `--tls-*` flags.
 
@@ -86,6 +92,17 @@ The operator writes no flag, and moves the probes off `/healthz` and `/readyz`, 
 
 - `health.livenessEndpointName`
 - `health.readinessEndpointName`
+
+#### Fields the operator ignores
+
+The operator writes no flag for them and changes nothing else ([`gracefulShutDown`](https://github.com/kubernetes-sigs/cluster-api-operator/blob/v0.30.0/internal/controller/component_customizer.go#L234) and [`controller.cacheSyncTimeout`](https://github.com/kubernetes-sigs/cluster-api-operator/blob/v0.30.0/internal/controller/component_customizer.go#L202) are marked TODO there).
+
+- `gracefulShutDown`
+- `controller.cacheSyncTimeout`
+- `controller.recoverPanic`
+- `leaderElection.resourceLock`
+- `leaderElection.resourceNamespace`
+  Alone; with `leaderElection.resourceName` and `leaderElect: true` it makes the manager exit, as listed above.
 
 ## Build and test
 

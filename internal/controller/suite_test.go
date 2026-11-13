@@ -33,7 +33,6 @@ import (
 	clusterctlv1 "sigs.k8s.io/cluster-api/cmd/clusterctl/api/v1alpha3"
 	"sigs.k8s.io/cluster-api/util/secret"
 	ctrl "sigs.k8s.io/controller-runtime"
-	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 	"sigs.k8s.io/controller-runtime/pkg/config"
@@ -161,28 +160,20 @@ func boundToTheClusterRole(cfg *rest.Config) (*rest.Config, error) {
 	return controller, nil
 }
 
-func startManager(t *testing.T, ns string, mutate ...func(*cache.Options)) ctrl.Manager {
+func startManager(t *testing.T, ns string, with ...func(*ctrl.Options)) ctrl.Manager {
 	t.Helper()
-	return startManagerWith(t, controller.Config{Namespace: ns, Concurrency: 10}, ctrl.Manager.GetClient, mutate...)
+	return startManagerWith(t, controller.Config{Namespace: ns, Concurrency: 10}, with...)
 }
 
-func startManagerWith(t *testing.T, c controller.Config, clientOf func(ctrl.Manager) client.Client, mutate ...func(*cache.Options)) ctrl.Manager {
+func startManagerWith(t *testing.T, c controller.Config, with ...func(*ctrl.Options)) ctrl.Manager {
 	t.Helper()
-	options, err := controller.ManagerOptions(c)
+	forTheTest := func(options *ctrl.Options) {
+		options.Cache.ReaderFailOnMissingInformer = true
+		options.Metrics = metricsserver.Options{BindAddress: "0"}
+		options.Controller = config.Controller{SkipNameValidation: new(true)}
+	}
+	mgr, err := controller.NewManager(asController, c, append([]func(*ctrl.Options){forTheTest}, with...)...)
 	if err != nil {
-		t.Fatal(err)
-	}
-	options.Cache.ReaderFailOnMissingInformer = true
-	for _, m := range mutate {
-		m(&options.Cache)
-	}
-	options.Metrics = metricsserver.Options{BindAddress: "0"}
-	options.Controller = config.Controller{SkipNameValidation: new(true)}
-	mgr, err := ctrl.NewManager(asController, options)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := (&controller.Reconciler{Client: clientOf(mgr), APIReader: mgr.GetAPIReader()}).SetupWithManager(mgr, c); err != nil {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithCancel(t.Context())

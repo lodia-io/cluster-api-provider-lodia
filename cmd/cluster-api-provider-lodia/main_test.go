@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"crypto/tls"
 	"errors"
+	goflag "flag"
 	"io"
 	"maps"
 	"net"
@@ -38,6 +39,7 @@ const (
 	partly  group = "works in part"
 	crashes group = "crashes the manager"
 	probes  group = "breaks the probes"
+	ignored group = "ignored by the operator"
 )
 
 var readmeHeadings = map[group]string{
@@ -45,6 +47,7 @@ var readmeHeadings = map[group]string{
 	partly:  "A field that works only as `:9440`",
 	crashes: "Fields that make the manager exit at start",
 	probes:  "Fields that break the probes",
+	ignored: "Fields the operator ignores",
 }
 
 const severalInstances = "Several instances of the provider from the released YAML are not supported."
@@ -88,6 +91,7 @@ var managerFields = []struct {
 	{"leaderElection.retryPeriod", works, []string{"--leader-elect=true", "--leader-elect-retry-period=25200s"}, "RetryPeriod", func(r reached) any { return deref(r.manager.RetryPeriod) }, 7 * time.Hour, ""},
 	{"syncPeriod", works, []string{"--sync-period=25200s"}, "the cache's SyncPeriod", func(r reached) any { return deref(r.manager.Cache.SyncPeriod) }, 7 * time.Hour, ""},
 	{"verbosity", works, []string{"--v=5"}, "the logging configuration's Verbosity", func(r reached) any { return r.verbosity }, uint32(5), ""},
+	{"verbosity", works, nil, "the logging configuration's Verbosity, which the field's default of 1 leaves at 2", func(r reached) any { return r.verbosity }, uint32(2), ""},
 	{"additionalArgs", works, []string{"--watch-filter=mine"}, "the watch filter's value", func(r reached) any { return r.filter }, "mine", ""},
 	{"additionalArgs", works, []string{"--tls-min-version=VersionTLS13"}, "the metrics server's minimum TLS version", func(r reached) any { return r.tls().MinVersion }, uint16(tls.VersionTLS13), ""},
 	{"additionalArgs", works, []string{"--tls-cipher-suites=TLS_AES_128_GCM_SHA256"}, "the metrics server's cipher suites", func(r reached) any { return r.tls().CipherSuites }, []uint16{tls.TLS_AES_128_GCM_SHA256}, ""},
@@ -106,6 +110,12 @@ var managerFields = []struct {
 
 	{"health.livenessEndpointName", probes, nil, "", nil, nil, "/mostly"},
 	{"health.readinessEndpointName", probes, nil, "", nil, nil, "/readyish"},
+
+	{"gracefulShutDown", ignored, nil, "", nil, nil, ""},
+	{"controller.cacheSyncTimeout", ignored, nil, "", nil, nil, ""},
+	{"controller.recoverPanic", ignored, nil, "", nil, nil, ""},
+	{"leaderElection.resourceLock", ignored, nil, "", nil, nil, ""},
+	{"leaderElection.resourceNamespace", ignored, nil, "", nil, nil, ""},
 }
 
 func deref[T any](p *T) any {
@@ -119,7 +129,9 @@ func parse(args ...string) error {
 	logOptions = logsv1.NewLoggingConfiguration()
 	fs := pflag.NewFlagSet("test", pflag.ContinueOnError)
 	fs.SetOutput(io.Discard)
-	InitFlags(fs)
+	if err := prepare(fs); err != nil {
+		return err
+	}
 	return fs.Parse(args)
 }
 
@@ -174,6 +186,25 @@ func TestTheFlagsOfTheOldBinaryAreGone(t *testing.T) {
 	}
 }
 
+func TestTheBinaryReadsUnderscoresAsHyphensAndTakesControllerRuntimesKubeconfigFlag(t *testing.T) {
+	t.Run("an underscore for a hyphen", func(t *testing.T) {
+		if r := parsed(t, "--leader_elect=true"); !r.manager.LeaderElection {
+			t.Error("--leader_elect=true did not turn leader election on")
+		}
+	})
+	t.Run("--kubeconfig", func(t *testing.T) {
+		kubeconfig := goflag.Lookup("kubeconfig")
+		if kubeconfig == nil {
+			t.Fatal("controller-runtime registers no kubeconfig flag in Go's flag set")
+		}
+		t.Cleanup(func() { _ = kubeconfig.Value.Set(kubeconfig.DefValue) })
+		parsed(t, "--kubeconfig=/nowhere")
+		if got := kubeconfig.Value.String(); got != "/nowhere" {
+			t.Errorf("--kubeconfig reached Go's flag set as %q, want /nowhere", got)
+		}
+	})
+}
+
 func TestTheFlagsDefaultToClusterAPIsValues(t *testing.T) {
 	r := parsed(t)
 	for _, c := range []struct {
@@ -193,6 +224,7 @@ func TestTheFlagsDefaultToClusterAPIsValues(t *testing.T) {
 		{"the metrics server's minimum TLS version", r.tls().MinVersion, uint16(tls.VersionTLS12)},
 		{"the controller's MaxConcurrentReconciles", r.workers, 10},
 		{"the watch filter's value", r.filter, ""},
+		{"the logging configuration's Verbosity", r.verbosity, uint32(2)},
 	} {
 		if diff := cmp.Diff(c.want, c.got); diff != "" {
 			t.Errorf("%s (-want +got):\n%s", c.option, diff)
@@ -250,11 +282,24 @@ func TestTheManifestsArgsParseAndItsPortsFollowTheDefaults(t *testing.T) {
 
 func managerContainer(t *testing.T) corev1.Container {
 	t.Helper()
+	return managerContainerWith(t, nil)
+}
+
+func managerManifest(t *testing.T) []byte {
+	t.Helper()
 	raw, err := os.ReadFile("../../config/manager/manager.yaml")
 	if err != nil {
 		t.Fatal(err)
 	}
-	processed, err := yamlprocessor.NewSimpleProcessor().Process(raw, func(name string) (string, error) {
+	return raw
+}
+
+func managerContainerWith(t *testing.T, values map[string]string) corev1.Container {
+	t.Helper()
+	processed, err := yamlprocessor.NewSimpleProcessor().Process(managerManifest(t), func(name string) (string, error) {
+		if value, ok := values[name]; ok {
+			return value, nil
+		}
 		return "", errors.New(name + " is not set")
 	})
 	if err != nil {
@@ -279,6 +324,24 @@ func managerContainer(t *testing.T) corev1.Container {
 			}
 		}
 		t.Fatal("the Deployment has no container named manager")
+	}
+}
+
+func TestTheManifestsVariablesReachTheMetricsServer(t *testing.T) {
+	variables, err := yamlprocessor.NewSimpleProcessor().GetVariables(managerManifest(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	slices.Sort(variables)
+	if diff := cmp.Diff([]string{"CAPI_DIAGNOSTICS_ADDRESS", "CAPI_INSECURE_DIAGNOSTICS"}, variables); diff != "" {
+		t.Errorf("the manifest's variables (-want +got):\n%s", diff)
+	}
+	metrics := parsed(t, managerContainerWith(t, map[string]string{
+		"CAPI_DIAGNOSTICS_ADDRESS":  "127.0.0.1:9000",
+		"CAPI_INSECURE_DIAGNOSTICS": "true",
+	}).Args...).manager.Metrics
+	if metrics.BindAddress != "127.0.0.1:9000" || metrics.SecureServing {
+		t.Errorf("the metrics server binds %q with SecureServing %t, want 127.0.0.1:9000 and false from the variables", metrics.BindAddress, metrics.SecureServing)
 	}
 }
 
