@@ -25,6 +25,15 @@ The provider's watches need Lodia's CRDs, so install Lodia before the provider.
 A release of the provider is built and tested against [Lodia at 57375832e7fe](https://github.com/lodia-io/lodia/tree/57375832e7fe8b3a06374613797eb4c544fe7612), the `LODIA_COMMIT` of the [`Makefile`](Makefile) and the pseudo-version of `go.lodia.io/lodia/api` in [`go.mod`](go.mod).
 Lodia has no release yet, so that commit is the requirement of every release.
 
+### The Cluster API version
+
+A release of the provider needs Cluster API v1.15.0-beta.0, for the core provider and for the kubeadm bootstrap provider, until the provider's pin moves to v1.15.0 ([`todo.md`](todo.md)).
+The provider copies Lodia's cluster CA into the Secret `<cluster>-ca` as `tls.crt` and writes no `tls.key` ([why](docs/design.md#43-the-ca-secret)).
+A worker joins with such a Secret only since [kubernetes-sigs/cluster-api#14389](https://github.com/kubernetes-sigs/cluster-api/pull/14389), merged to `main` as [bccfd69](https://github.com/kubernetes-sigs/cluster-api/commit/bccfd69caf12e9703c2711d6d961ff99d6c0ebc3): `EnsureAllExist` asks for the key only of a certificate that has a key file, and a worker's CA certificate has none ([v1.15.0-beta.0](https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/util/secret/certificates.go#L273-L288), [worker certificates](https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/util/secret/certificates.go#L189-L200)).
+v1.14.4, the newest stable release on 2026-11-13, asks for the key of every certificate that is not external, so the kubeadm bootstrap provider fails the join of every worker with `missing key data`, and no worker gets bootstrap data ([`EnsureAllExist`](https://github.com/kubernetes-sigs/cluster-api/blob/v1.14.4/util/secret/certificates.go#L272-L287), [the join](https://github.com/kubernetes-sigs/cluster-api/blob/v1.14.4/bootstrap/kubeadm/reconcilers/kubeadmconfig/kubeadmconfig_controller.go#L653-L679)).
+The change is on `main` and in v1.15.0-beta.0 only: no backport to the v1.14 line existed on 2026-11-13.
+Without a version, clusterctl and cluster-api-operator install the newest stable release ([clusterctl](https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/cmd/clusterctl/client/repository/repository_versions.go#L86-L153), [operator](https://github.com/kubernetes-sigs/cluster-api-operator/blob/v0.30.0/internal/controller/manifests_downloader.go#L89-L97)), so every command below names the version.
+
 ### With clusterctl
 
 Add the provider to [clusterctl's configuration file](https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/docs/book/src/reference/clusterctl/configuration.md?plain=1#L3), the way clusterctl [takes a provider outside its built-in list](https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/docs/book/src/reference/clusterctl/configuration.md?plain=1#L10-L44):
@@ -37,8 +46,14 @@ providers:
 ```
 
 Use the name `lodia`: the manifests are labelled `cluster.x-k8s.io/provider: control-plane-lodia`, which is the label clusterctl [sets](https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/cmd/clusterctl/client/repository/components.go#L543-L564) for that name.
-`clusterctl init --control-plane lodia` installs the newest release, with the flags you use for the rest of Cluster API; a named control plane provider replaces the kubeadm one that `init` adds on its first run otherwise ([defaults](https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/cmd/clusterctl/client/init.go#L275-L297)).
-`--control-plane lodia:v0.1.0-alpha.1` pins a version.
+Install Cluster API at [the version the provider needs](#the-cluster-api-version) and the provider with it:
+
+```sh
+clusterctl init --core cluster-api:v1.15.0-beta.0 --bootstrap kubeadm:v1.15.0-beta.0 --control-plane lodia --infrastructure <yours>
+```
+
+`--control-plane lodia` installs the newest release of the provider, and `--control-plane lodia:v0.1.0-alpha.1` pins a version.
+A named control plane provider replaces the kubeadm one that `init` adds on its first run otherwise ([defaults](https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/cmd/clusterctl/client/init.go#L275-L297)).
 While every release is a pre-release, `latest` is the newest one; once a stable release exists, `latest` skips pre-releases ([selection](https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/cmd/clusterctl/client/repository/repository_versions.go#L86-L153)).
 
 The manifest names its image by digest.
@@ -57,7 +72,7 @@ clusterctl reads a variable from the environment, and from its configuration fil
 
 The defaults of the first two are the namespace and the name that a clusterctl install of the kubeadm bootstrap provider gives its ServiceAccount ([namespace](https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/bootstrap/kubeadm/config/default/kustomization.yaml#L1-L4), [name](https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/bootstrap/kubeadm/config/rbac/service_account.yaml#L1-L5)); set them when yours differ.
 The manifest binds that ServiceAccount's user, `system:serviceaccount:<namespace>:<name>` ([form](https://github.com/kubernetes/kubernetes/blob/v1.35.0/staging/src/k8s.io/apiserver/pkg/authentication/serviceaccount/util.go#L53-L57)), to a ClusterRole that grants `get` on `lodiacontrolplanes` and nothing else.
-The kubeadm bootstrap provider reads the `LodiaControlPlane` for files with `contentFormat: Template` and, with v1.14.0 to v1.15.0-beta.0, for every join, while its own ClusterRole grants that for `kubeadmcontrolplanes` only ([why](docs/design.md#what-the-provider-writes)).
+The kubeadm bootstrap provider reads the `LodiaControlPlane` for files with `contentFormat: Template` and, at v1.15.0-beta.0, which the provider needs, for every join, while its own ClusterRole grants that for `kubeadmcontrolplanes` only ([why](docs/design.md#what-the-provider-writes)).
 The binding names a user and not a ServiceAccount because clusterctl sets the namespace of every subject that has one to the provider's own ([rewrite](https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/cmd/clusterctl/client/repository/components.go#L349-L366)).
 
 clusterctl keeps no variable's value in the cluster, and processes the variables again at every `clusterctl upgrade` ([inventory](https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/cmd/clusterctl/client/repository/components.go#L120-L138), [upgrade](https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/cmd/clusterctl/client/cluster/upgrader.go#L353-L373)).
@@ -65,6 +80,28 @@ A value given to `init` and not to `upgrade` falls back to its default, and the 
 Keep the values in clusterctl's configuration file, as top-level keys, on every machine that upgrades the management cluster.
 
 ### With cluster-api-operator
+
+Install Cluster API at [the version the provider needs](#the-cluster-api-version): a `spec.version` on the core provider and on the kubeadm bootstrap provider, since the operator installs the newest stable release without one.
+
+```yaml
+apiVersion: operator.cluster.x-k8s.io/v1alpha2
+kind: CoreProvider
+metadata:
+  name: cluster-api
+  namespace: capi-system
+spec:
+  version: v1.15.0-beta.0
+---
+apiVersion: operator.cluster.x-k8s.io/v1alpha2
+kind: BootstrapProvider
+metadata:
+  name: kubeadm
+  namespace: capi-kubeadm-bootstrap-system
+spec:
+  version: v1.15.0-beta.0
+```
+
+Then the provider:
 
 ```yaml
 apiVersion: operator.cluster.x-k8s.io/v1alpha2
@@ -101,7 +138,8 @@ Anyone with read access to a repository can view its releases ([GitHub](https://
 ## Upgrade
 
 `clusterctl upgrade plan` never proposes a pre-release ([next version](https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/cmd/clusterctl/client/cluster/upgrader_info.go#L166-L196)), so between pre-releases name the version: `clusterctl upgrade apply --control-plane lodia:v0.1.0-alpha.2` ([the `provider:version` form](https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/cmd/clusterctl/client/upgrade.go#L283-L312)).
-With cluster-api-operator, set `spec.version`.
+For the same reason a management cluster that runs an older Cluster API takes [the version the provider needs](#the-cluster-api-version) by name: `clusterctl upgrade apply --core cluster-api:v1.15.0-beta.0 --bootstrap kubeadm:v1.15.0-beta.0` ([flags](https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/cmd/clusterctl/cmd/upgrade_apply.go#L78-L85)).
+With cluster-api-operator, set `spec.version`, of the provider and of Cluster API's core and kubeadm bootstrap providers.
 Keep the variables as [above](#variables) for either.
 `upgrade plan` reads the repository of every provider of the management cluster, and fails when one has no entry in the configuration of the machine it runs on, so every machine that upgrades the management cluster needs the `providers:` entry ([provider info](https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/cmd/clusterctl/client/cluster/upgrader_info.go#L51-L123)).
 
@@ -253,7 +291,7 @@ While the repository is private, the proxy cannot list it and clusterctl lists r
   Let the first run end before deleting its tag: `gh release create` names the tag, so a run still building publishes the assets of its own commit under a tag pushed again, and stays green.
 - Once the repository is public, a tag that the workflow refuses or fails on anyway is answered at once by tagging the next pre-release of the same line, `v0.1.0-alpha.2` after `v0.1.0-alpha.1`, and never a stable release before `v0.1.0` is due.
   Delete the bad tag too, but nothing relies on that, since whether the proxy stops listing a deleted tag is not known.
-- Before the change that makes the repository public (it lives in lodia-io/terraform), every semver tag must have a release, or the proxy would list a newest tag without one from the first public day.
+- Before the change that makes the repository public (it lives in lodia-io/terraform), every semver tag must have a release, or the proxy would list a newest tag without one from the first public day; [`todo.md`](todo.md) has the check and its place among the steps.
 
 ### The first release
 
