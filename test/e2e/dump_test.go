@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -296,9 +297,13 @@ func managementHandler(t *testing.T) http.Handler {
 		case strings.HasSuffix(r.URL.Path, "/clusters"):
 			respond(t, w, `{"kind":"ClusterList","apiVersion":"cluster.x-k8s.io/v1beta2","items":[]}`)
 		case strings.HasSuffix(r.URL.Path, "/pods"):
-			respond(t, w, `{"kind":"PodList","apiVersion":"v1","items":[{"metadata":{"name":"p"},"spec":{"containers":[{"name":"c"}]}}]}`)
+			respond(t, w, `{"kind":"PodList","apiVersion":"v1","items":[{"metadata":{"name":"q"},"spec":{"containers":[{"name":"d"},{"name":"e"}]},"status":{"containerStatuses":[{"name":"d"},{"name":"e"}]}},{"metadata":{"name":"p"},"spec":{"containers":[{"name":"c"},{"name":"c2"}]},"status":{"containerStatuses":[{"name":"c","restartCount":1},{"name":"c2","restartCount":0}]}}]}`)
+		case strings.HasSuffix(r.URL.Path, "/pods/q/log") && r.URL.Query().Get("container") == "d":
+			http.Error(w, "container d is waiting to start: ContainerCreating", http.StatusBadRequest)
 		case strings.HasSuffix(r.URL.Path, "/log"):
-			respond(t, w, "log")
+			query := r.URL.Query()
+			query.Del("timeout")
+			respond(t, w, "log of "+r.URL.Path+"?"+query.Encode())
 		default:
 			tenant.ServeHTTP(w, r)
 		}
@@ -389,6 +394,41 @@ func requireFiles(t *testing.T, dir string, want map[string]string) {
 			t.Errorf("%s: %v", file, err)
 		case !strings.Contains(string(got), content):
 			t.Errorf("%s lacks %q:\n%s", file, content, got)
+		}
+	}
+}
+
+func requireOnlyFiles(t *testing.T, dir string, want map[string]string) {
+	t.Helper()
+	got := make(map[string]string)
+	err := filepath.WalkDir(dir, func(file string, entry fs.DirEntry, err error) error {
+		if err != nil || entry.IsDir() {
+			return err
+		}
+		content, err := os.ReadFile(file)
+		if err != nil {
+			return err
+		}
+		name, err := filepath.Rel(dir, file)
+		if err != nil {
+			return err
+		}
+		got[name] = string(content)
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, content := range want {
+		if have, ok := got[name]; !ok {
+			t.Errorf("%s is not written", name)
+		} else if have != content {
+			t.Errorf("%s holds %q, want %q", name, have, content)
+		}
+	}
+	for name := range got {
+		if _, ok := want[name]; !ok {
+			t.Errorf("%s is written, and should not be", name)
 		}
 	}
 }

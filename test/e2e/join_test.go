@@ -134,7 +134,7 @@ func TestAWorkerJoinsAClusterOfLodiasControlPlane(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			manifest, err := stepDocker(ctx, "exec", management+"-control-plane", "cat", "/kind/manifests/default-cni.yaml")
+			manifest, err := docker(ctx, "exec", management+"-control-plane", "cat", "/kind/manifests/default-cni.yaml")
 			if err != nil {
 				t.Fatal(err)
 			}
