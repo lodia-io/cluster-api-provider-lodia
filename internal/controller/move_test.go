@@ -39,6 +39,7 @@ func labelledAsClusterctlLabelsIt(t *testing.T, crd string) {
 }
 
 func TestClusterctlMoveWaitsForTheBlockOnTheLodiaControlPlane(t *testing.T) {
+	clusterctlproxy.TrapTheDefaultKubeconfig(t)
 	labelledAsClusterctlLabelsIt(t, "clusters.cluster.x-k8s.io")
 	cluster, lcp := create(t, namespace(t), "moved")
 	cluster.Status.Initialization.InfrastructureProvisioned = new(true)

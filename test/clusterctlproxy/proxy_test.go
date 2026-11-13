@@ -4,7 +4,10 @@
 package clusterctlproxy
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"go/ast"
 	"go/parser"
@@ -15,7 +18,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -29,8 +34,6 @@ import (
 	apiextensionsv1beta1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1beta1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/rest"
-	"k8s.io/client-go/tools/clientcmd"
-	clientcmdapi "k8s.io/client-go/tools/clientcmd/api"
 	addonsv1 "sigs.k8s.io/cluster-api/api/addons/v1beta2"
 	controlplanev1 "sigs.k8s.io/cluster-api/api/controlplane/kubeadm/v1beta2"
 	clusterv1beta1 "sigs.k8s.io/cluster-api/api/core/v1beta1" //nolint:staticcheck // clusterctl's own scheme holds the v1beta1 kinds
@@ -125,6 +128,7 @@ func restConfig(s *server) *rest.Config {
 
 func newClusterctl(t *testing.T, s *server) clusterctl.Client {
 	t.Helper()
+	TrapTheDefaultKubeconfig(t)
 	configClient, err := config.New(t.Context(), "", config.InjectReader(config.NewMemoryReader()))
 	if err != nil {
 		t.Fatal(err)
@@ -188,53 +192,25 @@ func TestInitAndMoveAgainstAClusterThatDoesNotAnswerEndWithinTheirBoundAndOneDis
 	}
 }
 
-func writeKubeconfig(t *testing.T, path, server string) {
-	t.Helper()
-	cfg := clientcmdapi.NewConfig()
-	cfg.Clusters["trap"] = &clientcmdapi.Cluster{Server: server, InsecureSkipTLSVerify: true}
-	cfg.AuthInfos["trap"] = &clientcmdapi.AuthInfo{Token: "t"}
-	cfg.Contexts["trap"] = &clientcmdapi.Context{Cluster: "trap", AuthInfo: "trap"}
-	cfg.CurrentContext = "trap"
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := clientcmd.WriteToFile(*cfg, path); err != nil {
-		t.Fatal(err)
-	}
-}
-
 func TestNoCallReadsAKubeconfigOrTheCurrentContext(t *testing.T) {
-	trap := serve(t, neverAnswers)
-	home := t.TempDir()
-	writeKubeconfig(t, filepath.Join(home, ".kube", "config"), trap.url)
-	writeKubeconfig(t, filepath.Join(home, "elsewhere"), trap.url)
-	t.Setenv("HOME", home)
-	t.Setenv("KUBECONFIG", filepath.Join(home, "elsewhere"))
 	for call, run := range calls {
 		t.Run(call, func(t *testing.T) {
 			s := serve(t, neverAnswers)
+			c := newClusterctl(t, s)
 			ctx, cancel := context.WithTimeout(t.Context(), bound)
 			defer cancel()
-			if _, err := within(t, 2*request, call, func() error { return run(ctx, newClusterctl(t, s)) }); err == nil {
+			if _, err := within(t, 2*request, call, func() error { return run(ctx, c) }); err == nil {
 				t.Fatalf("%s says nothing about a cluster that did not answer", call)
 			}
 			if s.asked() == 0 {
 				t.Errorf("%s did not reach the cluster of the rest config", call)
-			}
-			if n := trap.asked(); n > 0 {
-				t.Errorf("%s asked the cluster of the default kubeconfig %d times", call, n)
 			}
 		})
 	}
 }
 
 func TestEveryClusterClientTheFactoryMakesReachesTheClusterOfTheRestConfig(t *testing.T) {
-	trap := serve(t, neverAnswers)
-	home := t.TempDir()
-	writeKubeconfig(t, filepath.Join(home, ".kube", "config"), trap.url)
-	writeKubeconfig(t, filepath.Join(home, "elsewhere"), trap.url)
-	t.Setenv("HOME", home)
-	t.Setenv("KUBECONFIG", filepath.Join(home, "elsewhere"))
+	TrapTheDefaultKubeconfig(t)
 	s := serve(t, neverAnswers)
 	configClient, err := config.New(t.Context(), "", config.InjectReader(config.NewMemoryReader()))
 	if err != nil {
@@ -260,9 +236,10 @@ func TestEveryClusterClientTheFactoryMakesReachesTheClusterOfTheRestConfig(t *te
 
 func TestAKubeconfigThatTheProxyWouldIgnoreIsRefused(t *testing.T) {
 	for name, kubeconfig := range map[string]clusterctl.Kubeconfig{
-		"a path":    {Path: "/somewhere/kubeconfig"},
-		"a context": {Context: "another"},
-		"both":      {Path: "/somewhere/kubeconfig", Context: "another"},
+		"a path":                            {Path: "/somewhere/kubeconfig"},
+		"a context":                         {Context: "another"},
+		"both":                              {Path: "/somewhere/kubeconfig", Context: "another"},
+		"a path beside the proxy's context": {Path: "/somewhere/kubeconfig", Context: Kubeconfig.Context},
 	} {
 		t.Run(name, func(t *testing.T) {
 			if err := requireNoKubeconfig(kubeconfig); err == nil || !strings.Contains(err.Error(), "which the suite's proxy would ignore") {
@@ -314,9 +291,12 @@ func TestTheSchemeHoldsTheKindsOfClusterctlsOwn(t *testing.T) {
 }
 
 const (
-	clusterctlClient  = "sigs.k8s.io/cluster-api/cmd/clusterctl/client"
+	capiClusterctl    = "sigs.k8s.io/cluster-api/cmd/clusterctl"
+	clusterctlClient  = capiClusterctl + "/client"
 	clusterctlCluster = clusterctlClient + "/cluster"
+	capiTestE2E       = "sigs.k8s.io/cluster-api/test/e2e"
 	capiTestFramework = "sigs.k8s.io/cluster-api/test/framework"
+	moduleRoot        = "../.."
 )
 
 // builtOutsideTheFactory lists the calls and imports of a file that build a
@@ -336,9 +316,6 @@ func builtOutsideTheFactory(path string, src any) ([]string, error) {
 		importPath, err := strconv.Unquote(imp.Path.Value)
 		if err != nil {
 			return nil, err
-		}
-		if importPath == capiTestFramework || strings.HasPrefix(importPath, capiTestFramework+"/") {
-			found = append(found, fmt.Sprintf("%s imports %s, whose clients take a kubeconfig path", fset.Position(imp.Pos()), importPath))
 		}
 		if importPath != clusterctlClient && importPath != clusterctlCluster {
 			continue
@@ -391,9 +368,6 @@ func TestTheScanRefusesEveryClusterctlClientNotBuiltByTheFactory(t *testing.T) {
 		{"a call of a package imported under another name", "package p\n" + `import owners "` + clusterctlCluster + `"` + "\nvar _, _ = owners.GetOwnerGraph(nil, \"n\", \"\", nil)\n", 1},
 		{"two calls", "package p\n" + clusterImport + "var _ = cluster.NewProxy(cluster.Kubeconfig{}, 0)\nvar _, _ = cluster.GetOwnerGraph(nil, \"n\", \"\", nil)\n", 2},
 		{"a package imported with a dot", "package p\n" + `import . "` + clusterctlCluster + `"` + "\nvar _, _ = GetOwnerGraph(nil, \"n\", \"\", nil)\n", 1},
-		{"the test framework's clusterctl", "package p\n" + `import "` + capiTestFramework + `/clusterctl"` + "\n", 1},
-		{"the test framework", "package p\n" + `import _ "` + capiTestFramework + `"` + "\n", 1},
-		{"a package beside the test framework", "package p\n" + `import "` + capiTestFramework + `x"` + "\n", 0},
 		{"the option that gives cluster.New its Proxy", "package p\n" + clusterImport + "var _ = cluster.InjectProxy(nil)\n", 0},
 		{"the option that gives cluster.New its processor", "package p\n" + clusterImport + "var _ = cluster.InjectYamlProcessor(nil)\n", 0},
 		{"an option of the client package", "package p\n" + clientImport + "var _ = clusterctl.InjectConfig(nil)\n", 1},
@@ -415,6 +389,190 @@ func TestTheScanRefusesEveryClusterctlClientNotBuiltByTheFactory(t *testing.T) {
 	}
 }
 
+type listedModule struct {
+	Path, Dir string
+	Main      bool
+}
+
+type listedPackage struct {
+	ImportPath string
+	Dir        string
+	Imports    []string
+	Module     *listedModule
+}
+
+func (p listedPackage) inTheModule() bool { return p.Module != nil && p.Module.Main }
+
+func under(path, root string) bool { return path == root || strings.HasPrefix(path, root+"/") }
+
+// buildingClustersFromAPath lists the packages of a dependency graph outside
+// this module that build clusterctl clients in a way New does not, under any
+// import name: Cluster API's test/e2e and test/framework, whose clusterctl
+// clients take the kubeconfig path of the bootstrap proxy, and every other
+// package that imports clusterctl's client or client/cluster, clusterctl's own
+// excepted.
+// https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/test/e2e/quick_start.go#L208-L214
+// https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/test/framework/clusterctl/client.go#L323-L327
+func buildingClustersFromAPath(pkgs []listedPackage) []string {
+	var found []string
+	for _, p := range pkgs {
+		if p.inTheModule() {
+			continue
+		}
+		path, _, _ := strings.Cut(p.ImportPath, " ")
+		switch {
+		case under(path, capiTestE2E) || under(path, capiTestFramework):
+			found = append(found, fmt.Sprintf("%s is in the dependency graph, and its clusterctl clients take a kubeconfig path", path))
+		case under(path, capiClusterctl):
+		case slices.Contains(p.Imports, clusterctlClient) || slices.Contains(p.Imports, clusterctlCluster):
+			found = append(found, fmt.Sprintf("%s imports clusterctl's client, and builds its clusters from a kubeconfig path", path))
+		}
+	}
+	return found
+}
+
+func listPackages(t *testing.T, root, tags string) []listedPackage {
+	t.Helper()
+	if _, err := os.Stat(filepath.Join(root, "go.mod")); err != nil {
+		t.Fatalf("%s is not the root of the module: %v", root, err)
+	}
+	cmd := exec.CommandContext(t.Context(), "go", "list", "-tags="+tags, "-deps", "-test", "-json=ImportPath,Dir,Imports,Module", "./...")
+	cmd.Dir = root
+	out, err := cmd.Output()
+	if exitErr := (*exec.ExitError)(nil); errors.As(err, &exitErr) {
+		t.Fatalf("go list: %v\n%s", err, exitErr.Stderr)
+	} else if err != nil {
+		t.Fatal(err)
+	}
+	var pkgs []listedPackage
+	for dec := json.NewDecoder(bytes.NewReader(out)); dec.More(); {
+		var p listedPackage
+		if err := dec.Decode(&p); err != nil {
+			t.Fatal(err)
+		}
+		pkgs = append(pkgs, p)
+	}
+	return pkgs
+}
+
+func TestTheGraphScanRefusesEveryPackageThatBuildsClusterctlClientsFromAPath(t *testing.T) {
+	outside := func(path string, imports ...string) listedPackage {
+		return listedPackage{ImportPath: path, Imports: imports}
+	}
+	inside := outside("go.lodia.io/m/test/e2e", clusterctlClient, clusterctlCluster)
+	inside.Module = &listedModule{Path: "go.lodia.io/m", Dir: "/m", Main: true}
+	cases := []struct {
+		name string
+		pkg  listedPackage
+		want int
+	}{
+		{"Cluster API's test/e2e", outside(capiTestE2E), 1},
+		{"Cluster API's test/e2e, built for a test", outside(capiTestE2E + " [" + capiTestE2E + ".test]"), 1},
+		{"a package of Cluster API's test/e2e", outside(capiTestE2E + "/internal"), 1},
+		{"the test framework", outside(capiTestFramework), 1},
+		{"the test framework's clusterctl", outside(capiTestFramework+"/clusterctl", clusterctlClient), 1},
+		{"a package beside the test framework", outside(capiTestFramework + "x"), 0},
+		{"a package beside the test e2e", outside(capiTestE2E + "x"), 0},
+		{"a package of another module that imports clusterctl's client", outside("example.invalid/p", clusterctlClient), 1},
+		{"a package of another module that imports clusterctl's cluster client", outside("example.invalid/p", "io", clusterctlCluster), 1},
+		{"a package of another module that imports clusterctl's configuration", outside("example.invalid/p", clusterctlClient+"/config"), 0},
+		{"a package of another module that imports nothing of clusterctl", outside("example.invalid/p", "io"), 0},
+		{"clusterctl's own package", outside(clusterctlClient+"/alpha", clusterctlCluster), 0},
+		{"clusterctl's own client", outside(clusterctlClient, clusterctlCluster), 0},
+		{"a package beside clusterctl", outside(capiClusterctl+"x/p", clusterctlClient), 1},
+		{"a package of this module, whose files the other scan reads", inside, 0},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if found := buildingClustersFromAPath([]listedPackage{c.pkg}); len(found) != c.want {
+				t.Errorf("the scan found %d, want %d: %v", len(found), c.want, found)
+			}
+		})
+	}
+}
+
+func TestTheListingHoldsTheImportsOfTestFilesAndOfTheTagsItIsGiven(t *testing.T) {
+	dir := t.TempDir()
+	for name, content := range map[string]string{
+		"go.mod":    "module example.invalid/m\n\ngo 1.26\n",
+		"a.go":      "package m\n",
+		"a_test.go": "package m\n\nimport _ \"go/parser\"\n",
+		"b.go":      "//go:build e2e\n\npackage m\n\nimport _ \"go/printer\"\n",
+	} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for tags, want := range map[string]map[string]bool{
+		"":    {"go/parser": true, "go/printer": false},
+		"e2e": {"go/parser": true, "go/printer": true},
+	} {
+		imports := make(map[string]bool)
+		for _, p := range listPackages(t, dir, tags) {
+			for _, imp := range p.Imports {
+				imports[imp] = true
+			}
+		}
+		for imp, imported := range want {
+			if imports[imp] != imported {
+				t.Errorf("with the tags %q the listing holds an import of %s: %t, want %t", tags, imp, imports[imp], imported)
+			}
+		}
+	}
+}
+
+func TestNoPackageOfTheDependencyGraphBuildsClusterctlClientsFromAPath(t *testing.T) {
+	for name, tags := range map[string]string{"untagged": "", "e2e": "e2e"} {
+		t.Run(name, func(t *testing.T) {
+			for _, f := range buildingClustersFromAPath(listPackages(t, moduleRoot, tags)) {
+				t.Error(f)
+			}
+		})
+	}
+}
+
+func notScanned(pkgs []listedPackage, scanned map[string]bool) []string {
+	var missing []string
+	for _, p := range pkgs {
+		if !p.inTheModule() {
+			continue
+		}
+		dir, err := filepath.Rel(p.Module.Dir, p.Dir)
+		if err != nil {
+			dir = p.Dir
+		}
+		if dir = filepath.ToSlash(dir); !scanned[dir] && !slices.Contains(missing, dir) {
+			missing = append(missing, dir)
+		}
+	}
+	slices.Sort(missing)
+	return missing
+}
+
+func TestTheWalkReadsEveryPackageOfTheModule(t *testing.T) {
+	module := &listedModule{Path: "go.lodia.io/m", Dir: "/m", Main: true}
+	pkgs := []listedPackage{
+		{ImportPath: "go.lodia.io/m/internal/controller", Dir: "/m/internal/controller", Module: module},
+		{ImportPath: "go.lodia.io/m/internal/controller_test [go.lodia.io/m/internal/controller.test]", Dir: "/m/internal/controller", Module: module},
+		{ImportPath: "go.lodia.io/m/test/e2e", Dir: "/m/test/e2e", Module: module},
+		{ImportPath: "example.invalid/p", Dir: "/elsewhere/p"},
+	}
+	for name, c := range map[string]struct {
+		scanned map[string]bool
+		want    []string
+	}{
+		"every directory":           {map[string]bool{"internal/controller": true, "test/e2e": true}, nil},
+		"a walk that began in test": {map[string]bool{"test/e2e": true}, []string{"internal/controller"}},
+		"a walk that read nothing":  {nil, []string{"internal/controller", "test/e2e"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if got := notScanned(pkgs, c.scanned); !slices.Equal(got, c.want) {
+				t.Errorf("the directories not scanned are %v, want %v", got, c.want)
+			}
+		})
+	}
+}
+
 // Every clusterctl client the suite builds has to go through New, or it reads
 // the kubeconfig that clusterctl's own proxy loads and has no bound.
 func TestEveryClusterctlClientIsBuiltThroughTheFactory(t *testing.T) {
@@ -422,8 +580,12 @@ func TestEveryClusterctlClientIsBuiltThroughTheFactory(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var scanned int
-	err = filepath.WalkDir(filepath.Join("..", ".."), func(path string, d fs.DirEntry, err error) error {
+	root, err := filepath.Abs(moduleRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	scanned := make(map[string]bool)
+	err = filepath.WalkDir(moduleRoot, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
@@ -441,7 +603,11 @@ func TestEveryClusterctlClientIsBuiltThroughTheFactory(t *testing.T) {
 		if err != nil {
 			return err
 		}
-		scanned++
+		dir, err := filepath.Rel(root, filepath.Dir(abs))
+		if err != nil {
+			return err
+		}
+		scanned[filepath.ToSlash(dir)] = true
 		for _, f := range found {
 			t.Errorf("%s: clusterctl's clients are built by clusterctlproxy.New alone", f)
 		}
@@ -450,7 +616,7 @@ func TestEveryClusterctlClientIsBuiltThroughTheFactory(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if scanned < 10 {
-		t.Fatalf("the scan read %d Go files, fewer than the module holds", scanned)
+	if missing := notScanned(listPackages(t, moduleRoot, "e2e"), scanned); len(missing) > 0 {
+		t.Fatalf("the scan read no Go file in the directories %v, which hold packages of the module", missing)
 	}
 }

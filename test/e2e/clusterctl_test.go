@@ -205,6 +205,7 @@ func componentsIn(ns string) []byte {
 }
 
 func TestTheRepositoryIsWhatClusterctlReadsBack(t *testing.T) {
+	clusterctlproxy.TrapTheDefaultKubeconfig(t)
 	providers := []clusterctlProvider{
 		{"cluster-api", clusterctlv1.CoreProviderType, "v1.15.0-beta.0", componentsIn("capi-system"), []byte(metadataHead + capiMetadata)},
 		{"kubeadm", clusterctlv1.BootstrapProviderType, "v1.15.0-beta.0", componentsIn("bootstrap-system"), []byte(metadataHead + capiMetadata)},
@@ -431,6 +432,7 @@ func TestTheClusterctlClientEndsItsCallsAtTheSuitesTimeouts(t *testing.T) {
 	for name, stalled := range stalledTenants {
 		for call, run := range calls {
 			t.Run(name+"/"+call, func(t *testing.T) {
+				clusterctlproxy.TrapTheDefaultKubeconfig(t)
 				url, _ := stalled(t)
 				c, err := newClusterctl(t.Context(), configFor(t, url), empty)
 				if err != nil {
@@ -469,6 +471,7 @@ func clusterThatHoldsTheInventory(t *testing.T) http.Handler {
 }
 
 func TestTheClusterctlClientsRequestsAskForTheirOwnTimeouts(t *testing.T) {
+	clusterctlproxy.TrapTheDefaultKubeconfig(t)
 	shortenTheDiscovery(t, 7*time.Second)
 	shortenTheClientRequests(t, 11*time.Second)
 	empty := filepath.Join(t.TempDir(), "clusterctl.yaml")
