@@ -20,10 +20,14 @@ import (
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/client-go/kubernetes"
+	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 	clientcmdapi "k8s.io/client-go/tools/clientcmd/api"
@@ -46,8 +50,8 @@ var (
 		{Group: "cluster.x-k8s.io", Version: "v1beta2", Kind: "Machine"},
 		devMachine,
 		{Group: "bootstrap.cluster.x-k8s.io", Version: "v1beta2", Kind: "KubeadmConfig"},
-		{Group: "lodia.io", Version: "v1alpha1", Kind: "ControlPlane"},
-		{Group: "druid.gardener.cloud", Version: "v1alpha1", Kind: "Etcd"},
+		controlPlaneKind,
+		etcdKind,
 	}
 	datastoreClass = schema.GroupVersionKind{Group: "lodia.io", Version: "v1alpha1", Kind: "DatastoreClass"}
 	managers       = []string{"cert-manager", "capi-system", "capi-kubeadm-bootstrap-system", "capd-system", providerNamespace, lodiaNamespace, namespace}
@@ -63,8 +67,23 @@ var (
 		{appsv1.SchemeGroupVersion.WithKind("DaemonSet"), metav1.NamespaceSystem},
 		{eventKind, metav1.NamespaceSystem},
 		{eventKind, metav1.NamespaceDefault},
+		{appsv1.SchemeGroupVersion.WithKind("Deployment"), metav1.NamespaceDefault},
+		{appsv1.SchemeGroupVersion.WithKind("ReplicaSet"), metav1.NamespaceDefault},
 	}
 )
+
+// Besides objectKinds, the graph of the quick start checks holds Secrets and
+// ConfigMaps, and the CRDs' clusterctl label says which kinds it holds. They
+// are dumped without data, and without annotations, which can hold a copy of
+// the data.
+var metadataKinds = []struct {
+	kind      schema.GroupVersionKind
+	namespace string
+}{
+	{corev1.SchemeGroupVersion.WithKind("Secret"), namespace},
+	{corev1.SchemeGroupVersion.WithKind("ConfigMap"), namespace},
+	{apiextensionsv1.SchemeGroupVersion.WithKind("CustomResourceDefinition"), ""},
+}
 
 func dumpRESTConfig(cfg *envconf.Config) *rest.Config {
 	restCfg := rest.CopyConfig(cfg.Client().RESTConfig())
@@ -99,6 +118,12 @@ func dumpAll(ctx context.Context, cfg *envconf.Config, c client.Client, dir stri
 	if ctx.Err() == nil {
 		errs = append(errs, dumpObjects(ctx, c, dir, datastoreClass, ""))
 	}
+	for _, m := range metadataKinds {
+		if ctx.Err() != nil {
+			break
+		}
+		errs = append(errs, dumpMetadata(ctx, c, dir, m.kind, m.namespace))
+	}
 	for _, ns := range managers {
 		if ctx.Err() != nil {
 			break
@@ -126,6 +151,23 @@ func dumpObjects(ctx context.Context, c client.Client, dir string, kind schema.G
 		return err
 	}
 	data, err := yaml.Marshal(list.UnstructuredContent())
+	if err != nil {
+		return err
+	}
+	return write(filepath.Join(dir, "objects", ns, kind.Kind+".yaml"), data)
+}
+
+func dumpMetadata(ctx context.Context, c client.Client, dir string, kind schema.GroupVersionKind, ns string) error {
+	list := &metav1.PartialObjectMetadataList{}
+	list.SetGroupVersionKind(kind.GroupVersion().WithKind(kind.Kind + "List"))
+	if err := c.List(ctx, list, client.InNamespace(ns)); err != nil {
+		return err
+	}
+	for i := range list.Items {
+		list.Items[i].Annotations = nil
+		list.Items[i].ManagedFields = nil
+	}
+	data, err := yaml.Marshal(list)
 	if err != nil {
 		return err
 	}
@@ -246,7 +288,7 @@ esac
 `, verb)
 }
 
-var tenantKinds = map[string]string{"nodes": "Node", "pods": "Pod", "daemonsets": "DaemonSet", "events": "Event"}
+var tenantKinds = map[string]string{"nodes": "Node", "pods": "Pod", "daemonsets": "DaemonSet", "events": "Event", "deployments": "Deployment", "replicasets": "ReplicaSet"}
 
 func tenantAPI(t *testing.T) *httptest.Server {
 	t.Helper()
@@ -266,7 +308,7 @@ func tenantHandler(t *testing.T) http.Handler {
 		case "/api/v1":
 			respond(t, w, `{"kind":"APIResourceList","groupVersion":"v1","resources":[{"name":"nodes","kind":"Node","namespaced":false,"verbs":["list"]},{"name":"pods","kind":"Pod","namespaced":true,"verbs":["list"]},{"name":"events","kind":"Event","namespaced":true,"verbs":["list"]}]}`)
 		case "/apis/apps/v1":
-			respond(t, w, `{"kind":"APIResourceList","groupVersion":"apps/v1","resources":[{"name":"daemonsets","kind":"DaemonSet","namespaced":true,"verbs":["list"]}]}`)
+			respond(t, w, `{"kind":"APIResourceList","groupVersion":"apps/v1","resources":[{"name":"daemonsets","kind":"DaemonSet","namespaced":true,"verbs":["list"]},{"name":"deployments","kind":"Deployment","namespaced":true,"verbs":["list"]},{"name":"replicasets","kind":"ReplicaSet","namespaced":true,"verbs":["list"]}]}`)
 		default:
 			groupVersion := "v1"
 			if strings.HasPrefix(r.URL.Path, "/apis/apps/v1/") {
@@ -312,9 +354,14 @@ func managementHandler(t *testing.T) http.Handler {
 
 func serverKubeconfig(t *testing.T, server, context string) []byte {
 	t.Helper()
+	return kubeconfigWithToken(t, server, context, "t")
+}
+
+func kubeconfigWithToken(t *testing.T, server, context, token string) []byte {
+	t.Helper()
 	cfg := clientcmdapi.NewConfig()
 	cfg.Clusters["c"] = &clientcmdapi.Cluster{Server: server, InsecureSkipTLSVerify: true}
-	cfg.AuthInfos["u"] = &clientcmdapi.AuthInfo{Token: "t"}
+	cfg.AuthInfos["u"] = &clientcmdapi.AuthInfo{Token: token}
 	cfg.Contexts[context] = &clientcmdapi.Context{Cluster: "c", AuthInfo: "u"}
 	cfg.CurrentContext = context
 	data, err := clientcmd.Write(*cfg)
@@ -332,6 +379,13 @@ func configFor(t *testing.T, server string) *envconf.Config {
 	}
 	return envconf.NewWithKubeConfig(kubeconfig)
 }
+
+var dumpScheme = func() *runtime.Scheme {
+	s := runtime.NewScheme()
+	utilruntime.Must(clientgoscheme.AddToScheme(s))
+	utilruntime.Must(apiextensionsv1.AddToScheme(s))
+	return s
+}()
 
 type dumpSetup struct {
 	cfg *envconf.Config
@@ -368,7 +422,7 @@ func newDumpSetup(t *testing.T, tenant string) dumpSetup {
 		respond(t, w, `{"kind":"PodList","apiVersion":"v1","items":[]}`)
 	}))
 	t.Cleanup(management.Close)
-	builder := fake.NewClientBuilder()
+	builder := fake.NewClientBuilder().WithScheme(dumpScheme)
 	for _, ns := range managers {
 		builder = builder.WithObjects(&corev1.Event{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "event-in-" + ns}})
 	}
@@ -376,6 +430,13 @@ func newDumpSetup(t *testing.T, tenant string) dumpSetup {
 		builder = builder.WithObjects(objectOf(kind, namespace))
 	}
 	builder = builder.WithObjects(objectOf(datastoreClass, ""))
+	labelled := &apiextensionsv1.CustomResourceDefinition{ObjectMeta: metav1.ObjectMeta{
+		Name: "machines.cluster.x-k8s.io", Labels: map[string]string{"clusterctl.cluster.x-k8s.io": ""}, Annotations: map[string]string{"an-annotation": "annotation-value"},
+	}}
+	builder = builder.WithObjects(labelled, &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{Namespace: namespace, Name: "a-config", Annotations: map[string]string{"an-annotation": "annotation-value"}, Finalizers: []string{"a-finalizer"}},
+		Data:       map[string]string{"a-key": "config-value"},
+	})
 	if tenant != "" {
 		builder = builder.WithObjects(&corev1.Secret{
 			ObjectMeta: metav1.ObjectMeta{Namespace: namespace, Name: secret.Name("capl-e2e-w", secret.Kubeconfig)},
@@ -450,6 +511,8 @@ func TestTheDumpWritesTheTenantTheEventsAndTheWorkers(t *testing.T) {
 		"tenant/objects/kube-system/DaemonSet.yaml": "/apis/apps/v1/namespaces/kube-system/daemonsets",
 		"tenant/objects/default/Pod.yaml":           "/api/v1/namespaces/default/pods",
 		"tenant/objects/default/Event.yaml":         "/api/v1/namespaces/default/events",
+		"tenant/objects/default/Deployment.yaml":    "/apis/apps/v1/namespaces/default/deployments",
+		"tenant/objects/default/ReplicaSet.yaml":    "/apis/apps/v1/namespaces/default/replicasets",
 		"worker/worker/journal.log":                 "journalctl --no-pager -u kubelet -u containerd",
 		"worker/worker/crictl-ps.txt":               "crictl ps -a",
 	}
@@ -461,6 +524,30 @@ func TestTheDumpWritesTheTenantTheEventsAndTheWorkers(t *testing.T) {
 	}
 	want["objects/DatastoreClass.yaml"] = "object-of-DatastoreClass"
 	requireFiles(t, d.dir, want)
+}
+
+func TestTheDumpOfSecretsConfigMapsAndCRDsHoldsTheirMetadataAlone(t *testing.T) {
+	tenant := tenantAPI(t)
+	d := newDumpSetup(t, tenant.URL)
+	if err := dumpAll(t.Context(), d.cfg, d.c, d.dir, time.Minute, time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	requireFiles(t, d.dir, map[string]string{
+		"objects/capi-join/Secret.yaml":         secret.Name("capl-e2e-w", secret.Kubeconfig),
+		"objects/capi-join/ConfigMap.yaml":      "a-finalizer",
+		"objects/CustomResourceDefinition.yaml": "clusterctl.cluster.x-k8s.io",
+	})
+	for _, file := range []string{"objects/capi-join/Secret.yaml", "objects/capi-join/ConfigMap.yaml", "objects/CustomResourceDefinition.yaml"} {
+		got, err := os.ReadFile(filepath.Join(d.dir, file))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, leaked := range []string{tenant.URL, "config-value", "an-annotation", "annotation-value"} {
+			if strings.Contains(string(got), leaked) {
+				t.Errorf("%s holds %q:\n%s", file, leaked, got)
+			}
+		}
+	}
 }
 
 func TestTheDumpOfAnInstallThatFailedBeforeTheTenantHadAKubeconfig(t *testing.T) {

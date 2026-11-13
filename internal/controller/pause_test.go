@@ -13,6 +13,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
+	clusterctlv1 "sigs.k8s.io/cluster-api/cmd/clusterctl/api/v1alpha3"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -160,12 +161,24 @@ func TestPauseStopsTheProvider(t *testing.T) {
 	}
 	eventually(t, paused("Cluster spec.paused is set to true"))
 	absent(t, controlPlaneOf(cluster))
+	unblocked := func(why string) {
+		t.Helper()
+		consistently(t, func() error {
+			get(t, lcp)
+			if _, ok := lcp.Annotations[clusterctlv1.BlockMoveAnnotation]; ok {
+				return fmt.Errorf("block-move was written while %s", why)
+			}
+			return nil
+		})
+	}
+	unblocked("the Cluster was paused")
 
 	before := lcp.DeepCopy()
 	metav1.SetMetaDataAnnotation(&lcp.ObjectMeta, clusterv1.PausedAnnotation, "")
 	if err := k8s.Patch(t.Context(), lcp, client.MergeFrom(before)); err != nil {
 		t.Fatal(err)
 	}
+	eventually(t, paused("Cluster spec.paused is set to true, LodiaControlPlane has the cluster.x-k8s.io/paused annotation"))
 	unpaused := cluster.DeepCopy()
 	unpaused.Spec.Paused = new(false)
 	if err := k8s.Patch(t.Context(), unpaused, client.MergeFrom(cluster)); err != nil {
@@ -173,6 +186,7 @@ func TestPauseStopsTheProvider(t *testing.T) {
 	}
 	eventually(t, paused("LodiaControlPlane has the cluster.x-k8s.io/paused annotation"))
 	absent(t, controlPlaneOf(cluster))
+	unblocked("the LodiaControlPlane was paused by its annotation")
 
 	before = lcp.DeepCopy()
 	delete(lcp.Annotations, clusterv1.PausedAnnotation)

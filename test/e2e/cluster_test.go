@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	lodiav1alpha1 "go.lodia.io/lodia/api/v1alpha1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/tools/clientcmd"
 	"sigs.k8s.io/e2e-framework/pkg/envconf"
@@ -26,6 +27,9 @@ const (
 var (
 	devCluster = schema.GroupVersionKind{Group: "infrastructure.cluster.x-k8s.io", Version: "v1beta2", Kind: "DevCluster"}
 	devMachine = schema.GroupVersionKind{Group: "infrastructure.cluster.x-k8s.io", Version: "v1beta2", Kind: "DevMachine"}
+
+	controlPlaneKind = lodiav1alpha1.GroupVersion.WithKind("ControlPlane")
+	etcdKind         = schema.GroupVersionKind{Group: "druid.gardener.cloud", Version: "v1alpha1", Kind: "Etcd"}
 )
 
 // The Cluster is not named as the kind cluster: CAPD labels its containers

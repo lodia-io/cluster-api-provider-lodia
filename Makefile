@@ -5,6 +5,13 @@ LODIA_DIR = $(CURDIR)/work/lodia
 LODIA_COMMIT = 57375832e7fe8b3a06374613797eb4c544fe7612
 REMOVE_WORKERS = docker ps --all --quiet --filter label=io.x-k8s.kind.cluster=$(E2E_CLUSTER)-w | xargs -r docker rm --force --volumes
 KUSTOMIZE = sigs.k8s.io/kustomize/kustomize/v5@v5.7.0
+KO = github.com/google/ko@v0.19.1
+IMAGE_REPOSITORY ?= ghcr.io/lodia-io/cluster-api-provider-lodia
+PLATFORMS ?= linux/amd64,linux/arm64
+KO_PUSH ?= true
+IMAGE_TAG ?= latest
+COMMIT ?= HEAD
+RELEASE_DIR ?= out
 GENERATED = api/v1alpha1/zz_generated.deepcopy.go config/crd/bases/*.yaml config/rbac/role.yaml
 
 .PHONY: generate
@@ -23,16 +30,42 @@ test: ## unit and envtest tests; envtest runs a real API server and etcd
 	KUBEBUILDER_ASSETS="$$(go tool setup-envtest use $(ENVTEST_K8S_VERSION) -p path)" go test ./...
 
 .PHONY: components
-components: ## render config/default and check that clusterctl's variable processing leaves it as written, and its Namespace, labels, manager container and the roles that reach the manager's ServiceAccount
+components: ## render config/default and check that every variable has a non-empty default, its Namespace, labels and manager container as rendered, and, on what clusterctl installs with the defaults and with explicit values, the roles that reach the manager's ServiceAccount, the kubeadm bootstrap provider's grant and the subjects of every binding
 	@rendered="$$(go run $(KUSTOMIZE) build config/default)" || exit 1; \
 	printf '%s\n' "$$rendered" | go run ./test/components
+
+.PHONY: release-components
+release-components: ## write $(RELEASE_DIR)/control-plane-components.yaml: config/default with the manager's image built by ko for $(PLATFORMS) and named by digest in $(IMAGE_REPOSITORY), tagged $(IMAGE_TAG), pushed unless KO_PUSH=false
+	@rendered="$$(go run $(KUSTOMIZE) build config/default)" || exit 1; \
+	mkdir -p $(RELEASE_DIR) && \
+	printf '%s\n' "$$rendered" | KO_DOCKER_REPO=$(IMAGE_REPOSITORY) go run $(KO) resolve --bare --platform=$(PLATFORMS) --push=$(KO_PUSH) --tags=$(IMAGE_TAG) -f - > $(RELEASE_DIR)/control-plane-components.yaml.tmp && \
+	mv $(RELEASE_DIR)/control-plane-components.yaml.tmp $(RELEASE_DIR)/control-plane-components.yaml
+
+.PHONY: release-image
+release-image: ## print the image that $(RELEASE_DIR)/control-plane-components.yaml names, after requiring it to be the only one, $(IMAGE_REPOSITORY):$(IMAGE_TAG) with a digest
+	@go run ./hack/releasecheck image --repository=$(IMAGE_REPOSITORY) --tag=$(IMAGE_TAG) $(RELEASE_DIR)/control-plane-components.yaml
+
+.PHONY: release-login
+release-login: ## log in to the registry of $(IMAGE_REPOSITORY) as $$GITHUB_ACTOR with $$GITHUB_TOKEN, which ko pushes with
+	@printf '%s' "$$GITHUB_TOKEN" | go run $(KO) login $(firstword $(subst /, ,$(IMAGE_REPOSITORY))) --username "$$GITHUB_ACTOR" --password-stdin
+
+.PHONY: release-check
+release-check: ## refuse TAG before it is pushed: a semver tag with a series in metadata.yaml at COMMIT, a series for every tag there is, COMMIT on origin/main with every run of ci.yml green; reads GitHub with $$GITHUB_TOKEN, or with gh's
+	@[ -n "$(TAG)" ] || { echo "usage: make release-check TAG=vX.Y.Z [COMMIT=<sha>]"; exit 1; }
+	git fetch --quiet --tags origin main
+	GITHUB_TOKEN="$${GITHUB_TOKEN:-$$(gh auth token)}" go run ./hack/releasecheck tag --commit="$(COMMIT)" "$(TAG)"
+
+.PHONY: metadata
+metadata: ## check metadata.yaml: the newest series' contract is the CRDs' contract label, and every series of the merge base with origin/main is still there with its contract
+	go run ./hack/releasecheck metadata
 
 .PHONY: verify
 verify: ## the check that says a change is done
 	@before="$$(cat $(GENERATED) | cksum)"; $(MAKE) --no-print-directory generate; \
 	[ "$$before" = "$$(cat $(GENERATED) | cksum)" ] || { echo "make generate changed the generated files: review and commit them"; exit 1; }
 	go mod tidy -diff
-	$(MAKE) --no-print-directory components lint test
+	$(MAKE) --no-print-directory components metadata lint test
+	$(MAKE) --no-print-directory release-components release-image KO_PUSH=false IMAGE_TAG=v0.0.0-verify
 
 # LC_ALL=C: a range in a case pattern follows the locale, and on macOS en_US.UTF-8 puts A in a-z.
 .PHONY: e2e-cluster
@@ -56,6 +89,6 @@ e2e: e2e-cluster ## the e2e suite, on a kind cluster of its own that e2e-cluster
 	mkdir -p $(E2E_DIR)
 	go tool kind create cluster --name $(E2E_CLUSTER) --kubeconfig $(E2E_DIR)/kubeconfig --config test/e2e/testdata/kind.yaml
 	rm -rf $(E2E_DIR)/artifacts
-	$(REMOVE_WORKERS) && E2E_KUBECONFIG=$(E2E_DIR)/kubeconfig go test -v -tags e2e -count=1 -timeout 40m ./test/e2e/...; status=$$?; \
+	$(REMOVE_WORKERS) && E2E_KUBECONFIG=$(E2E_DIR)/kubeconfig go test -v -tags e2e -count=1 -timeout 64m ./test/e2e/...; status=$$?; \
 	$(REMOVE_WORKERS) || status=1; \
 	go tool kind delete cluster --name $(E2E_CLUSTER) --kubeconfig $(E2E_DIR)/kubeconfig; exit $$status

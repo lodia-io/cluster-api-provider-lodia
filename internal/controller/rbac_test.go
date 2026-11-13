@@ -4,7 +4,6 @@
 package controller_test
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -28,6 +27,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/serializer"
 	"k8s.io/client-go/kubernetes/scheme"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
+	"sigs.k8s.io/cluster-api/util/flags"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -76,24 +76,14 @@ func boundToTheLeaderElectionRole(t *testing.T, ns string) {
 func TestTheRoleCoversLeaderElectionAndTheMetricsFilter(t *testing.T) {
 	ns := namespace(t)
 	boundToTheLeaderElectionRole(t, ns)
-	options, err := controller.ManagerOptions("0", "0", true)
-	if err != nil {
-		t.Fatal(err)
-	}
-	options.LeaderElectionNamespace = ns
-	mgr, err := ctrl.NewManager(asController, options)
-	if err != nil {
-		t.Fatal(err)
-	}
-	ctx, cancel := context.WithCancel(t.Context())
-	done := make(chan error, 1)
-	go func() { done <- mgr.Start(ctx) }()
-	t.Cleanup(func() {
-		cancel()
-		if err := <-done; err != nil {
-			t.Errorf("manager: %v", err)
-		}
-	})
+	startManagerWith(t, controller.Config{
+		Namespace:     ns,
+		Concurrency:   10,
+		LeaderElect:   true,
+		LeaseDuration: 15 * time.Second,
+		RenewDeadline: 10 * time.Second,
+		RetryPeriod:   2 * time.Second,
+	}, func(options *ctrl.Options) { options.LeaderElectionNamespace = ns })
 	eventually(t, func() error {
 		lease := &coordinationv1.Lease{}
 		if err := k8s.Get(t.Context(), client.ObjectKey{Namespace: ns, Name: "controlplane.lodia.io"}, lease); err != nil {
@@ -256,32 +246,29 @@ func TestALeaseUnderAFreeNameCanBeCreatedButAnotherControllersCannotBeReadChange
 }
 
 func TestTheManagerIsLeaderElectedSecuredAndBuiltOnTheCacheOptions(t *testing.T) {
-	for _, flags := range []struct {
-		metrics, probes string
-		leaderElect     bool
-	}{
-		{":9443", ":9081", false},
-		{"127.0.0.1:9444", "127.0.0.1:9082", true},
+	for _, c := range []controller.Config{
+		{Diagnostics: flags.ManagerOptions{DiagnosticsAddress: ":9443"}, HealthAddr: ":9081"},
+		{Diagnostics: flags.ManagerOptions{DiagnosticsAddress: "127.0.0.1:9444"}, HealthAddr: "127.0.0.1:9082", LeaderElect: true, Namespace: "tenants"},
 	} {
-		options, err := controller.ManagerOptions(flags.metrics, flags.probes, flags.leaderElect)
+		options, err := controller.ManagerOptions(c)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if options.LeaderElection != flags.leaderElect || options.LeaderElectionID != "controlplane.lodia.io" {
-			t.Errorf("leader election %v with ID %q, want %v", options.LeaderElection, options.LeaderElectionID, flags.leaderElect)
+		if options.LeaderElection != c.LeaderElect || options.LeaderElectionID != "controlplane.lodia.io" {
+			t.Errorf("leader election %v with ID %q, want %v", options.LeaderElection, options.LeaderElectionID, c.LeaderElect)
 		}
 		if options.LeaderElectionNamespace != "" {
 			t.Errorf("leader election in the namespace %q, want the Pod's", options.LeaderElectionNamespace)
 		}
-		if m := options.Metrics; m.BindAddress != flags.metrics || !m.SecureServing || m.FilterProvider == nil {
-			t.Errorf("metrics %+v: want them on %q over HTTPS behind a filter", m, flags.metrics)
+		if m := options.Metrics; m.BindAddress != c.Diagnostics.DiagnosticsAddress || !m.SecureServing || m.FilterProvider == nil {
+			t.Errorf("metrics %+v: want them on %q over HTTPS behind a filter", m, c.Diagnostics.DiagnosticsAddress)
 		}
-		if options.HealthProbeBindAddress != flags.probes {
-			t.Errorf("probes on %q, want %q", options.HealthProbeBindAddress, flags.probes)
+		if options.HealthProbeBindAddress != c.HealthAddr {
+			t.Errorf("probes on %q, want %q", options.HealthProbeBindAddress, c.HealthAddr)
 		}
 	}
 
-	options, err := controller.ManagerOptions(":9443", ":9081", true)
+	options, err := controller.ManagerOptions(controller.Config{SyncPeriod: 10 * time.Minute})
 	if err != nil {
 		t.Fatal(err)
 	}

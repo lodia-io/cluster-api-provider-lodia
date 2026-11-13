@@ -26,10 +26,10 @@ Contract v1beta2 ([rules][cp-rules]).
 | ✓ | `<cluster>-kubeconfig` in the Cluster's namespace, type `cluster.x-k8s.io/secret`, label `cluster.x-k8s.io/cluster-name`, key `value`, short-lived client certificate renewed | Lodia's admin kubeconfig, copied | [kubeconfig][cp-kubeconfig], [consts.go][sec-consts] |
 | ✓ | cluster certificates as `<cluster>-<purpose>` Secrets with the same type and label; CABPK reads `<cluster>-ca` for a worker's join | `<cluster>-ca` with `tls.crt` only (§4.3) | [certificates][cp-certs], [CABPK join][cabpk-worker] |
 | ✓ | pause on `Cluster.spec.paused` or `cluster.x-k8s.io/paused`, surfaced as `Paused` | CAPI's `paused.EnsurePausedCondition`; Lodia keeps running | [pausing][cp-pause], [IsPaused][paused] |
-| ✓ | clusterctl: `metadata.yaml` | `releaseSeries: [{major: 0, minor: 1, contract: v1beta2}]` | [metadata][cc-metadata] |
-| — | clusterctl: `control-plane-components.yaml` | a release artifact, not built yet | [components][cc-components] |
-| — | the manager's `--namespace` flag, a MUST for clusterctl, and `--watch-filter`, a MUST for several instances of a provider | not built yet, with the release artifacts; `todo.md` | [components][cc-components], [multiple instances][cp-multi] |
-| — | `clusterctl move`: moving deletes the source objects | blocked (§5) | [move][cc-move], [block-move][move-ann] |
+| ✓ | clusterctl: `metadata.yaml` | `releaseSeries: [{major: 0, minor: 1, contract: v1beta2}]`, append-only and checked against the CRDs' contract label by `make metadata` | [metadata][cc-metadata] |
+| ✓ | clusterctl: `control-plane-components.yaml` | `config/default` rendered by `make release-components`, with the manager's image named `<repository>:<tag>@sha256:<digest>`; a release asset | [components][cc-components] |
+| ✓ | the manager's `--namespace` flag, a MUST for clusterctl, and `--watch-filter`, a MUST for several instances of a provider | both (§2, The manager) | [components][cc-components], [multiple instances][cp-multi] |
+| — | `clusterctl move`: moving deletes the source objects | blocked, and a copy of a `LodiaControlPlane` refused (§5) | [move][cc-move], [block-move][move-ann] |
 | — | `spec.replicas`, scale subresource, `status.selector` and the four counters ("mandatory if control plane has a notion of number of instances") | left out (§4.6); a topology or its ClusterClass must not set `replicas`, `rollout.after`, the machine template's `readinessGates` and `taints`, or the deletion timeouts, and a ClusterClass must not set `machineInfrastructure`: the topology controller then writes them, `machineInfrastructure` as `machineTemplate.spec.infrastructureRef` and `machineTemplate.metadata`, and the CRD declares none of them | [replicas][cp-replicas], [topology][topo-cp], [machine infrastructure][topo-cp-infra] |
 | — | `machineTemplate`, rollout after, in-place updates, machine placement, metadata propagation, `minReadySeconds` | no Machines | [machines][cp-machines] |
 
@@ -63,8 +63,8 @@ The spec reaches the `ControlPlane` by its JSON field names: the provider conver
 
 | condition | written as |
 |---|---|
-| `Available` | a mirror of Lodia's `Reachable` at any generation: status, reason, message; `Unknown`, `NotYetReported` while the `ControlPlane` has none. It is not gated, since `Reachable` is a probe of the live endpoint, which a change to the spec does not take down, and the contract asks that `Available` hold through disruption; `False`, `ControlPlaneNotFound` when an initialized `ControlPlane` is gone, and `False`, `Deleting` while the provider waits for the `ControlPlane` to go, unless paused |
-| `Ready` | a mirror of Lodia's `Ready` at the `ControlPlane`'s current generation ([Lodia's rule][lo-ref-ready]), otherwise `Unknown`, `LatestGenerationNotObserved`, unless the provider cannot write: `Refused` (the API server refuses the `ControlPlane` or a Secret; the message is the server's), `ObjectsControlledElsewhere` (the `ControlPlane`, `<cluster>-kubeconfig` or `<cluster>-ca` exists with another controller, or none, which the message names), `ControlPlaneNotFound` (an initialized `ControlPlane` is gone), `Deleting` (waiting for the `ControlPlane` to go, unless paused) |
+| `Available` | a mirror of Lodia's `Reachable` at any generation: status, reason, message; `Unknown`, `NotYetReported` while the `ControlPlane` has none. It is not gated, since `Reachable` is a probe of the live endpoint, which a change to the spec does not take down, and the contract asks that `Available` hold through disruption; `False`, `ControlPlaneNotFound` when an initialized `ControlPlane` is gone, `False`, `Deleting` while the provider waits for the `ControlPlane` to go, unless paused, and `False`, `CopyOfAnotherObject` for a copy of another object (§5) |
+| `Ready` | a mirror of Lodia's `Ready` at the `ControlPlane`'s current generation ([Lodia's rule][lo-ref-ready]), otherwise `Unknown`, `LatestGenerationNotObserved`, unless the provider cannot write: `Refused` (the API server refuses the `ControlPlane` or a Secret; the message is the server's), `ObjectsControlledElsewhere` (the `ControlPlane`, `<cluster>-kubeconfig` or `<cluster>-ca` exists with another controller, or none, which the message names), `ControlPlaneNotFound` (an initialized `ControlPlane` is gone), `Deleting` (waiting for the `ControlPlane` to go, unless paused), `CopyOfAnotherObject` (the object carries the UID of another in `controlplane.lodia.io/uid`, §5) |
 | `Paused` | CAPI's pause |
 
 A refused or blocked write, like any other failed one, makes the pass return its error, and the pass is retried with backoff.
@@ -81,7 +81,7 @@ While the `ControlPlane` exists and is the provider's, the pass still copies the
 | Lodia `ControlPlane` | the Cluster's | controller reference to the `LodiaControlPlane`, `blockOwnerDeletion` | `cluster.x-k8s.io/cluster-name` | the spec above |
 | Secret `<cluster>-kubeconfig` | | the same | the same | `value` = key `kubeconfig` of `<cp>-admin-kubeconfig` ([names.go][lo-names-kubeconfig]) |
 | Secret `<cluster>-ca` | | the same | the same | `tls.crt` = key `ca.crt` of `<cp>-ca-bundle` ([names.go][lo-names-ca]); no `tls.key` (§4.3) |
-| annotation `clusterctl.cluster.x-k8s.io/block-move` | on the `LodiaControlPlane` | | | `"true"`, written before the `ControlPlane` is created (§5) |
+| annotations `clusterctl.cluster.x-k8s.io/block-move` and `controlplane.lodia.io/uid` | on the `LodiaControlPlane` | | | `"true"` and the object's own UID, each written when absent, in one patch before the `ControlPlane` is created (§5) |
 
 All three objects are applied server-side as `cluster-api-provider-lodia`, both Secrets with `type: cluster.x-k8s.io/secret` ([common_types.go][api-consts]).
 Before each apply the provider reads the object from the API server, past the cache: when it exists with another controller, or none, the provider leaves it alone and reports `ObjectsControlledElsewhere`, so it never adopts a predecessor's object.
@@ -91,8 +91,8 @@ The `ControlPlane` sits in the Cluster's namespace because owner references neve
 The cache holds no Secret data.
 The provider watches the metadata of Secrets labelled `lodia.io/control-plane` ([labels][lo-labels]), maps `<cp>-admin-kubeconfig` and `<cp>-ca-bundle` to the `LodiaControlPlane` of the Cluster of that name, and reads both, and its own two, from the API server on every pass.
 `ControlPlane` and `Cluster` events map the same way, through the Cluster's `controlPlaneRef`, so a leftover `ControlPlane` of another owner wakes the provider when it goes.
-A pass has a minute ([ReconciliationTimeout][cr-timeout]), and ten passes run at once, as in Lodia's controllers ([workers][lo-workers]), so one tenant's blocked write does not hold up another's.
-The cache resyncs every 10 minutes, Cluster API's default ([--sync-period][capi-sync]), which repairs the provider's own Secrets, which no watch covers, and a missed delete event.
+A pass has a minute ([ReconciliationTimeout][cr-timeout]), and by default ten passes run at once, as in Lodia's controllers ([workers][lo-workers]), so one tenant's blocked write does not hold up another's; `--lodiacontrolplane-concurrency` sets the number.
+The cache resyncs every 10 minutes by default, Cluster API's default ([--sync-period][capi-sync]), which repairs the provider's own Secrets, which no watch covers, and a missed delete event.
 
 RBAC is generated from markers into [`config/rbac/role.yaml`](../config/rbac/role.yaml), except leader election.
 [`leader_election_role.yaml`](../config/rbac/leader_election_role.yaml) grants Leases and Events in the manager's namespace only, and `get` and `update` of Leases only on the one named by `LeaderElectionID`, as [Lodia's leader election Role][lo-leader-election] does.
@@ -102,14 +102,23 @@ In its own namespace they grant `get` and `update` on its own Lease only, and `d
 The ClusterRole's `create` and `get` on Secrets in every namespace, which the copies in each Cluster's namespace need, still let the provider create a `kubernetes.io/service-account-token` Secret for any ServiceAccount and read the token filled in for it ([validation][k8s-sa-secret], [tokens controller][k8s-sa-tokens], [authentication][k8s-sa-auth]), so these limits contain the provider's mistakes, not a compromised provider.
 The envtest suite runs the controller, and a leader-elected manager, as a user bound to the ClusterRole and, in the namespace where the manager elects, to the Role.
 Cluster API's kubeadm bootstrap provider reads the object behind `Cluster.spec.controlPlaneRef` to render `.controlPlane.version` into files with `contentFormat: Template`, and v1.14.0 to v1.15.0-beta.0 read it on every worker join ([v1.14.0][cabpk-files-114], [v1.15.0-beta.0][cabpk-files]), while its ClusterRole grants that only for `kubeadmcontrolplanes` ([RBAC markers][cabpk-rbac]), so [`config/rbac/kubeadm_bootstrap_role.yaml`](../config/rbac/kubeadm_bootstrap_role.yaml) and its binding grant it `get` on `lodiacontrolplanes`.
-The binding names the provider's ServiceAccount in `capi-kubeadm-bootstrap-system`, and clusterctl sets the namespace of every namespaced subject to the installed provider's own ([target namespace][cc-ns], [subjects][cc-subjects]), so a clusterctl install does not deliver the grant yet.
+The binding's subject is a `kind: User`, `system:serviceaccount:${LODIA_KUBEADM_BOOTSTRAP_SA_NAMESPACE:=capi-kubeadm-bootstrap-system}:${LODIA_KUBEADM_BOOTSTRAP_SA_NAME:=capi-kubeadm-bootstrap-manager}`, the name that a ServiceAccount authenticates as ([username][k8s-sa-username]).
+A ServiceAccount subject would not survive clusterctl: it sets the namespace of every subject that has one to the installed provider's own ([target namespace][cc-ns], [subjects][cc-subjects]), and the subject would name an account that does not exist; a User subject has no namespace to rewrite.
+The binding ships in the components YAML with the two variables, which the README documents.
+The e2e asks a SubjectAccessReview for the user and the groups of the installed kubeadm bootstrap provider's ServiceAccount, which must be allowed `get` and denied `update` on `lodiacontrolplanes`, and `test/components` holds that the ClusterRole grants `get` and nothing else.
+The binding is a workaround until the kubeadm bootstrap provider's ClusterRole aggregates a role for reading control planes; [`todo.md`](../todo.md) holds what to undo then.
 Module `go.lodia.io/cluster-api-provider-lodia`, importing `sigs.k8s.io/cluster-api/api` (its own module since v1.14) and `go.lodia.io/lodia/api` ([go.mod][lo-api-gomod]).
 
 ### A pass
 
+Before its first step, a pass refuses a copy: a `LodiaControlPlane` that is not being deleted and whose annotation `controlplane.lodia.io/uid` names a UID other than its own gets `Ready` and `Available` `False` with the reason `CopyOfAnotherObject`, and nothing else is written to it, neither a finalizer, a `Paused` condition, an annotation, a `ControlPlane` nor a Secret (§5).
+A deleting copy skips the refusal, so that its finalizer can go.
+
 1. Wait for the owner reference the Cluster controller writes ([ensureOwnerRefAndLabel][cl-ownerref]), as both reference providers do.
 2. Add the finalizer `controlplane.lodia.io/lodiacontrolplane` ([EnsureFinalizer][finalizers]); then pause ([EnsurePausedCondition][paused-cond]).
-3. Write the block-move annotation and end the pass, so it is stored before anything exists to move.
+3. Write the annotations `clusterctl.cluster.x-k8s.io/block-move` and `controlplane.lodia.io/uid`, each when absent, in one patch that is locked on the resourceVersion the pass read, and end the pass, so that both are stored before anything exists to move or to copy.
+   A patch that does not land fails the pass before anything is applied, and the next pass writes the annotations again.
+   The lock keeps a cache that lags behind from hiding the UID that another object's copy has just been given: an unlocked patch would replace it with this object's own, which the next pass would then trust.
 4. Apply the `ControlPlane`, unless it is gone and the `LodiaControlPlane`, read past the cache, is initialized: then report `ControlPlaneNotFound` and end the pass, since a new one would start with a new CA and an empty etcd and overwrite `<cluster>-ca` and `<cluster>-kubeconfig`.
    The apply carries the UID the read found, so a `ControlPlane` gone in between fails the apply, and the next pass reports it.
 5. Copy the two Secrets from Lodia's, each when its source exists, holds its key and the `ControlPlane` controls it, so a source without its key leaves the last good copy; then copy the status.
@@ -120,6 +129,25 @@ The provider deletes the `ControlPlane` and keeps its finalizer until a read pas
 A `ControlPlane` of another controller is left alone.
 Once the `Cluster` or the owner reference is gone, nothing is left to wait for: the provider removes its finalizer, and the garbage collector deletes the `ControlPlane` and the copies, which the `LodiaControlPlane` owns.
 The `cluster.x-k8s.io/paused` annotation on the `LodiaControlPlane` holds this removal too; with the owner reference gone the `Cluster`'s `spec.paused` cannot be read, so it does not hold it.
+
+### The manager
+
+The binary takes the flags of Cluster API's kubeadm control plane provider that apply here, under their names and with their defaults, but for the concurrency: `--lodiacontrolplane-concurrency` defaults to 10, where that provider's `--kubeadmcontrolplane-concurrency` defaults to [100][kcp-concurrency] ([InitFlags][kcp-flags]); the [README](../README.md#manager-flags) lists them and sorts the fields of cluster-api-operator's `spec.manager` by what they do to the manager.
+It does not define `--feature-gates`, `--webhook-port` or `--webhook-cert-dir`, which that provider defines because it has gates and webhooks, and a flag it does not define makes it exit at start.
+
+- Logging goes through klog, as in that provider.
+  The operator writes `--v` for any verbosity but 1, and the diagnostics endpoint's `/debug/flags/v` sets klog's level, which a zap logger would not read ([util/flags][capi-flags]).
+- Diagnostics are `util/flags`' metrics server on `--diagnostics-address`: HTTPS with authentication and authorization, which the `tokenreviews` and `subjectaccessreviews` rules of the ClusterRole are for, and with the pprof endpoints and `/debug/flags/v`; `--insecure-diagnostics` serves plain HTTP with none of them ([util/flags][capi-flags]).
+  The manifest takes both flags from the clusterctl variables that Cluster API documents for every provider.
+- `--namespace` sets the cache's `DefaultNamespaces`.
+  Every object the controller reads or writes is in the `LodiaControlPlane`'s namespace, Lodia's Secrets included, and nothing it reads is cluster-scoped, so the limit holds for all of it.
+  The shipped RBAC stays a ClusterRole, since clusterctl installs every provider watching all namespaces ([contract][cc-components]).
+- `--watch-filter` puts [`ResourceHasFilterLabel`][capi-filter] on the watches of the `LodiaControlPlane` and the `Cluster`.
+  Lodia's `ControlPlane` and the Secrets carry no such label, so their map functions read the `Cluster` and enqueue only when it has the label ([`HasWatchLabel`][capi-haslabel]).
+  The filter is not on the cache, which would hide Lodia's objects, and the label is not copied onto Lodia's `ControlPlane`.
+  It holds for a Cluster and a `LodiaControlPlane` that carry the same label; a pair that disagrees is not supported, and the README says so ([manager flags](../README.md#manager-flags)).
+- `--lodiacontrolplane-concurrency` is the controller's `MaxConcurrentReconciles`, and a pass has one minute, hard-coded: Cluster API's kubeadm control plane provider gives its passes [three minutes][kcp-timeout] because they connect to every etcd member.
+- Several instances of the provider from the released YAML are not supported, for the reasons the README gives; `--namespace` and `--watch-filter` are there for the contract and for the operator.
 
 ## 3. The flow
 
@@ -193,9 +221,20 @@ Lodia's availability is a failure tolerance (`highAvailability`) with replica co
 **Risks**
 
 1. *`clusterctl move`* re-creates the objects elsewhere and deletes the source ones ([deleteSourceObject][move-delete]); the `ControlPlane` would follow its owner into garbage collection.
-   Every `LodiaControlPlane` carries `clusterctl.cluster.x-k8s.io/block-move`, which makes move wait and fail before it creates anything ([annotation][move-ann], [wait][move-wait]): a hosted control plane does not move.
+   Every `LodiaControlPlane` carries `clusterctl.cluster.x-k8s.io/block-move` for good, which makes move wait and fail before it creates anything ([annotation][move-ann], [wait][move-wait]): a hosted control plane does not move.
    Both CRDs carry `clusterctl.cluster.x-k8s.io`, the label move finds CRDs by ([discovery][move-crds]), so the annotation is seen on an installation made by hand too.
-   The Clusters and ClusterClasses stay paused after that failure ([move][move-pause]): set each Cluster's `spec.paused` back to `false` and remove each ClusterClass's `cluster.x-k8s.io/paused` annotation.
+   The refusal costs a wait of about six minutes, and the Clusters and ClusterClasses stay paused after the failure ([move][move-pause]): set each Cluster's `spec.paused` back to `false` and remove each ClusterClass's `cluster.x-k8s.io/paused` annotation.
+   A move takes one namespace with no filter for a Cluster, so one `LodiaControlPlane` blocks every Cluster of its namespace, and `--dry-run` skips the wait and reports success.
+   The annotation is permanent because a paused `LodiaControlPlane` is not reconciled, so the provider could not put it back during a move; with it removed by hand, a live move deletes the source `LodiaControlPlane`, the garbage collector deletes Lodia's `ControlPlane`, and Lodia's `lodia.io/datastore` finalizer ends with its etcd deleted ([finalizer][lo-finalizer]); the refusal of a copy only keeps the target from building an empty control plane, so the Cluster has none in either management cluster.
+   The README says never to remove it.
+   `move --to-directory` followed by `--from-directory`, which never read the annotation, a restore from a backup of the Cluster API objects, and a move after `block-move` was removed by hand each leave a `LodiaControlPlane` with a new UID, and a copy of another object, in a management cluster.
+   Without a refusal the provider would find no `ControlPlane` for it, build a new one with a new CA and an empty etcd, and overwrite both Secrets, silently.
+   The provider records the UID the object had when it first reconciled it in the annotation `controlplane.lodia.io/uid`, and every pass compares it with the object's UID before anything else, `block-move` included; a mismatch builds nothing and sets the condition reason `CopyOfAnotherObject` (§2, A pass).
+   The annotation is written only when absent, together with `block-move` and before the first apply of the `ControlPlane`, and a pass whose patch did not land applies nothing.
+   A copy that a live move left after `block-move` was removed by hand carries the source's UID and no `block-move`, and is refused like any other, since the comparison runs before the step that writes `block-move`.
+   A refused copy never deletes or adopts a `ControlPlane` or Secret it did not create: its deletion removes only its own finalizer, and a `ControlPlane` of the same name stays.
+   A user who wants a new, empty control plane for the copy removes the annotation; an object created from a manifest never carries it, so recreating a Cluster from GitOps is unaffected.
+   Lodia's `lodia.io/sealed-uid` guards its Backups the same way ([sealed-uid][lo-sealed]).
 2. *The endpoint is copied once* ([Cluster controller][cl-cp-endpoint]): a LoadBalancer Service recreated with a new address, or in node port mode the loss of the node the endpoint names ([field reference][lo-ref-nodeport]), leaves the Cluster, and every later join, on the old address.
 3. *MachineHealthCheck against the controller manager hold.* When nodes are cut off from the control plane, Lodia holds the controller manager so nothing evicts their pods ([README][lo-readme-health]); an MHC sees the same nodes NotReady and replaces the Machines.
    Recommend `remediation.triggerIf.unhealthyLessThanOrEqualTo` below Lodia's hold fraction, 0.6 ([MHC][mhc], [configuration][lo-readme-config]).
@@ -289,6 +328,12 @@ Lodia's availability is a failure tolerance (`highAvailability`) with replica co
 [rbac-agg]: https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/core/config/rbac/aggregated_role.yaml#L8
 [cc-ns]: https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/cmd/clusterctl/client/repository/components.go#L242-L257
 [cc-subjects]: https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/cmd/clusterctl/client/repository/components.go#L349-L361
+[kcp-flags]: https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/controlplane/kubeadm/main.go#L128-L217
+[kcp-concurrency]: https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/controlplane/kubeadm/main.go#L160-L161
+[kcp-timeout]: https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/controlplane/kubeadm/main.go#L446-L447
+[capi-flags]: https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/util/flags/manager.go#L95-L157
+[capi-filter]: https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/util/predicates/generic_predicates.go#L161-L177
+[capi-haslabel]: https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/util/labels/helpers.go#L71-L77
 
 <!-- controller-runtime, kubeadm, Kubernetes -->
 [cr-timeout]: https://github.com/kubernetes-sigs/controller-runtime/blob/v0.25.2/pkg/config/controller.go#L96-L98
@@ -300,6 +345,7 @@ Lodia's availability is a failure tolerance (`highAvailability`) with replica co
 [k8s-sa-secret]: https://github.com/kubernetes/kubernetes/blob/v1.37.2/pkg/apis/core/validation/validation.go#L8104-L8109
 [k8s-sa-tokens]: https://github.com/kubernetes/kubernetes/blob/v1.37.2/pkg/controller/serviceaccount/tokens_controller.go#L310-L327
 [k8s-sa-auth]: https://github.com/kubernetes/kubernetes/blob/v1.37.2/pkg/serviceaccount/legacy.go#L87-L153
+[k8s-sa-username]: https://github.com/kubernetes/kubernetes/blob/v1.35.0/staging/src/k8s.io/apiserver/pkg/authentication/serviceaccount/util.go#L53-L57
 
 <!-- the reference providers -->
 [kp-patchcluster]: https://github.com/clastix/cluster-api-control-plane-provider-kamaji/blob/v0.21.0/controllers/kamajicontrolplane_controller_cluster_patch.go#L104-L151
@@ -324,6 +370,8 @@ Lodia's availability is a failure tolerance (`highAvailability`) with replica co
 [lo-workers]: https://github.com/lodia-io/lodia/blob/57375832e7fe8b3a06374613797eb4c544fe7612/internal/operator/operator.go#L40-L42
 [lo-labels]: https://github.com/lodia-io/lodia/blob/57375832e7fe8b3a06374613797eb4c544fe7612/api/v1alpha1/labels.go#L17-L20
 [lo-leader-election]: https://github.com/lodia-io/lodia/blob/57375832e7fe8b3a06374613797eb4c544fe7612/charts/lodia/templates/rbac.yaml#L58-L75
+[lo-finalizer]: https://github.com/lodia-io/lodia/blob/57375832e7fe8b3a06374613797eb4c544fe7612/api/v1alpha1/labels.go#L79-L81
+[lo-sealed]: https://github.com/lodia-io/lodia/blob/57375832e7fe8b3a06374613797eb4c544fe7612/api/v1alpha1/labels.go#L83-L88
 
 <!-- Lodia at 5f212ed -->
 [lo-claude]: https://github.com/lodia-io/lodia/blob/5f212ed9acd71fe2a944e5fe63cad73e3d17812e/CLAUDE.md?plain=1#L53-L54

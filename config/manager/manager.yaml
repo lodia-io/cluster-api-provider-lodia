@@ -37,9 +37,11 @@ spec:
         image: ko://go.lodia.io/cluster-api-provider-lodia/cmd/cluster-api-provider-lodia
         args:
         - --leader-elect
+        - --diagnostics-address=${CAPI_DIAGNOSTICS_ADDRESS:=:8443}
+        - --insecure-diagnostics=${CAPI_INSECURE_DIAGNOSTICS:=false}
         ports:
         - name: healthz
-          containerPort: 8081
+          containerPort: 9440
           protocol: TCP
         - name: metrics
           containerPort: 8443

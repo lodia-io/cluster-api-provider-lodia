@@ -18,10 +18,7 @@ import (
 	"sigs.k8s.io/e2e-framework/pkg/envconf"
 )
 
-var (
-	testenv env.Environment
-	root    = filepath.Join("..", "..")
-)
+var testenv env.Environment
 
 func TestMain(m *testing.M) {
 	path := os.Getenv("E2E_KUBECONFIG")
@@ -45,22 +42,20 @@ func dump(ctx context.Context, cfg *envconf.Config) {
 }
 
 func install(ctx context.Context, cfg *envconf.Config) (context.Context, error) {
-	bounded, cancel := context.WithTimeout(ctx, bounds.Install)
+	bounded, cancel := endAfter(ctx, bounds.Install)
 	defer cancel()
 	for _, component := range []struct {
 		name    string
 		install func(context.Context, *envconf.Config) error
 	}{
 		{"cert-manager", installCertManager},
-		{"Cluster API and the kubeadm bootstrap provider", installClusterAPI},
-		{"Cluster API provider Docker", installCAPD},
 		{"Lodia", installLodia},
-		{"the provider", installProvider},
+		{"Cluster API, the kubeadm bootstrap provider, Cluster API provider Docker and this provider, through clusterctl", installProviders},
 	} {
 		start := time.Now()
 		if err := component.install(bounded, cfg); err != nil {
 			dump(ctx, cfg)
-			return ctx, fmt.Errorf("install %s: %w", component.name, err)
+			return ctx, fmt.Errorf("install %s: %w", component.name, cutShort(bounded, err))
 		}
 		fmt.Printf("installed %s after %s\n", component.name, time.Since(start).Round(time.Second))
 	}

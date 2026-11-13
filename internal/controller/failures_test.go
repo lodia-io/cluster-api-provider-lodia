@@ -16,6 +16,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	corev1ac "k8s.io/client-go/applyconfigurations/core/v1"
+	"k8s.io/client-go/rest"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	"sigs.k8s.io/cluster-api/util/secret"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -225,14 +226,39 @@ func TestATransientErrorReadingInitializationCreatesNothing(t *testing.T) {
 	absent(t, controlPlaneOf(cluster))
 }
 
-func TestTheControllerRunsTenWorkersAndBoundsAPass(t *testing.T) {
-	options := controller.ControllerOptions()
-	if options.MaxConcurrentReconciles != 10 || options.ReconciliationTimeout != time.Minute {
+func TestTheControllerRunsTheConfiguredWorkersAndBoundsAPass(t *testing.T) {
+	options := controller.ControllerOptions(controller.Config{Concurrency: 7})
+	if options.MaxConcurrentReconciles != 7 || options.ReconciliationTimeout != time.Minute {
 		t.Errorf("options %+v", options)
 	}
 }
 
 func TestOneTenantsBlockedWriteDoesNotHoldUpAnother(t *testing.T) {
+	blockTenantA(t, 10, func(ns string) {
+		second, _ := create(t, ns, "tenant-b")
+		cp := controlPlaneOf(second)
+		eventually(t, func() error { return k8s.Get(t.Context(), client.ObjectKeyFromObject(cp), cp) })
+	})
+}
+
+func TestOneWorkerHoldsUpTheTenantBehindABlockedWrite(t *testing.T) {
+	blockTenantA(t, 1, func(ns string) {
+		second, _ := create(t, ns, "tenant-b")
+		consistently(t, func() error {
+			cp := controlPlaneOf(second)
+			switch err := k8s.Get(t.Context(), client.ObjectKeyFromObject(cp), cp); {
+			case err == nil:
+				return errors.New("tenant B's ControlPlane exists while tenant A's write is blocked")
+			case !apierrors.IsNotFound(err):
+				return err
+			}
+			return nil
+		})
+	})
+}
+
+func blockTenantA(t *testing.T, workers int, whileBlocked func(ns string)) {
+	t.Helper()
 	c, err := client.NewWithWatch(asController, client.Options{Scheme: controller.Scheme()})
 	if err != nil {
 		t.Fatal(err)
@@ -240,24 +266,26 @@ func TestOneTenantsBlockedWriteDoesNotHoldUpAnother(t *testing.T) {
 	release := make(chan struct{})
 	blocked := make(chan bool, 1)
 	ns := namespace(t)
-	startManagerWith(t, ns, func(ctrl.Manager) client.Client {
-		return interceptor.NewClient(c, interceptor.Funcs{
-			Apply: func(ctx context.Context, c client.WithWatch, obj runtime.ApplyConfiguration, opts ...client.ApplyOption) error {
-				if a, ok := obj.(interface{ GetName() string }); ok && a.GetName() == "tenant-a" {
-					_, deadline := ctx.Deadline()
-					select {
-					case blocked <- deadline:
-					default:
+	startManagerWith(t, controller.Config{Namespace: ns, Concurrency: workers}, func(options *ctrl.Options) {
+		options.NewClient = func(*rest.Config, client.Options) (client.Client, error) {
+			return interceptor.NewClient(c, interceptor.Funcs{
+				Apply: func(ctx context.Context, c client.WithWatch, obj runtime.ApplyConfiguration, opts ...client.ApplyOption) error {
+					if a, ok := obj.(interface{ GetName() string }); ok && a.GetName() == "tenant-a" {
+						_, deadline := ctx.Deadline()
+						select {
+						case blocked <- deadline:
+						default:
+						}
+						select {
+						case <-release:
+						case <-ctx.Done():
+							return ctx.Err()
+						}
 					}
-					select {
-					case <-release:
-					case <-ctx.Done():
-						return ctx.Err()
-					}
-				}
-				return c.Apply(ctx, obj, opts...)
-			},
-		})
+					return c.Apply(ctx, obj, opts...)
+				},
+			}), nil
+		}
 	})
 
 	first, _ := create(t, ns, "tenant-a")
@@ -270,9 +298,7 @@ func TestOneTenantsBlockedWriteDoesNotHoldUpAnother(t *testing.T) {
 		t.Fatal("tenant A never reached its apply")
 	}
 
-	second, _ := create(t, ns, "tenant-b")
-	cp := controlPlaneOf(second)
-	eventually(t, func() error { return k8s.Get(t.Context(), client.ObjectKeyFromObject(cp), cp) })
+	whileBlocked(ns)
 
 	close(release)
 	held := controlPlaneOf(first)

@@ -17,8 +17,10 @@ import (
 )
 
 type boundSet struct {
-	Install, Dump                                                                                time.Duration
-	Apply, Initialized, Endpoint, Kindnet, Running, Ready, Konnectivity, Pod, Available, Deleted time.Duration
+	Install, Dump                                                                                                time.Duration
+	Apply, Initialized, Endpoint, Kindnet, Running, Ready, Konnectivity, Pod, Available, Move, Unpaused, Deleted time.Duration
+	Deployed, ScaleUp, ScaleReady, ScaleAgents, ScaleDown, Rescheduled                                           time.Duration
+	Owners, OwnersPaused, OwnersRestored, Finalizers, FinalizersPaused, FinalizersRestored, Settled, Stable      time.Duration
 }
 
 // bounds holds every wait of the suite. A step's own bound has to fail before
@@ -35,16 +37,34 @@ var bounds = boundSet{
 	Konnectivity: 2 * time.Minute,
 	Pod:          2 * time.Minute,
 	Available:    time.Minute,
+	Move:         20 * time.Second,
+	Unpaused:     30 * time.Second,
+	Deployed:     time.Minute,
+	ScaleUp:      3 * time.Minute,
+	ScaleReady:   3 * time.Minute,
+	ScaleAgents:  2 * time.Minute,
+	ScaleDown:    3 * time.Minute,
+	Rescheduled:  2 * time.Minute,
 	Deleted:      3 * time.Minute,
+
+	Owners:             30 * time.Second,
+	OwnersPaused:       30 * time.Second,
+	OwnersRestored:     2 * time.Minute,
+	Finalizers:         30 * time.Second,
+	FinalizersPaused:   30 * time.Second,
+	FinalizersRestored: time.Minute,
+	Settled:            2 * time.Minute,
+	Stable:             2 * time.Minute,
 }
 
 const (
 	// callsWithoutBound covers the calls between the waits, of which the first
 	// to fail ends the test, and what a poll overshoots by.
 	callsWithoutBound = 2 * time.Minute
-	// outsideTheBinary is what the job spends beyond -timeout: the build before
-	// the binary starts, go test's minute of grace, and the removal of the
-	// containers and the cluster.
+	// outsideTheBinary is what the job spends beyond -timeout: its steps before
+	// make e2e, the runner's disk among them, the build before the binary
+	// starts, go test's minute of grace, and the removal of the containers and
+	// the cluster.
 	outsideTheBinary = 10 * time.Minute
 )
 
@@ -72,7 +92,28 @@ var workerDumpBound = 30 * time.Second
 
 var dockerCallBound = 30 * time.Second
 
-var goTestTimeout = regexp.MustCompile(`-timeout (\d+)m\b`)
+var (
+	goTest        = regexp.MustCompile(`(?m)^.*\bgo test\b.*$`)
+	goTestTimeout = regexp.MustCompile(`-timeout (\d+)m\b`)
+)
+
+func e2eTimeout(makefile []byte) (time.Duration, error) {
+	var recipes [][]byte
+	for _, line := range goTest.FindAll(makefile, -1) {
+		if strings.Contains(string(line), "-tags e2e") {
+			recipes = append(recipes, line)
+		}
+	}
+	if len(recipes) != 1 {
+		return 0, fmt.Errorf("the Makefile has %d lines that run go test with -tags e2e, want the e2e target's alone", len(recipes))
+	}
+	found := goTestTimeout.FindSubmatch(recipes[0])
+	if found == nil {
+		return 0, fmt.Errorf("the e2e target's go test has no -timeout in minutes: %s", recipes[0])
+	}
+	n, err := strconv.Atoi(string(found[1]))
+	return time.Duration(n) * time.Minute, err
+}
 
 func total(b boundSet) time.Duration {
 	var sum time.Duration
@@ -94,10 +135,11 @@ func fits(bounded, timeout, limit time.Duration) error {
 
 // Nothing stops a discovery once the context has ended, and it asks /api,
 // /apis and a group's version, each with the request timeout: a call can end
-// three request timeouts after its bound.
-func requestFits(whose string, requestTimeout time.Duration) error {
-	if requestTimeout <= 0 || 3*requestTimeout > callsWithoutBound {
-		return fmt.Errorf("%s request timeout %s is not positive, or three of them are more than the %s left for the calls without a bound: a call to a cluster that does not answer could overshoot its bound by that much", whose, requestTimeout, callsWithoutBound)
+// three request timeouts after its bound. The first call of a client that a
+// step opens between its waits asks its own request besides, a fourth.
+func requestFits(whose string, requestTimeout time.Duration, requests int) error {
+	if requestTimeout <= 0 || time.Duration(requests)*requestTimeout > callsWithoutBound {
+		return fmt.Errorf("%s request timeout %s is not positive, or %d of them are more than the %s left for the calls without a bound: a call to a cluster that does not answer could overshoot its bound by that much", whose, requestTimeout, requests, callsWithoutBound)
 	}
 	return nil
 }
@@ -108,11 +150,30 @@ func clientFits(requestTimeout, discovery time.Duration) error {
 	if requestTimeout <= apiServerRequestTimeout {
 		return fmt.Errorf("the client's request timeout %s is not above the %s that kube-apiserver gives a request: it could cut a call that the server would answer", requestTimeout, apiServerRequestTimeout)
 	}
-	if err := requestFits("the steps' discovery", discovery); err != nil {
+	if err := requestFits("the steps' discovery", discovery, 3); err != nil {
 		return err
 	}
 	if 3*discovery+requestTimeout > callsWithoutBound {
 		return fmt.Errorf("a call through the client can take three discovery requests of %s and then its own of %s, more than the %s left for the calls without a bound", discovery, requestTimeout, callsWithoutBound)
+	}
+	return nil
+}
+
+// clusterctl's calls go through the suite's Proxy, with the client's two
+// timeouts, and only their context ends what they ask. What they ask without one
+// is a discovery: the version check of EnsureCustomResourceDefinitions, one
+// request, and the first call of a client, up to three. The call after the
+// version check runs in a retry that returns on an ended context before its
+// first attempt, and a client asks nothing until its first call, so a call to a
+// cluster that answers each of them just inside the timeout ends after its
+// bound at most one client's three requests, never the version check besides;
+// the model counts the four as margin. The requests with a context, which the
+// client's timeout above the API server's keeps whole, end with it.
+// https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/cmd/clusterctl/client/cluster/inventory.go#L146-L158
+// https://github.com/kubernetes/apimachinery/blob/v0.37.2/pkg/util/wait/backoff.go#L494-L499
+func clusterctlFits(discovery time.Duration) error {
+	if discovery <= 0 || 4*discovery > callsWithoutBound {
+		return fmt.Errorf("the discovery timeout %s of clusterctl's calls is not positive, or four of them are more than the %s left for the calls without a bound: a call of clusterctl to a cluster that answers each just in time could overshoot its bound by that much", discovery, callsWithoutBound)
 	}
 	return nil
 }
@@ -126,11 +187,21 @@ func dockerFits(bound time.Duration) error {
 	return nil
 }
 
+// A pause that fails at its bound ends with one more call, the unpause, which
+// has a bound of its own. The call that the bound cut short can run on by a
+// discovery, and the unpause by another, which a context does not end.
+func unpauseFits(bound, discovery time.Duration) error {
+	if bound <= 0 || discovery <= 0 || bound+2*3*discovery > callsWithoutBound {
+		return fmt.Errorf("the unpause's bound %s or the discovery timeout %s is not positive, or the unpause's bound and two discoveries of three requests, the one that its step's bound cuts short and its own, are more than the %s left for the calls without a bound: a cluster that stops answering would hold a pausing step past its bound by that much", bound, discovery, callsWithoutBound)
+	}
+	return nil
+}
+
 // The workers go first and a docker that hangs uses their whole bound: what
 // remains of the dump has to hold the tenant's bound and as much again for the
 // kind cluster's lists.
 func tenantFits(requestTimeout, workerBound, dumpBound, dump time.Duration) error {
-	if err := requestFits("the tenant's", requestTimeout); err != nil {
+	if err := requestFits("the tenant's", requestTimeout, 4); err != nil {
 		return err
 	}
 	if workerBound <= 0 || dumpBound <= 0 || workerBound+2*dumpBound >= dump {
@@ -144,11 +215,7 @@ func TestTheBoundsFitUnderTheTimeouts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	found := goTestTimeout.FindSubmatch(makefile)
-	if found == nil {
-		t.Fatal("the Makefile runs go test with no -timeout")
-	}
-	n, err := strconv.Atoi(string(found[1]))
+	timeout, err := e2eTimeout(makefile)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -168,19 +235,25 @@ func TestTheBoundsFitUnderTheTimeouts(t *testing.T) {
 	if limit == 0 {
 		t.Fatal("the e2e job has no timeout-minutes")
 	}
-	if err := fits(total(bounds), time.Duration(n)*time.Minute, time.Duration(limit)*time.Minute); err != nil {
+	if err := fits(total(bounds), timeout, time.Duration(limit)*time.Minute); err != nil {
 		t.Fatal(err)
 	}
 	if err := tenantFits(tenantRequestTimeout, workerDumpBound, tenantDumpBound, bounds.Dump); err != nil {
 		t.Fatal(err)
 	}
-	if err := requestFits("the dump's", dumpRequestTimeout); err != nil {
+	if err := requestFits("the dump's", dumpRequestTimeout, 3); err != nil {
 		t.Fatal(err)
 	}
 	if err := clientFits(clientRequestTimeout, discoveryTimeout); err != nil {
 		t.Fatal(err)
 	}
+	if err := clusterctlFits(discoveryTimeout); err != nil {
+		t.Fatal(err)
+	}
 	if err := dockerFits(dockerCallBound); err != nil {
+		t.Fatal(err)
+	}
+	if err := unpauseFits(unpauseBound, discoveryTimeout); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -258,6 +331,32 @@ func TestClientTimesThatDoNotFitAreRefused(t *testing.T) {
 	}
 }
 
+func TestClusterctlTimesThatDoNotFitAreRefused(t *testing.T) {
+	const second = time.Second
+	cases := []struct {
+		name      string
+		discovery time.Duration
+		want      string
+	}{
+		{"a discovery of 10 seconds", 10 * second, ""},
+		{"a discovery of 30 seconds, four of which are the calls' whole room", 30 * second, ""},
+		{"a discovery of 31 seconds", 31 * second, "four of them"},
+		{"no discovery timeout", 0, "four of them"},
+		{"a negative discovery timeout", -second, "four of them"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			err := clusterctlFits(c.discovery)
+			switch {
+			case c.want == "" && err != nil:
+				t.Fatalf("want accepted, got %v", err)
+			case c.want != "" && (err == nil || !strings.Contains(err.Error(), c.want)):
+				t.Fatalf("want an error with %q, got %v", c.want, err)
+			}
+		})
+	}
+}
+
 func TestDockerCallBoundsThatDoNotFitAreRefused(t *testing.T) {
 	const second = time.Second
 	cases := []struct {
@@ -285,6 +384,36 @@ func TestDockerCallBoundsThatDoNotFitAreRefused(t *testing.T) {
 	}
 }
 
+func TestUnpauseBoundsThatDoNotFitAreRefused(t *testing.T) {
+	const second = time.Second
+	cases := []struct {
+		name             string
+		bound, discovery time.Duration
+		want             string
+	}{
+		{"a bound of 30 seconds with a discovery of 10", 30 * second, 10 * second, ""},
+		{"a bound of 60 seconds with a discovery of 10, the calls' whole room", 60 * second, 10 * second, ""},
+		{"a bound of 61 seconds with a discovery of 10", 61 * second, 10 * second, "the unpause's bound"},
+		{"a bound of 30 seconds with a discovery of 15", 30 * second, 15 * second, ""},
+		{"a bound of 30 seconds with a discovery of 16", 30 * second, 16 * second, "the unpause's bound"},
+		{"no bound", 0, 10 * second, "the unpause's bound"},
+		{"a negative bound", -second, 10 * second, "the unpause's bound"},
+		{"no discovery timeout", 30 * second, 0, "the unpause's bound"},
+		{"a negative discovery timeout", 30 * second, -second, "the unpause's bound"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			err := unpauseFits(c.bound, c.discovery)
+			switch {
+			case c.want == "" && err != nil:
+				t.Fatalf("want accepted, got %v", err)
+			case c.want != "" && (err == nil || !strings.Contains(err.Error(), c.want)):
+				t.Fatalf("want an error with %q, got %v", c.want, err)
+			}
+		})
+	}
+}
+
 func TestTenantTimesThatDoNotFitAreRefused(t *testing.T) {
 	const second = time.Second
 	cases := []struct {
@@ -292,8 +421,8 @@ func TestTenantTimesThatDoNotFitAreRefused(t *testing.T) {
 		requestTimeout, workerBound, dumpBound, dump time.Duration
 		want                                         string
 	}{
-		{"a request timeout of 40 seconds against 120", 40 * second, 30 * second, 30 * second, 120 * second, ""},
-		{"a request timeout of 41 seconds against 120", 41 * second, 30 * second, 30 * second, 120 * second, "request timeout"},
+		{"a request timeout of 30 seconds against 120, four of which fill it", 30 * second, 30 * second, 30 * second, 120 * second, ""},
+		{"a request timeout of 31 seconds against 120", 31 * second, 30 * second, 30 * second, 120 * second, "request timeout"},
 		{"no request timeout", 0, 30 * second, 30 * second, 120 * second, "request timeout"},
 		{"a negative request timeout", -second, 30 * second, 30 * second, 120 * second, "request timeout"},
 		{"a tenant dump of 44 seconds after workers of 30 against 120", 30 * second, 30 * second, 44 * second, 120 * second, ""},
@@ -313,6 +442,38 @@ func TestTenantTimesThatDoNotFitAreRefused(t *testing.T) {
 				t.Fatalf("want accepted, got %v", err)
 			case c.want != "" && (err == nil || !strings.Contains(err.Error(), c.want)):
 				t.Fatalf("want an error with %q, got %v", c.want, err)
+			}
+		})
+	}
+}
+
+func TestTheE2ETimeoutIsTheOneOfTheTargetThatRunsTheSuite(t *testing.T) {
+	const suite = "\tgo test -v -tags e2e -count=1 -timeout 64m ./test/e2e/...; status=$$?; \\\n"
+	cases := []struct {
+		name, makefile string
+		want           time.Duration
+		failure        string
+	}{
+		{"the e2e target's alone", "e2e:\n" + suite, 64 * time.Minute, ""},
+		{"a target before it with a longer timeout", "test:\n\tgo test -timeout 99m ./...\ne2e:\n" + suite, 64 * time.Minute, ""},
+		{"a target before it with a shorter timeout", "test:\n\tgo test -timeout 5m ./...\ne2e:\n" + suite, 64 * time.Minute, ""},
+		{"a target after it with a timeout", "e2e:\n" + suite + "test:\n\tgo test -timeout 99m ./...\n", 64 * time.Minute, ""},
+		{"the flags in another order", "e2e:\n\tgo test -timeout 30m -tags e2e ./test/e2e/...\n", 30 * time.Minute, ""},
+		{"no timeout", "e2e:\n\tgo test -tags e2e ./test/e2e/...\n", 0, "no -timeout in minutes"},
+		{"a timeout in seconds", "e2e:\n\tgo test -tags e2e -timeout 3600s ./test/e2e/...\n", 0, "no -timeout in minutes"},
+		{"no line for the suite", "test:\n\tgo test ./...\n", 0, "0 lines"},
+		{"two lines for the suite", "e2e:\n" + suite + "again:\n" + suite, 0, "2 lines"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got, err := e2eTimeout([]byte(c.makefile))
+			switch {
+			case c.failure == "" && err != nil:
+				t.Fatalf("want accepted, got %v", err)
+			case c.failure != "" && (err == nil || !strings.Contains(err.Error(), c.failure)):
+				t.Fatalf("want an error with %q, got %v", c.failure, err)
+			case got != c.want:
+				t.Errorf("got %s, want %s", got, c.want)
 			}
 		})
 	}

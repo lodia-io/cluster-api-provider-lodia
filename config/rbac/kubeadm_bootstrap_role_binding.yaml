@@ -8,6 +8,8 @@ roleRef:
   kind: ClusterRole
   name: capi-kubeadm-bootstrap-lodia-controlplane
 subjects:
-- kind: ServiceAccount
-  name: capi-kubeadm-bootstrap-manager
-  namespace: capi-kubeadm-bootstrap-system
+# clusterctl sets the namespace of every subject that has one to the provider's own, so a ServiceAccount subject would name a ServiceAccount that does not exist: the subject is the user that the ServiceAccount authenticates as, whose namespace and name are variables.
+# https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/cmd/clusterctl/client/repository/components.go#L349-L384
+- apiGroup: rbac.authorization.k8s.io
+  kind: User
+  name: system:serviceaccount:${LODIA_KUBEADM_BOOTSTRAP_SA_NAMESPACE:=capi-kubeadm-bootstrap-system}:${LODIA_KUBEADM_BOOTSTRAP_SA_NAME:=capi-kubeadm-bootstrap-manager}

@@ -6,6 +6,7 @@ package e2e
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -17,6 +18,7 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
@@ -47,22 +49,48 @@ func tenantRESTConfig(ctx context.Context, k8s client.Reader, key client.ObjectK
 	return cfg, nil
 }
 
-func openTenant(ctx context.Context, t *testing.T, k8s client.Client, key client.ObjectKey, timeout time.Duration) *tenantAccess {
-	t.Helper()
+func newTenantAccess(ctx context.Context, k8s client.Reader, key client.ObjectKey, timeout time.Duration) (*tenantAccess, error) {
 	cfg, err := tenantRESTConfig(ctx, k8s, key, timeout)
 	if err != nil {
-		t.Fatal(err)
+		return nil, err
 	}
 	c, err := client.New(cfg, client.Options{})
 	if err != nil {
-		t.Fatal(err)
+		return nil, err
 	}
 	r, err := resources.New(cfg)
 	if err != nil {
+		return nil, err
+	}
+	return &tenantAccess{cfg: cfg, client: c, resources: r}, nil
+}
+
+func openTenant(ctx context.Context, t *testing.T, k8s client.Client, key client.ObjectKey, timeout time.Duration) *tenantAccess {
+	t.Helper()
+	tenant, err := newTenantAccess(ctx, k8s, key, timeout)
+	if err != nil {
 		t.Fatal(err)
 	}
-	t.Logf("the tenant's API server %s is reached through %s", cfg.Host, secret.Name(key.Name, secret.Kubeconfig))
-	return &tenantAccess{cfg: cfg, client: c, resources: r}
+	t.Logf("the tenant's API server %s is reached through %s", tenant.cfg.Host, secret.Name(key.Name, secret.Kubeconfig))
+	return tenant
+}
+
+// Cluster API reads <cluster>-kubeconfig only when its ClusterCache connects
+// and keeps the connection until its own credential is refused, so a Secret
+// rewritten after the first join reaches the drain and the Node's deletion
+// only on a reconnect. Opening the tenant again is what reads the Secret as the
+// provider holds it now, and the read proves that its credential authenticates.
+// https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/controllers/clustercache/cluster_cache.go#L496-L507
+// https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/controllers/clustercache/cluster_accessor.go#L327-L342
+func reopenTenant(ctx context.Context, k8s client.Reader, key client.ObjectKey) (*tenantAccess, error) {
+	tenant, err := newTenantAccess(ctx, k8s, key, tenantRequestTimeout)
+	if err != nil {
+		return nil, err
+	}
+	if err := tenant.client.List(ctx, &corev1.NodeList{}, client.Limit(1)); err != nil {
+		return nil, fmt.Errorf("the tenant does not accept the credential of Secret %s: %w", secret.Name(key.Name, secret.Kubeconfig), err)
+	}
+	return tenant, nil
 }
 
 func tenantThatNeverCompletesTLS(t *testing.T) (string, func() int) {
@@ -203,10 +231,86 @@ func TestTheDumpOfATenantThatDoesNotAnswerEndsInItsBoundAndWritesTheWorkers(t *t
 			}
 			requireFiles(t, d.dir, map[string]string{"worker/worker/journal.log": "journalctl"})
 			if n := stalls(); n <= len(tenantObjects)/2 {
-				t.Errorf("only %d of the %d lists reached the tenant: each should be cut off after a sixth of its bound", n, len(tenantObjects))
+				t.Errorf("only %d of the %d lists reached the tenant: each should be cut off after 1/%d of its bound", n, len(tenantObjects), len(tenantObjects))
 			}
 		})
 	}
+}
+
+func tenantThatAccepts(t *testing.T, token string) string {
+	t.Helper()
+	healthy := tenantHandler(t)
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer "+token {
+			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			return
+		}
+		healthy.ServeHTTP(w, r)
+	}))
+	t.Cleanup(server.Close)
+	return server.URL
+}
+
+func TestTheTenantIsOpenedAgainFromTheSecretAsTheProviderHoldsItNow(t *testing.T) {
+	key := client.ObjectKey{Namespace: namespace, Name: "c-w"}
+	name := secret.Name(key.Name, secret.Kubeconfig)
+	listNodes := func(tenant *tenantAccess) error { return tenant.client.List(t.Context(), &corev1.NodeList{}) }
+	kubeconfigOf := func(server, token string) *corev1.Secret {
+		return &corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{Namespace: key.Namespace, Name: name},
+			Data:       map[string][]byte{secret.KubeconfigDataName: kubeconfigWithToken(t, server, "tenant", token)},
+		}
+	}
+
+	t.Run("a Secret whose credential the server accepts", func(t *testing.T) {
+		server := tenantThatAccepts(t, "good")
+		tenant, err := reopenTenant(t.Context(), fake.NewClientBuilder().WithObjects(kubeconfigOf(server, "good")).Build(), key)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := listNodes(tenant); err != nil {
+			t.Errorf("the tenant that was opened again does not answer: %v", err)
+		}
+	})
+
+	t.Run("a Secret rewritten with a credential the server refuses, after a tenant was opened from it", func(t *testing.T) {
+		server := tenantThatAccepts(t, "good")
+		k8s := fake.NewClientBuilder().WithObjects(kubeconfigOf(server, "good")).Build()
+		before, err := reopenTenant(t.Context(), k8s, key)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := k8s.Update(t.Context(), kubeconfigOf(server, "revoked")); err != nil {
+			t.Fatal(err)
+		}
+		if err := listNodes(before); err != nil {
+			t.Fatalf("the tenant that was opened before the rewrite should keep its credential: %v", err)
+		}
+		_, err = reopenTenant(t.Context(), k8s, key)
+		if !apierrors.IsUnauthorized(err) || !strings.Contains(err.Error(), name) {
+			t.Fatalf("want an Unauthorized error that names Secret %s, got %v", name, err)
+		}
+	})
+
+	t.Run("a Secret rewritten from a credential the server refuses to one it accepts", func(t *testing.T) {
+		server := tenantThatAccepts(t, "second")
+		k8s := fake.NewClientBuilder().WithObjects(kubeconfigOf(server, "first")).Build()
+		if _, err := reopenTenant(t.Context(), k8s, key); err == nil {
+			t.Fatal("the credential that the server refuses was accepted")
+		}
+		if err := k8s.Update(t.Context(), kubeconfigOf(server, "second")); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := reopenTenant(t.Context(), k8s, key); err != nil {
+			t.Fatalf("the rewritten Secret was not read again: %v", err)
+		}
+	})
+
+	t.Run("no Secret", func(t *testing.T) {
+		if _, err := reopenTenant(t.Context(), fake.NewClientBuilder().Build(), key); !apierrors.IsNotFound(err) {
+			t.Fatalf("want a NotFound, got %v", err)
+		}
+	})
 }
 
 func TestEveryCallToATenantThatDoesNotAnswerFails(t *testing.T) {

@@ -156,16 +156,8 @@ func TestATransientReadOfASourceSecretIsReturned(t *testing.T) {
 }
 
 func TestAResyncRepairsTheProvidersSecrets(t *testing.T) {
-	options, err := controller.CacheOptions()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if options.SyncPeriod == nil || *options.SyncPeriod != 10*time.Minute {
-		t.Errorf("sync period %v", options.SyncPeriod)
-	}
-
 	ns := namespace(t)
-	startManager(t, ns, func(o *cache.Options) { o.SyncPeriod = new(time.Second) })
+	startManagerWith(t, controller.Config{Namespace: ns, Concurrency: 10, SyncPeriod: time.Second})
 	cluster, _ := create(t, ns, "pi")
 	cp := controlPlaneOf(cluster)
 	eventually(t, func() error { return k8s.Get(t.Context(), client.ObjectKeyFromObject(cp), cp) })

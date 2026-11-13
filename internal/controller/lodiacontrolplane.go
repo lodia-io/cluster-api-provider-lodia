@@ -24,14 +24,18 @@ import (
 	corev1ac "k8s.io/client-go/applyconfigurations/core/v1"
 	metav1ac "k8s.io/client-go/applyconfigurations/meta/v1"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	"k8s.io/client-go/rest"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	clusterctlv1 "sigs.k8s.io/cluster-api/cmd/clusterctl/api/v1alpha3"
 	"sigs.k8s.io/cluster-api/util"
 	"sigs.k8s.io/cluster-api/util/annotations"
 	"sigs.k8s.io/cluster-api/util/conditions"
 	"sigs.k8s.io/cluster-api/util/finalizers"
+	"sigs.k8s.io/cluster-api/util/flags"
+	capilabels "sigs.k8s.io/cluster-api/util/labels"
 	"sigs.k8s.io/cluster-api/util/patch"
 	"sigs.k8s.io/cluster-api/util/paused"
+	"sigs.k8s.io/cluster-api/util/predicates"
 	"sigs.k8s.io/cluster-api/util/secret"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
@@ -40,8 +44,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
-	"sigs.k8s.io/controller-runtime/pkg/metrics/filters"
-	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
+	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
@@ -62,6 +65,8 @@ const (
 // +kubebuilder:rbac:groups=authentication.k8s.io,resources=tokenreviews,verbs=create
 // +kubebuilder:rbac:groups=authorization.k8s.io,resources=subjectaccessreviews,verbs=create
 
+var ownedConditions = patch.WithOwnedConditions{Conditions: []string{clusterv1.ReadyCondition, clusterv1.AvailableCondition}}
+
 type Reconciler struct {
 	client.Client
 
@@ -80,25 +85,79 @@ func Scheme() *runtime.Scheme {
 	return scheme
 }
 
-// ManagerOptions are the manager's: leader-elected, with the metrics served
-// over HTTPS behind authentication and authorization, and CacheOptions.
-func ManagerOptions(metricsAddr, probeAddr string, leaderElect bool) (ctrl.Options, error) {
-	cache, err := CacheOptions()
+// Config is what the manager's flags set.
+type Config struct {
+	Namespace string
+	// WatchFilterValue is the value of the label cluster.x-k8s.io/watch-filter
+	// that a Cluster and a LodiaControlPlane need to be reconciled; empty
+	// reconciles all.
+	WatchFilterValue string
+	SyncPeriod       time.Duration
+	Concurrency      int
+	LeaderElect      bool
+	LeaseDuration    time.Duration
+	RenewDeadline    time.Duration
+	RetryPeriod      time.Duration
+	HealthAddr       string
+	ProfilerAddress  string
+	Diagnostics      flags.ManagerOptions
+}
+
+// ManagerOptions are the manager's: leader-elected on request, with the
+// diagnostics served as Cluster API's util/flags serves them, and CacheOptions
+// limited to Config.Namespace.
+func ManagerOptions(c Config) (ctrl.Options, error) {
+	cacheOptions, err := CacheOptions()
+	if err != nil {
+		return ctrl.Options{}, err
+	}
+	cacheOptions.SyncPeriod = &c.SyncPeriod
+	if c.Namespace != "" {
+		cacheOptions.DefaultNamespaces = map[string]cache.Config{c.Namespace: {}}
+	}
+	_, metrics, err := flags.GetManagerOptions(c.Diagnostics)
 	if err != nil {
 		return ctrl.Options{}, err
 	}
 	return ctrl.Options{
-		Scheme: Scheme(),
-		Metrics: metricsserver.Options{
-			BindAddress:    metricsAddr,
-			SecureServing:  true,
-			FilterProvider: filters.WithAuthenticationAndAuthorization,
-		},
-		HealthProbeBindAddress: probeAddr,
-		LeaderElection:         leaderElect,
+		Scheme:                 Scheme(),
+		Metrics:                *metrics,
+		HealthProbeBindAddress: c.HealthAddr,
+		PprofBindAddress:       c.ProfilerAddress,
+		LeaderElection:         c.LeaderElect,
 		LeaderElectionID:       "controlplane.lodia.io",
-		Cache:                  cache,
+		LeaseDuration:          &c.LeaseDuration,
+		RenewDeadline:          &c.RenewDeadline,
+		RetryPeriod:            &c.RetryPeriod,
+		Cache:                  cacheOptions,
 	}, nil
+}
+
+// NewManager builds the manager from c, with the given changes to its options,
+// and registers on it the controller, from the same c, and the probes, so that
+// the binary and the tests build it in one way.
+func NewManager(restConfig *rest.Config, c Config, with ...func(*ctrl.Options)) (ctrl.Manager, error) {
+	options, err := ManagerOptions(c)
+	if err != nil {
+		return nil, fmt.Errorf("build the manager options: %w", err)
+	}
+	for _, change := range with {
+		change(&options)
+	}
+	mgr, err := ctrl.NewManager(restConfig, options)
+	if err != nil {
+		return nil, fmt.Errorf("create the manager: %w", err)
+	}
+	if err := (&Reconciler{Client: mgr.GetClient(), APIReader: mgr.GetAPIReader()}).SetupWithManager(mgr, c); err != nil {
+		return nil, fmt.Errorf("set up the controller: %w", err)
+	}
+	if err := mgr.AddHealthzCheck("healthz", healthz.Ping); err != nil {
+		return nil, fmt.Errorf("add the health check: %w", err)
+	}
+	if err := mgr.AddReadyzCheck("readyz", healthz.Ping); err != nil {
+		return nil, fmt.Errorf("add the readiness check: %w", err)
+	}
+	return mgr, nil
 }
 
 // CacheOptions keep of Secrets only Lodia's, and only their metadata, which
@@ -109,32 +168,35 @@ func CacheOptions() (cache.Options, error) {
 		return cache.Options{}, err
 	}
 	return cache.Options{
-		SyncPeriod: new(10 * time.Minute),
 		ByObject: map[client.Object]cache.ByObject{
 			&corev1.Secret{}: {Label: labels.NewSelector().Add(*lodias)},
 		},
 	}, nil
 }
 
-// ControllerOptions keep one tenant's blocked write from holding up the
-// others, and bound a pass.
-func ControllerOptions() controller.Options {
-	return controller.Options{MaxConcurrentReconciles: 10, ReconciliationTimeout: time.Minute}
+// ControllerOptions run Config.Concurrency workers, which keep one tenant's
+// blocked write from holding up the others, and bound a pass.
+func ControllerOptions(c Config) controller.Options {
+	return controller.Options{MaxConcurrentReconciles: c.Concurrency, ReconciliationTimeout: time.Minute}
 }
 
-func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
+// SetupWithManager filters by Config.WatchFilterValue the events of the
+// LodiaControlPlane and the Cluster; the events of the ControlPlane and the
+// Secrets carry no such label, so their map functions check the Cluster's.
+func (r *Reconciler) SetupWithManager(mgr ctrl.Manager, c Config) error {
+	watched := predicates.ResourceHasFilterLabel(mgr.GetScheme(), mgr.GetLogger().WithValues("controller", Name), c.WatchFilterValue)
 	return ctrl.NewControllerManagedBy(mgr).
 		Named(Name).
-		WithOptions(ControllerOptions()).
-		For(&v1alpha1.LodiaControlPlane{}).
+		WithOptions(ControllerOptions(c)).
+		For(&v1alpha1.LodiaControlPlane{}, builder.WithPredicates(watched)).
 		Watches(&clusterv1.Cluster{},
 			handler.EnqueueRequestsFromMapFunc(func(_ context.Context, o client.Object) []reconcile.Request {
 				return lodiaControlPlaneOf(o.(*clusterv1.Cluster))
 			}),
-			builder.WithPredicates(predicate.GenerationChangedPredicate{})).
+			builder.WithPredicates(watched, predicate.GenerationChangedPredicate{})).
 		Watches(&lodiav1alpha1.ControlPlane{},
 			handler.EnqueueRequestsFromMapFunc(func(ctx context.Context, o client.Object) []reconcile.Request {
-				return r.forCluster(ctx, o.GetNamespace(), o.GetName())
+				return r.forCluster(ctx, c.WatchFilterValue, o.GetNamespace(), o.GetName())
 			})).
 		WatchesMetadata(&corev1.Secret{},
 			handler.EnqueueRequestsFromMapFunc(func(ctx context.Context, o client.Object) []reconcile.Request {
@@ -142,14 +204,17 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 				if o.GetName() != lodiav1alpha1.AdminKubeconfigSecret.Name(cp) && o.GetName() != lodiav1alpha1.CABundleSecret.Name(cp) {
 					return nil
 				}
-				return r.forCluster(ctx, o.GetNamespace(), cp)
+				return r.forCluster(ctx, c.WatchFilterValue, o.GetNamespace(), cp)
 			})).
 		Complete(r)
 }
 
-func (r *Reconciler) forCluster(ctx context.Context, namespace, name string) []reconcile.Request {
+func (r *Reconciler) forCluster(ctx context.Context, watchFilterValue, namespace, name string) []reconcile.Request {
 	cluster := &clusterv1.Cluster{}
 	if err := r.Get(ctx, client.ObjectKey{Namespace: namespace, Name: name}, cluster); err != nil {
+		return nil
+	}
+	if watchFilterValue != "" && !capilabels.HasWatchLabel(cluster, watchFilterValue) {
 		return nil
 	}
 	return lodiaControlPlaneOf(cluster)
@@ -167,6 +232,12 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (_ ctrl.Re
 	lcp := &v1alpha1.LodiaControlPlane{}
 	if err := r.Get(ctx, req.NamespacedName, lcp); err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
+	}
+	// A copy that clusterctl's move or a restore left keeps its source's UID
+	// annotation, and is refused before the pass does anything else, block-move
+	// included; a deleting one is not, so that its finalizer can go.
+	if uid, ok := lcp.Annotations[v1alpha1.UIDAnnotation]; ok && uid != string(lcp.UID) && lcp.DeletionTimestamp.IsZero() {
+		return ctrl.Result{}, r.refuseCopy(ctx, lcp, uid)
 	}
 	cluster, err := util.GetOwnerCluster(ctx, r.Client, lcp.ObjectMeta)
 	if !lcp.DeletionTimestamp.IsZero() && (apierrors.IsNotFound(err) || err == nil && cluster == nil) {
@@ -193,9 +264,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (_ ctrl.Re
 		return ctrl.Result{}, err
 	}
 	defer func() {
-		reterr = errors.Join(reterr, patchHelper.Patch(ctx, lcp, patch.WithOwnedConditions{Conditions: []string{
-			clusterv1.ReadyCondition, clusterv1.AvailableCondition,
-		}}))
+		reterr = errors.Join(reterr, patchHelper.Patch(ctx, lcp, ownedConditions))
 	}()
 
 	if !lcp.DeletionTimestamp.IsZero() {
@@ -205,9 +274,16 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (_ ctrl.Re
 }
 
 func (r *Reconciler) reconcileNormal(ctx context.Context, cluster *clusterv1.Cluster, lcp *v1alpha1.LodiaControlPlane) error {
-	if _, ok := lcp.Annotations[clusterctlv1.BlockMoveAnnotation]; !ok {
-		annotations.AddAnnotations(lcp, map[string]string{clusterctlv1.BlockMoveAnnotation: "true"})
-		return nil
+	_, hasUID := lcp.Annotations[v1alpha1.UIDAnnotation]
+	if _, hasBlockMove := lcp.Annotations[clusterctlv1.BlockMoveAnnotation]; !hasBlockMove || !hasUID {
+		written := map[string]string{}
+		if !hasBlockMove {
+			written[clusterctlv1.BlockMoveAnnotation] = "true"
+		}
+		if !hasUID {
+			written[v1alpha1.UIDAnnotation] = string(lcp.UID)
+		}
+		return r.annotate(ctx, lcp, written)
 	}
 	lcp.Status.ExternalManagedControlPlane = new(true)
 
@@ -238,6 +314,17 @@ func (r *Reconciler) reconcileNormal(ctx context.Context, cluster *clusterv1.Clu
 		return errors.Join(err, applyErr, copyErr)
 	}
 	return errors.Join(reportWriteError(lcp, copyErr), reportWriteError(lcp, applyErr))
+}
+
+// annotate writes on a copy, through a patch locked on the resourceVersion that
+// the pass read: a cache that lags behind could hide a UID another object's
+// copy has just been given, and an unlocked patch would replace it with this
+// object's own, which the next pass then trusts. lcp stays as read, so the
+// deferred patch never sends the annotations again.
+func (r *Reconciler) annotate(ctx context.Context, lcp *v1alpha1.LodiaControlPlane, written map[string]string) error {
+	annotated := lcp.DeepCopy()
+	annotations.AddAnnotations(annotated, written)
+	return r.Patch(ctx, annotated, client.MergeFromWithOptions(lcp, client.MergeFromWithOptimisticLock{}))
 }
 
 // currentControlPlane returns nil when the ControlPlane does not exist.
@@ -391,6 +478,17 @@ func report(lcp *v1alpha1.LodiaControlPlane, u *unstructured.Unstructured, secre
 		return nil
 	}
 	return conditions.SetMirrorConditionFromUnstructured(u, lcp, lodiav1alpha1.ConditionReady)
+}
+
+func (r *Reconciler) refuseCopy(ctx context.Context, lcp *v1alpha1.LodiaControlPlane, uid string) error {
+	patchHelper, err := patch.NewHelper(lcp, r.Client)
+	if err != nil {
+		return err
+	}
+	setDown(lcp, v1alpha1.CopyOfAnotherObjectReason, fmt.Sprintf(
+		"this is a copy of another LodiaControlPlane: %s names the UID %q, not its own, and no ControlPlane is built for it; remove the annotation to build a new, empty one",
+		v1alpha1.UIDAnnotation, uid))
+	return patchHelper.Patch(ctx, lcp, ownedConditions)
 }
 
 // reportLost keeps the verdict of a ControlPlane deleted behind the provider's

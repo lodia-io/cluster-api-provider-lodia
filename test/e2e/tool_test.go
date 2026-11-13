@@ -10,6 +10,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
+	goruntime "runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -18,6 +20,24 @@ import (
 
 	"k8s.io/apimachinery/pkg/util/wait"
 )
+
+const (
+	koModule            = "github.com/google/ko@v0.19.1"
+	kindImageRepository = "kind.local/cluster-api-provider-lodia"
+)
+
+var (
+	root   = filepath.Join("..", "..")
+	makeKo = regexp.MustCompile(`(?m)^KO\s*[:?]?=\s*(\S+)\s*$`)
+)
+
+func releaseComponentsCommand(ctx context.Context, cluster, dir string) *exec.Cmd {
+	cmd := exec.CommandContext(ctx, "make", "--no-print-directory", "release-components",
+		"IMAGE_REPOSITORY="+kindImageRepository, "PLATFORMS=linux/"+goruntime.GOARCH, "RELEASE_DIR="+dir)
+	cmd.Dir = root
+	cmd.Env = koEnv(os.Environ(), cluster)
+	return cmd
+}
 
 // go run starts the tool as a child of go. Once the context kills go, the tool
 // still holds the pipes, and Output would wait for it to end.
@@ -116,5 +136,48 @@ func main() {
 	}
 	if elapsed := time.Since(killedAt); elapsed > 20*time.Second {
 		t.Fatalf("toolOutput returned %s after the context ended, with the tool still running", elapsed)
+	}
+}
+
+func recipeOf(t *testing.T, cmd *exec.Cmd) string {
+	t.Helper()
+	cmd.Args = slices.Insert(cmd.Args, 1, "-n")
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("%s: %v", cmd.Args, err)
+	}
+	return string(out)
+}
+
+func TestTheSuiteRendersTheProviderWithTheTargetTheReleaseUses(t *testing.T) {
+	const dir = "/work/e2e/capl-e2e/release"
+	suite := recipeOf(t, releaseComponentsCommand(t.Context(), "capl-e2e", dir))
+	release := exec.CommandContext(t.Context(), "make", "--no-print-directory", "release-components")
+	release.Dir = root
+	released := recipeOf(t, release)
+	if !strings.Contains(suite, "KO_DOCKER_REPO="+kindImageRepository+" go run "+koModule+" resolve") {
+		t.Errorf("the suite's recipe does not resolve into %s with ko %s:\n%s", kindImageRepository, koModule, suite)
+	}
+	got := strings.NewReplacer(
+		"KO_DOCKER_REPO="+kindImageRepository, "KO_DOCKER_REPO=ghcr.io/lodia-io/cluster-api-provider-lodia",
+		"--platform=linux/"+goruntime.GOARCH, "--platform=linux/amd64,linux/arm64",
+		dir, "out",
+	).Replace(suite)
+	if got != released {
+		t.Errorf("the suite's render differs from the release's beyond the image repository, the platforms and the directory:\nsuite:\n%s\nrelease:\n%s", suite, released)
+	}
+}
+
+func TestTheSuiteAndTheMakefileRunTheSameKo(t *testing.T) {
+	makefile, err := os.ReadFile(filepath.Join(root, "Makefile"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := makeKo.FindSubmatch(makefile)
+	if found == nil {
+		t.Fatal("the Makefile sets no KO")
+	}
+	if got := string(found[1]); got != koModule {
+		t.Fatalf("the Makefile's KO is %s, the suite's is %s", got, koModule)
 	}
 }

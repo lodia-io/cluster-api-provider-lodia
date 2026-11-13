@@ -33,7 +33,6 @@ import (
 	clusterctlv1 "sigs.k8s.io/cluster-api/cmd/clusterctl/api/v1alpha3"
 	"sigs.k8s.io/cluster-api/util/secret"
 	ctrl "sigs.k8s.io/controller-runtime"
-	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 	"sigs.k8s.io/controller-runtime/pkg/config"
@@ -48,6 +47,7 @@ import (
 
 var (
 	k8s          client.Client
+	admin        *rest.Config
 	asController *rest.Config
 )
 
@@ -86,6 +86,7 @@ func TestMain(m *testing.M) {
 		_ = env.Stop()
 		os.Exit(1)
 	}
+	admin = cfg
 	if k8s, err = client.New(cfg, client.Options{Scheme: controller.Scheme()}); err != nil {
 		stop("client", err)
 	}
@@ -159,32 +160,20 @@ func boundToTheClusterRole(cfg *rest.Config) (*rest.Config, error) {
 	return controller, nil
 }
 
-func startManager(t *testing.T, ns string, mutate ...func(*cache.Options)) ctrl.Manager {
+func startManager(t *testing.T, ns string) ctrl.Manager {
 	t.Helper()
-	return startManagerWith(t, ns, ctrl.Manager.GetClient, mutate...)
+	return startManagerWith(t, controller.Config{Namespace: ns, Concurrency: 10})
 }
 
-func startManagerWith(t *testing.T, ns string, clientOf func(ctrl.Manager) client.Client, mutate ...func(*cache.Options)) ctrl.Manager {
+func startManagerWith(t *testing.T, c controller.Config, with ...func(*ctrl.Options)) ctrl.Manager {
 	t.Helper()
-	options, err := controller.CacheOptions()
+	forTheTest := func(options *ctrl.Options) {
+		options.Cache.ReaderFailOnMissingInformer = true
+		options.Metrics = metricsserver.Options{BindAddress: "0"}
+		options.Controller = config.Controller{SkipNameValidation: new(true)}
+	}
+	mgr, err := controller.NewManager(asController, c, append([]func(*ctrl.Options){forTheTest}, with...)...)
 	if err != nil {
-		t.Fatal(err)
-	}
-	options.DefaultNamespaces = map[string]cache.Config{ns: {}}
-	options.ReaderFailOnMissingInformer = true
-	for _, m := range mutate {
-		m(&options)
-	}
-	mgr, err := ctrl.NewManager(asController, ctrl.Options{
-		Scheme:     controller.Scheme(),
-		Metrics:    metricsserver.Options{BindAddress: "0"},
-		Cache:      options,
-		Controller: config.Controller{SkipNameValidation: new(true)},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := (&controller.Reconciler{Client: clientOf(mgr), APIReader: mgr.GetAPIReader()}).SetupWithManager(mgr); err != nil {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithCancel(t.Context())
@@ -427,6 +416,15 @@ func eventually(t *testing.T, check func() error) {
 	})
 	if err != nil {
 		t.Fatalf("%v: %v", err, last)
+	}
+}
+
+func consistently(t *testing.T, check func() error) {
+	t.Helper()
+	for deadline := time.Now().Add(3 * time.Second); time.Now().Before(deadline); time.Sleep(100 * time.Millisecond) {
+		if err := check(); err != nil {
+			t.Fatal(err)
+		}
 	}
 }
 
