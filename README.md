@@ -173,7 +173,7 @@ An object created from a manifest carries no such annotation, so a Cluster recre
 The manager takes the flags of [Cluster API's kubeadm control plane provider](https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/controlplane/kubeadm/main.go#L128-L217) that apply to it, under their names and with their defaults, but for the concurrency: `--lodiacontrolplane-concurrency` defaults to 10, where that provider's `--kubeadmcontrolplane-concurrency` defaults to [100](https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/controlplane/kubeadm/main.go#L160-L161); `--help` lists them.
 It logs through klog: `--v` sets the verbosity, `--logging-format` the format, and, unless `--insecure-diagnostics` is set, `/debug/flags/v` on the diagnostics address changes the level while it runs.
 `--namespace` limits the manager to one namespace.
-`--watch-filter` limits it to the events of objects that carry the label `cluster.x-k8s.io/watch-filter` with that value.
+`--watch-filter` limits it to the events of objects that carry the label `cluster.x-k8s.io/watch-filter` with that value, and to the events of Lodia's `ControlPlane` and Secrets whose Cluster carries it.
 Put the label, with the same value, on a Cluster and on its `LodiaControlPlane`: the filter is honoured only for such a pair, and a pair that carries another value, or none, is left alone.
 A pair that disagrees, with the label on one of its objects only or with a different value on each, is not supported: its `LodiaControlPlane` may be reconciled by any event that reaches it, and nothing says which do.
 `--lodiacontrolplane-concurrency` (default 10) sets how many `LodiaControlPlane`s are reconciled at once.

@@ -117,21 +117,27 @@ func TestTheWatchFilterReconcilesOnlyTheObjectsCarryingItsValue(t *testing.T) {
 func TestAPairThatDisagreesOnTheWatchLabelIsReconciledAtLeastOnce(t *testing.T) {
 	const mine = "mine"
 	label := func(value string) map[string]string { return map[string]string{clusterv1.WatchLabel: value} }
-	for name, mutate := range map[string]func(*clusterv1.Cluster, *v1alpha1.LodiaControlPlane){
-		"only the Cluster carries the label": func(cluster *clusterv1.Cluster, _ *v1alpha1.LodiaControlPlane) {
-			cluster.Labels = label(mine)
+	for name, c := range map[string]struct {
+		mutate func(*clusterv1.Cluster, *v1alpha1.LodiaControlPlane)
+		then   func(*testing.T, *clusterv1.Cluster, *v1alpha1.LodiaControlPlane)
+	}{
+		"only the Cluster carries the label": {
+			mutate: func(cluster *clusterv1.Cluster, _ *v1alpha1.LodiaControlPlane) { cluster.Labels = label(mine) },
+			then:   onlyAChangeOfTheClustersSpecStartsAPass,
 		},
-		"only the LodiaControlPlane carries the label": func(_ *clusterv1.Cluster, lcp *v1alpha1.LodiaControlPlane) {
-			lcp.Labels[clusterv1.WatchLabel] = mine
+		"only the LodiaControlPlane carries the label": {
+			mutate: func(_ *clusterv1.Cluster, lcp *v1alpha1.LodiaControlPlane) { lcp.Labels[clusterv1.WatchLabel] = mine },
 		},
-		"each carries another value": func(cluster *clusterv1.Cluster, lcp *v1alpha1.LodiaControlPlane) {
-			cluster.Labels = label(mine)
-			lcp.Labels[clusterv1.WatchLabel] = "other"
+		"each carries another value": {
+			mutate: func(cluster *clusterv1.Cluster, lcp *v1alpha1.LodiaControlPlane) {
+				cluster.Labels = label(mine)
+				lcp.Labels[clusterv1.WatchLabel] = "other"
+			},
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			ns := namespace(t)
-			_, lcp := create(t, ns, "disagreeing", mutate)
+			cluster, lcp := create(t, ns, "disagreeing", c.mutate)
 			startManagerWith(t, controller.Config{Namespace: ns, WatchFilterValue: mine, Concurrency: 10})
 
 			eventually(t, func() error {
@@ -141,6 +147,38 @@ func TestAPairThatDisagreesOnTheWatchLabelIsReconciledAtLeastOnce(t *testing.T) 
 				}
 				return nil
 			})
+			if c.then != nil {
+				c.then(t, cluster, lcp)
+			}
 		})
 	}
+}
+
+func onlyAChangeOfTheClustersSpecStartsAPass(t *testing.T, cluster *clusterv1.Cluster, lcp *v1alpha1.LodiaControlPlane) {
+	t.Helper()
+	touched := cluster.DeepCopy()
+	touched.Annotations = map[string]string{"touched": "true"}
+	if err := k8s.Patch(t.Context(), touched, client.MergeFrom(cluster)); err != nil {
+		t.Fatal(err)
+	}
+	consistently(t, func() error {
+		get(t, lcp)
+		if condition(lcp, clusterv1.PausedCondition) != nil {
+			return errors.New("a change of its Cluster's metadata reached it")
+		}
+		return nil
+	})
+
+	unpaused := cluster.DeepCopy()
+	unpaused.Spec.Paused = new(false)
+	if err := k8s.Patch(t.Context(), unpaused, client.MergeFrom(cluster)); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, func() error {
+		get(t, lcp)
+		if condition(lcp, clusterv1.PausedCondition) == nil {
+			return errors.New("a change of its Cluster's spec did not reach it")
+		}
+		return nil
+	})
 }

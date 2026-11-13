@@ -31,9 +31,11 @@ type step struct {
 
 type workflow struct {
 	On          any               `json:"true"`
+	Env         map[string]string `json:"env"`
 	Permissions map[string]string `json:"permissions"`
 	Jobs        map[string]struct {
 		Needs       any               `json:"needs"`
+		Env         map[string]string `json:"env"`
 		If          string            `json:"if"`
 		Permissions map[string]string `json:"permissions"`
 		Steps       []step            `json:"steps"`
@@ -80,6 +82,19 @@ func TestTheReleaseWorkflowGrantsOnlyWhatItUses(t *testing.T) {
 	}
 	if diff := cmp.Diff(want, got); diff != "" {
 		t.Errorf("permissions (-want +got):\n%s", diff)
+	}
+}
+
+func TestTheReleaseWorkflowSetsNoEnvironmentAboveItsSteps(t *testing.T) {
+	w := readRelease(t)
+
+	if w.Env != nil {
+		t.Errorf("the workflow sets the environment %v, which every make call of the release reads", w.Env)
+	}
+	for name, job := range w.Jobs {
+		if job.Env != nil {
+			t.Errorf("the job %s sets the environment %v, which every make call of it reads", name, job.Env)
+		}
 	}
 }
 
@@ -188,7 +203,11 @@ func TestTheReleaseLogsInToTheRegistryOfTheImage(t *testing.T) {
 		t.Fatalf("%v\n%s", err, stderr)
 	}
 
-	if want := ` login ghcr.io --username "$GITHUB_ACTOR" --password-stdin`; !strings.HasSuffix(strings.TrimSpace(out), want) {
+	out = strings.TrimSpace(out)
+	if want := `printf '%s' "$GITHUB_TOKEN" | `; !strings.HasPrefix(out, want) {
+		t.Errorf("want the login to start with %q in:\n%s", want, out)
+	}
+	if want := ` login ghcr.io --username "$GITHUB_ACTOR" --password-stdin`; !strings.HasSuffix(out, want) {
 		t.Errorf("want the login to end with %q in:\n%s", want, out)
 	}
 }

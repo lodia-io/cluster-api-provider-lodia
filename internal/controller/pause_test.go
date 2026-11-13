@@ -13,6 +13,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
+	clusterctlv1 "sigs.k8s.io/cluster-api/cmd/clusterctl/api/v1alpha3"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -160,6 +161,13 @@ func TestPauseStopsTheProvider(t *testing.T) {
 	}
 	eventually(t, paused("Cluster spec.paused is set to true"))
 	absent(t, controlPlaneOf(cluster))
+	consistently(t, func() error {
+		get(t, lcp)
+		if _, ok := lcp.Annotations[clusterctlv1.BlockMoveAnnotation]; ok {
+			return errors.New("block-move was written while the Cluster was paused")
+		}
+		return nil
+	})
 
 	before := lcp.DeepCopy()
 	metav1.SetMetaDataAnnotation(&lcp.ObjectMeta, clusterv1.PausedAnnotation, "")
