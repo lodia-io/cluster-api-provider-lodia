@@ -804,22 +804,28 @@ func TestEveryWaitOfTheJoinTestIsBoundedByAFieldOfTheBounds(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	boundAt := map[string]int{"until": 2, "settle": 3, "hold": 3, "whilePaused": 3}
 	var waits int
 	ast.Inspect(file, func(n ast.Node) bool {
 		call, ok := n.(*ast.CallExpr)
 		if !ok {
 			return true
 		}
-		if name, ok := call.Fun.(*ast.Ident); !ok || name.Name != "until" {
+		name, ok := call.Fun.(*ast.Ident)
+		if !ok {
+			return true
+		}
+		at, isWait := boundAt[name.Name]
+		if !isWait {
 			return true
 		}
 		waits++
 		position := fset.Position(call.Pos())
-		if len(call.Args) < 3 {
-			t.Errorf("%s: until takes a bound as its third argument", position)
+		if len(call.Args) <= at {
+			t.Errorf("%s: %s takes a bound as its argument %d", position, name.Name, at+1)
 			return true
 		}
-		bound, ok := call.Args[2].(*ast.SelectorExpr)
+		bound, ok := call.Args[at].(*ast.SelectorExpr)
 		if !ok {
 			t.Errorf("%s: the wait is bounded by a value that is not a field of bounds", position)
 			return true

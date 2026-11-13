@@ -54,7 +54,7 @@ From Lodia [81ce021](https://github.com/lodia-io/lodia/blob/81ce021f823c6708ba5e
 ## The test
 
 `TestAWorkerJoinsAClusterOfLodiasControlPlane` applies the objects of [`testdata`](testdata) in the namespace `capi-join`, and asserts the steps below.
-Each waits within a bound of its own, but the third and the seventh, which read at once, and the eleventh, whose two waits share one; the calls between the waits end at their client's request timeout, the kind cluster's or the tenant's, and a `docker` call at a bound of its own, described under "On failure".
+Each waits within a bound of its own, but the third and the seventh, which read at once, the eleventh, whose two waits share one, and the twenty-third, which takes its whole window; the calls between the waits end at their client's request timeout, the kind cluster's or the tenant's, and a `docker` call at a bound of its own, described under "On failure".
 
 1. `Cluster` `ControlPlaneInitialized`.
 2. `Cluster.spec.controlPlaneEndpoint` is Lodia's `status.endpoint.apiServer`.
@@ -80,7 +80,18 @@ Each waits within a bound of its own, but the third and the seventh, which read 
     Its Node is `NotFound` through `<cluster>-kubeconfig`.
     The MachineDeployment has 1 replica, ready and available, and the `Cluster` is `Available`.
 17. The Deployment's pod runs on the second Node, and its logs are readable through the tenant's API server.
-18. Deleting the `Cluster`, once the etcd claim and the two copied Secrets exist and exactly one container is labelled for the `Cluster`, removes the `LodiaControlPlane`, Lodia's `ControlPlane`, the etcd claim, the two Secrets and the worker's container.
+18. Every object of the namespace that Cluster API's checks read has the owner references that its kind wants.
+    The objects are those of Cluster API, its kubeadm bootstrap provider, CAPD and this provider, Lodia's `ControlPlane` and `Etcd`, and every Secret and ConfigMap.
+    A kind without an assertion fails the step, and so does a graph that holds no object of a kind the suite created.
+19. With the `Cluster` paused, the owner references of the `LodiaControlPlane` and of Cluster API's, its kubeadm bootstrap provider's and CAPD's objects are removed.
+    Once the `Cluster` is unpaused, the check of step 18 holds again within 2 minutes.
+20. Every object of the namespace holds exactly the finalizers that its kind wants.
+    Those of Lodia and etcd-druid are among them: `lodia.io/datastore` on Lodia's `ControlPlane`, and `druid.gardener.cloud/etcd-druid` on the `Etcd` and on the Secrets that its spec references.
+21. With the `Cluster` paused, the finalizers of the `LodiaControlPlane` and of Cluster API's, its kubeadm bootstrap provider's and CAPD's objects are removed.
+    Once the `Cluster` is unpaused, the check of step 20 holds again within a minute.
+22. The objects of the graph stop changing: four reads of their resourceVersions, 15 seconds apart, each agree with the one before, within 2 minutes.
+23. They stay as they are for 2 minutes, read every 5 seconds, but for what Lodia and etcd-druid write.
+24. Deleting the `Cluster`, once the etcd claim and the two copied Secrets exist and exactly one container is labelled for the `Cluster`, removes the `LodiaControlPlane`, Lodia's `ControlPlane`, the etcd claim, the two Secrets and the worker's container.
 
 The move is the only way the suite tests that the provider refuses `clusterctl move`.
 The provider writes `block-move` on every `LodiaControlPlane`, so clusterctl pauses the `Cluster`, finds the annotation and waits for it to go, which with its [backoff](https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/cmd/clusterctl/client/cluster/mover.go#L366-L377), 5 seconds growing by 1.5 for ten steps, takes about six minutes before it fails.
@@ -109,13 +120,59 @@ Step 12 has a minute, since agnhost is on the Node already; step 16 has three, f
 All six are fields of the bounds, `Deployed`, `ScaleUp`, `ScaleReady`, `ScaleAgents`, `ScaleDown` and `Rescheduled`, and `TestEveryWaitOfTheJoinTestIsBoundedByAFieldOfTheBounds` fails a wait of `join_test.go` that takes any other bound.
 `TestAScaleDownIsDoneWhenTheMachineAndEverythingItOwnedAreGoneAndTheOtherStays`, `TestTheDrainOfAMachineIsHeldByTheEventsOfThatMachineAlone`, `TestANodeHasJoinedWhenItsProviderIDIsTheDevMachinesAndItIsUntaintedAndReady` and the tests beside them hold the checks of steps 13 to 17 on fake clients, the management cluster's and the tenant's apart; nothing but a run of the job holds that the steps call them.
 
+Steps 18 to 23 are Cluster API's [quick start checks](https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/test/e2e/quick_start_test.go#L40-L81), written as plain functions on the suite's client.
+Cluster API's helpers read the objects through `GetOwnerGraph`, which [builds](https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/cmd/clusterctl/client/cluster/ownergraph.go#L71-L72) a clusterctl proxy of its own from a kubeconfig path, so the suite lists the graph itself, as `GetOwnerGraph` [does](https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/cmd/clusterctl/client/cluster/ownergraph.go#L93-L149): the namespaced kinds of the CRDs that carry the label `clusterctl.cluster.x-k8s.io`, at their [storage version](https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/cmd/clusterctl/client/cluster/objectgraph.go#L346-L412), and the Secrets and ConfigMaps, in the `Cluster`'s namespace.
+Only an install through clusterctl labels the CRDs of Cluster API, its kubeadm bootstrap provider, CAPD and this provider.
+Lodia's CRDs and etcd-druid's carry no such label, so the suite adds Lodia's `ControlPlane` and the `Etcd` by hand.
+A graph that holds no object of a kind the suite created fails every check, since a CRD that lost its label would otherwise hide its objects from them.
+The cluster-scoped kinds are left out: Cluster API's check keeps them only when their names contain the `Cluster`'s, and the suite creates none.
+The steps run after the scale-down and before the deletion, so that they read the shape of objects that the deletion starts from.
+The stability check is the last, as in Cluster API's spec, since the pauses of steps 19 and 21 write to every object.
+
+The owners are [Cluster API's assertions](https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/test/framework/ownerreference_helpers.go#L164-L357) for its own kinds and the suite's for the others.
+The `LodiaControlPlane` is owned, not controlled, by the `Cluster`.
+Lodia's `ControlPlane` is controlled by the `LodiaControlPlane`, the `Etcd` by the `ControlPlane`, and a Secret or ConfigMap by the `ControlPlane`, the `Etcd` or, for the bootstrap data, a `KubeadmConfig`, except that `<cluster>-kubeconfig` and `<cluster>-ca` are controlled by the `LodiaControlPlane` alone.
+Every owner reference has to name an object of the namespace, by its UID, which the `KubeadmConfig` that the deleted `Machine` leaves for the garbage collector does not until it is gone, and step 19 would otherwise leave it with no owner for good.
+A provider whose apply of the `ControlPlane` drops its owner reference leaves it with none, which step 18 names.
+Step 19 removes the owner references of the kinds that Cluster API and the provider put back once the `Cluster` is unpaused, as [Cluster API's check](https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/test/framework/ownerreference_helpers.go#L459-L475) does for every object of its graph.
+It leaves Lodia's `ControlPlane` and `Etcd` and every Secret and ConfigMap alone.
+The provider refuses to adopt a `ControlPlane` or a Secret that it does not control, so as never to take a predecessor's ([`docs/design.md`](../../docs/design.md), held by [`foreign_test.go`](../../internal/controller/foreign_test.go) and [`races_test.go`](../../internal/controller/races_test.go)): an owner reference removed from them would stay removed, and the garbage collector would then leave them behind at step 24.
+Lodia and etcd-druid do not follow the `Cluster`'s pause, and the bootstrap data's owner is the kubeadm bootstrap provider's to put back.
+Both removals wait for `Paused` `True` on the `Cluster` and on the `LodiaControlPlane` first, which only a controller that has seen the pause writes, and lift the pause afterwards, also when the removal failed.
+
+The finalizers are compared as a whole set, as [Cluster API's check](https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/test/framework/finalizers_helpers.go#L123-L153) does, an empty set for a kind without an assertion, so that a finalizer nobody expects fails the step.
+Cluster API's own assertion for the `DevCluster` fails here, since CAPD gives an externally managed one [no finalizer](https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/test/infrastructure/docker/reconcilers/devcluster_reconciler.go#L103-L107), which the suite's `DevCluster` is.
+etcd-druid holds every Secret that an `Etcd` [references](https://github.com/gardener/etcd-druid/blob/v0.39.0/internal/controller/secret/reconciler.go#L71-L100) with its finalizer, so the step reads the names from the `Etcd`'s spec; the Secrets of Lodia's that it does not reference hold none.
+Step 21 removes only what Cluster API's controllers and the provider hold.
+The provider and Cluster API's controllers add their finalizers before they read the pause ([the Cluster's](https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/core/reconcilers/cluster/cluster_controller.go#L161-L171), for one), so step 21 shows that the finalizers are back, and not that a full reconcile has resumed since the unpause.
+A provider that never adds its finalizer fails step 20, and one that adds it once and never puts it back fails step 21.
+
+Step 22 and step 23 follow [Cluster API's spec](https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/test/framework/resourceversion_helpers.go#L44-L76): four reads that agree with the one before, the first read having none to agree with, and then a window over which nothing changes, with [intervals](https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/test/e2e/config/docker.yaml#L272-L273) of 2 minutes at 15 seconds and 2 minutes at 5 seconds.
+The objects are stamped by their resourceVersion but for two.
+The `Etcd` is left out: etcd-druid [rewrites](https://github.com/gardener/etcd-druid/blob/v0.39.0/internal/controller/etcd/reconciler.go#L147) its status every 15 seconds with a new `lastUpdateTime`, which Lodia's own [watch](https://github.com/lodia-io/lodia/blob/57375832e7fe8b3a06374613797eb4c544fe7612/internal/controller/datastore/etcd.go#L397-L407) filters out.
+Lodia's `ControlPlane` is stamped by the provider's own entry of `managedFields`, `cluster-api-provider-lodia`, since Lodia writes its status: an apply that changes nothing leaves the entry's time and the resourceVersion as they were, and one that changes something moves the time, which kube-apiserver 1.35.0 under envtest showed for a ConfigMap applied twice and then changed.
+A `ControlPlane` without that entry fails the step, since nothing would show a loop of the provider's.
+A provider that changes the `ControlPlane` on every pass is such a loop, since each write comes back through its watch of the `ControlPlane`: step 22 never reads four that agree.
+One that changes it from time to time fails step 23.
+The window takes its whole 2 minutes whenever it passes, and its length is Cluster API's, not measured on CI yet.
+
+The eight new bounds are the fields `Owners`, `OwnersPaused`, `OwnersRestored`, `Finalizers`, `FinalizersPaused`, `FinalizersRestored`, `Settled` and `Stable`:
+- 30 seconds for steps 18 and 20, which read at once but for what the scale-down leaves to be deleted, and for each pause to be seen by the two controllers;
+- 2 minutes and 1 minute for the owner references and the finalizers to come back, Cluster API's [5 minutes](https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/test/framework/ownerreference_helpers.go#L109-L138) and [1 minute](https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/test/framework/finalizers_helpers.go#L98-L101) cut to what a reconcile after an unpause needs;
+- 2 minutes each for steps 22 and 23, Cluster API's.
+They add 9 minutes to the others, which raised `-timeout` from 55 to 64 minutes and the job's `timeout-minutes` from 65 to 74.
+The steps take about 4 minutes when nothing is slow: a read of the graph is a list of every kind, a few seconds, each pause and its restore some 10 to 20 seconds, step 22 at least 60 seconds, four intervals of 15, and step 23 exactly 120.
+That is an estimate, not a measurement.
+`TestEveryWaitOfTheJoinTestIsBoundedByAFieldOfTheBounds` holds `settle`, `hold` and `whilePaused` as well as `until`.
+`TestTheGraphHoldsTheLabelledKindsOfTheNamespaceAndTheSecretsAndConfigMapsAndLodiasTwo`, `TestEveryObjectOfTheGraphHasTheOwnersItsKindWants`, `TestEveryObjectOfTheGraphHoldsExactlyTheFinalizersItsKindWants`, `TestAnActionRunsOnlyOnceBothControllersReportPausedAndTheClusterIsUnpausedAfterIt`, `TestTheStampsHoldWhatTheProviderWritesAndNotWhatLodiaAndEtcdDruidDo`, `TestSettleReturnsAfterFourReadsInARowThatAgree`, `TestHoldFailsAtTheFirstChangeAndOtherwiseTakesTheWholeWindow` and the tests beside them hold the checks of steps 18 to 23 on fake clients; nothing but a run of the job holds that the steps call them.
+
 The `DevCluster` carries the annotation `cluster.x-k8s.io/managed-by`, which Cluster API [reads as an annotation](https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/util/annotations/helpers.go#L38-L41), so that CAPD [leaves it alone](https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/test/infrastructure/docker/reconcilers/devcluster_reconciler.go#L103-L107): otherwise CAPD starts a load balancer, writes its address into the `DevCluster`'s endpoint ([CAPD](https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/test/infrastructure/docker/reconcilers/backends/docker/dockercluster_backend.go#L102-L106)), and the Cluster takes it before the control plane's ([Cluster](https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/core/reconcilers/cluster/cluster_controller_phases.go#L217-L228)).
 The infrastructure contract [gives](https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/docs/book/src/developer/providers/contracts/infra-cluster.md?plain=1#L475-L490) the rest to whoever manages such an infrastructure, so the suite patches the one field `DevCluster.status.initialization.provisioned` once.
 No assertion reads it.
 
 ## On failure
 
-The suite writes to `work/e2e/<E2E_CLUSTER>/artifacts`, and CI uploads it: the objects above with their conditions and Lodia's `Etcd`, the pods, logs and events of cert-manager, of the managers of Cluster API, CAPD, Lodia and the provider, and of the control plane in `capi-join`, through `<cluster>-kubeconfig` once it exists the tenant's Nodes, DaemonSets, Deployments and ReplicaSets, and the pods and events of `kube-system` and `default`, and from the worker container `journalctl -u kubelet -u containerd` and `crictl ps -a`.
+The suite writes to `work/e2e/<E2E_CLUSTER>/artifacts`, and CI uploads it: the objects above with their conditions and Lodia's `Etcd`, the metadata of the Secrets and ConfigMaps of `capi-join`, without data or annotations, and of the CRDs, the pods, logs and events of cert-manager, of the managers of Cluster API, CAPD, Lodia and the provider, and of the control plane in `capi-join`, through `<cluster>-kubeconfig` once it exists the tenant's Nodes, DaemonSets, Deployments and ReplicaSets, and the pods and events of `kube-system` and `default`, and from the worker container `journalctl -u kubelet -u containerd` and `crictl ps -a`.
 `make e2e` empties the directory before it starts.
 A cancelled job and a `go test` timeout leave no artifacts, since the test binary writes them and neither lets it finish.
 The bounds in [`bounds_test.go`](bounds_test.go), the install's and the dump's among them, add up to less than `-timeout`, and `-timeout` to less than the job's `timeout-minutes`, so that a step's own bound fails first; `TestTheBoundsFitUnderTheTimeouts` fails when they do not.
@@ -134,7 +191,7 @@ The suite gives clusterctl a [Proxy of its own](../clusterctlproxy/proxy.go) ins
 `TestEveryClusterctlClientIsBuiltThroughTheFactory` fails, outside the Proxy's [`proxy.go`](../clusterctlproxy/proxy.go), every call into clusterctl's `client` and `client/cluster` packages but for `cluster.InjectProxy` and `cluster.InjectYamlProcessor`, `cluster.GetOwnerGraph`, which makes clusterctl's own proxy from a kubeconfig path, among them, and every import of Cluster API's `test/framework`, whose clients take a kubeconfig path too.
 `TestTheClusterctlClientEndsItsCallsAtTheSuitesTimeouts` holds the same for the suite's own wiring of the two timeouts, and `TestTheClusterctlClientsRequestsAskForTheirOwnTimeouts` that the version check and the discovery of an `Init` ask for the discovery timeout and the inventory's request for the client's.
 A kind cluster that does not answer ends a wait of a step at most one discovery after its bound, and a call between the waits within a discovery, three requests of 10 seconds, and then the 75 seconds.
-A step's context has no deadline, so `docker` ends every call it makes at a bound of its own, 30 seconds, whoever calls it: a `docker` that hangs fails steps 4, 7 and 18 there, and inside the wait of step 18 fails the call, which the next poll repeats.
+A step's context has no deadline, so `docker` ends every call it makes at a bound of its own, 30 seconds, whoever calls it: a `docker` that hangs fails steps 4, 7 and 24 there, and inside the wait of step 24 fails the call, which the next poll repeats.
 The dump's workers have a bound over all their calls besides, which ends the call that is running at its end.
 `TestADockerCallThatHangsEndsAtItsBound` holds the call's bound for a caller without a deadline and for one with a later deadline, and `TestADockerCallThatHangsEndsWithItsCallersContext` an earlier deadline of its caller.
 `TestTheBoundsFitUnderTheTimeouts` holds that three requests, with the tenant's or the dump's timeout, fit in the time left for the calls without a bound, that the client's timeout is above the API server's and fits there after a discovery of three requests, that the three discovery requests of a client's first call, which clusterctl asks without a context, fit there as well, counted as four with the version check for margin, that a `docker` call's bound fits there too, and that the workers' bound and twice the tenant's are together less than the dump's, so that a `docker` that hangs leaves the kind cluster and the tenant more than twice the tenant's bound.

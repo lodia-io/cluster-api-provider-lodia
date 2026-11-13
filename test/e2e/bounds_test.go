@@ -20,6 +20,7 @@ type boundSet struct {
 	Install, Dump                                                                                                time.Duration
 	Apply, Initialized, Endpoint, Kindnet, Running, Ready, Konnectivity, Pod, Available, Move, Unpaused, Deleted time.Duration
 	Deployed, ScaleUp, ScaleReady, ScaleAgents, ScaleDown, Rescheduled                                           time.Duration
+	Owners, OwnersPaused, OwnersRestored, Finalizers, FinalizersPaused, FinalizersRestored, Settled, Stable      time.Duration
 }
 
 // bounds holds every wait of the suite. A step's own bound has to fail before
@@ -45,6 +46,15 @@ var bounds = boundSet{
 	ScaleDown:    3 * time.Minute,
 	Rescheduled:  2 * time.Minute,
 	Deleted:      3 * time.Minute,
+
+	Owners:             30 * time.Second,
+	OwnersPaused:       30 * time.Second,
+	OwnersRestored:     2 * time.Minute,
+	Finalizers:         30 * time.Second,
+	FinalizersPaused:   30 * time.Second,
+	FinalizersRestored: time.Minute,
+	Settled:            2 * time.Minute,
+	Stable:             2 * time.Minute,
 }
 
 const (

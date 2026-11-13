@@ -46,6 +46,7 @@ func TestAWorkerJoinsAClusterOfLodiasControlPlane(t *testing.T) {
 		second  *clusterv1.Machine
 		deleted *clusterv1.Machine
 		kept    *clusterv1.Machine
+		settled snapshot
 	)
 	f := features.New("a worker joins a cluster of Lodia's control plane").
 		Setup(func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
@@ -336,6 +337,53 @@ func TestAWorkerJoinsAClusterOfLodiasControlPlane(t *testing.T) {
 				}
 				return requireLogs(ctx, tenant, pod)
 			})
+			return ctx
+		}).
+		Assess("every object of the namespace has the owners that its kind wants, Lodia's ControlPlane and the two copied Secrets among them", func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
+			until(ctx, t, bounds.Owners, "every object has the owners that its kind wants", func(ctx context.Context) error {
+				return requireOwners(ctx, k8s, key)
+			})
+			return ctx
+		}).
+		Assess("with the Cluster paused, the owner references of the LodiaControlPlane and of Cluster API's objects are removed, and once it is unpaused they are back", func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
+			if err := whilePaused(ctx, k8s, key, bounds.OwnersPaused, 2*time.Second, func(ctx context.Context) error {
+				return removeOwnerReferences(ctx, k8s, key.Namespace)
+			}); err != nil {
+				t.Fatal(err)
+			}
+			until(ctx, t, bounds.OwnersRestored, "every object has the owners that its kind wants again", func(ctx context.Context) error {
+				return requireOwners(ctx, k8s, key)
+			})
+			return ctx
+		}).
+		Assess("every object of the namespace holds exactly the finalizers that its kind wants, those of Lodia and of etcd-druid among them", func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
+			until(ctx, t, bounds.Finalizers, "every object holds the finalizers that its kind wants", func(ctx context.Context) error {
+				return requireFinalizers(ctx, k8s, key)
+			})
+			return ctx
+		}).
+		Assess("with the Cluster paused, the finalizers of the LodiaControlPlane and of Cluster API's objects are removed, and once it is unpaused they are back", func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
+			if err := whilePaused(ctx, k8s, key, bounds.FinalizersPaused, 2*time.Second, func(ctx context.Context) error {
+				return removeFinalizers(ctx, k8s, key.Namespace)
+			}); err != nil {
+				t.Fatal(err)
+			}
+			until(ctx, t, bounds.FinalizersRestored, "every object holds the finalizers that its kind wants again", func(ctx context.Context) error {
+				return requireFinalizers(ctx, k8s, key)
+			})
+			return ctx
+		}).
+		Assess("the resourceVersions of the namespace's objects stop changing", func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
+			var err error
+			if settled, err = settle(ctx, k8s, key.Namespace, bounds.Settled, settleInterval); err != nil {
+				t.Fatal(err)
+			}
+			return ctx
+		}).
+		Assess("and stay as they are for the whole window, but for what Lodia and etcd-druid write", func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
+			if err := hold(ctx, k8s, key.Namespace, bounds.Stable, holdInterval, settled); err != nil {
+				t.Fatal(err)
+			}
 			return ctx
 		}).
 		Assess("deleting the Cluster removes the LodiaControlPlane, the ControlPlane, the etcd claim, the copied Secrets and the worker's container", func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
