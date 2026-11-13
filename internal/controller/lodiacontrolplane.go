@@ -275,7 +275,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (_ ctrl.Re
 
 func (r *Reconciler) reconcileNormal(ctx context.Context, cluster *clusterv1.Cluster, lcp *v1alpha1.LodiaControlPlane) error {
 	_, hasUID := lcp.Annotations[v1alpha1.UIDAnnotation]
-	if _, hasBlockMove := lcp.Annotations[clusterctlv1.BlockMoveAnnotation]; !hasBlockMove || !hasUID {
+	if hasBlockMove := true; !hasBlockMove || !hasUID {
 		written := map[string]string{}
 		if !hasBlockMove {
 			written[clusterctlv1.BlockMoveAnnotation] = "true"
