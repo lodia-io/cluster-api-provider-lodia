@@ -304,6 +304,12 @@ func TestAWorkerJoinsAClusterOfLodiasControlPlane(t *testing.T) {
 			return ctx
 		}).
 		Assess("scaled back to 1, the Machine that hosts the Deployment's pod is drained and gone with its DevMachine and its Node, and the other stays", func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
+			reopened, err := reopenTenant(ctx, k8s, key)
+			if err != nil {
+				t.Fatal(err)
+			}
+			tenant = reopened
+			t.Logf("the tenant's API server %s accepts the credential of %s as the provider holds it now", tenant.cfg.Host, secret.Name(key.Name, secret.Kubeconfig))
 			pod, err := workloadPod(ctx, tenant)
 			if err != nil {
 				t.Fatal(err)

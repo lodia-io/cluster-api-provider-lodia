@@ -267,6 +267,28 @@ func TestUnpausingFailsUnlessBothControllersRanAfterIt(t *testing.T) {
 	}
 }
 
+func TestUnpausingTakesOneBoundForBothWaits(t *testing.T) {
+	const (
+		bound      = 800 * time.Millisecond
+		reportedAt = 3 * bound / 4
+	)
+	start := time.Now()
+	w := newWorld(func(int) reported {
+		if time.Since(start) < reportedAt {
+			return beforeTheMove
+		}
+		return pausedByTheMove
+	}, always(pausedByTheMove))
+	err := requireUnpaused(t.Context(), w, unpausedKey, bound, 10*time.Millisecond)
+	took := time.Since(start)
+	if err == nil || !strings.Contains(err.Error(), "both controllers did not run") {
+		t.Fatalf("want the failure of the second wait, got %v", err)
+	}
+	if limit := bound + bound/4; took > limit {
+		t.Errorf("the waits took %s, more than %s: the second one has a bound of its own, and not what the first left of the %s that both share", took, limit, bound)
+	}
+}
+
 func TestUnpausingFailsWithoutACluster(t *testing.T) {
 	err := requireUnpaused(t.Context(), fake.NewClientBuilder().WithScheme(controller.Scheme()).Build(), unpausedKey, 100*time.Millisecond, 50*time.Millisecond)
 	if err == nil || !apierrors.IsNotFound(err) {

@@ -354,9 +354,14 @@ func managementHandler(t *testing.T) http.Handler {
 
 func serverKubeconfig(t *testing.T, server, context string) []byte {
 	t.Helper()
+	return kubeconfigWithToken(t, server, context, "t")
+}
+
+func kubeconfigWithToken(t *testing.T, server, context, token string) []byte {
+	t.Helper()
 	cfg := clientcmdapi.NewConfig()
 	cfg.Clusters["c"] = &clientcmdapi.Cluster{Server: server, InsecureSkipTLSVerify: true}
-	cfg.AuthInfos["u"] = &clientcmdapi.AuthInfo{Token: "t"}
+	cfg.AuthInfos["u"] = &clientcmdapi.AuthInfo{Token: token}
 	cfg.Contexts[context] = &clientcmdapi.Context{Cluster: "c", AuthInfo: "u"}
 	cfg.CurrentContext = context
 	data, err := clientcmd.Write(*cfg)

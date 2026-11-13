@@ -31,6 +31,8 @@ metadata:
 spec:
   clusterName: ${CLUSTER_NAME}
   replicas: 1
+  deletion:
+    order: Oldest
   selector:
     matchLabels:
   template:

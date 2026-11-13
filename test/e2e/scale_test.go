@@ -9,9 +9,11 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"maps"
 	"net/http"
 	"os"
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -410,16 +412,18 @@ func TestScalingPatchesTheMachineDeploymentOfTheWorkersAlone(t *testing.T) {
 	workers := &clusterv1.MachineDeployment{ObjectMeta: metav1.ObjectMeta{Namespace: scaleKey.Namespace, Name: workersName(scaleKey.Name)}, Spec: clusterv1.MachineDeploymentSpec{Replicas: new(int32(1))}}
 	other := &clusterv1.MachineDeployment{ObjectMeta: metav1.ObjectMeta{Namespace: scaleKey.Namespace, Name: "other"}, Spec: clusterv1.MachineDeploymentSpec{Replicas: new(int32(1))}}
 	k8s := managementOf(workers, other)
-	if err := scaleWorkers(t.Context(), k8s, scaleKey, 2); err != nil {
-		t.Fatal(err)
-	}
-	for name, want := range map[string]int32{workers.Name: 2, other.Name: 1} {
-		got := &clusterv1.MachineDeployment{}
-		if err := k8s.Get(t.Context(), client.ObjectKey{Namespace: scaleKey.Namespace, Name: name}, got); err != nil {
+	for _, replicas := range []int32{2, 1} {
+		if err := scaleWorkers(t.Context(), k8s, scaleKey, replicas); err != nil {
 			t.Fatal(err)
 		}
-		if *got.Spec.Replicas != want {
-			t.Errorf("MachineDeployment %s has %d replicas, want %d", name, *got.Spec.Replicas, want)
+		for name, want := range map[string]int32{workers.Name: replicas, other.Name: 1} {
+			got := &clusterv1.MachineDeployment{}
+			if err := k8s.Get(t.Context(), client.ObjectKey{Namespace: scaleKey.Namespace, Name: name}, got); err != nil {
+				t.Fatal(err)
+			}
+			if *got.Spec.Replicas != want {
+				t.Errorf("after scaling to %d, MachineDeployment %s has %d replicas, want %d", replicas, name, *got.Spec.Replicas, want)
+			}
 		}
 	}
 	if err := scaleWorkers(t.Context(), managementOf(other), scaleKey, 2); !apierrors.IsNotFound(err) {
@@ -447,6 +451,9 @@ func TestTheTestdataHoldsTheMachineDeploymentThatTheStepsScaleFromOne(t *testing
 		}
 		if workers.Spec.Replicas == nil || *workers.Spec.Replicas != 1 {
 			t.Errorf("the MachineDeployment starts at %s replicas, the steps scale from 1", count(workers.Spec.Replicas))
+		}
+		if workers.Spec.Deletion.Order != clusterv1.OldestMachineSetDeletionOrder {
+			t.Errorf("the MachineDeployment's deletion order is %q, want %q, so that the first worker goes even if the annotation has not reached the MachineSet's cache", workers.Spec.Deletion.Order, clusterv1.OldestMachineSetDeletionOrder)
 		}
 	}
 	if found != 1 {
@@ -793,7 +800,108 @@ func TestAScaleDownIsDoneWhenTheMachineAndEverythingItOwnedAreGoneAndTheOtherSta
 	}
 }
 
-func TestEveryWaitOfTheJoinTestIsBoundedByAFieldOfTheBounds(t *testing.T) {
+var (
+	boundArgumentOf = map[string]int{
+		"until":               2,
+		"requireUnpaused":     3,
+		"whilePaused":         3,
+		"settle":              3,
+		"hold":                3,
+		"context.WithTimeout": 1,
+	}
+	waitsWithoutABound = []string{
+		"time.Sleep", "time.After", "time.AfterFunc", "time.NewTimer", "time.NewTicker", "time.Tick",
+		"context.WithDeadline", "context.WithTimeoutCause", "context.WithDeadlineCause",
+	}
+	boundsOutsideTheJoinTest = []string{"Install", "Dump"}
+)
+
+func calleeOf(call *ast.CallExpr) string {
+	switch fun := call.Fun.(type) {
+	case *ast.Ident:
+		return fun.Name
+	case *ast.SelectorExpr:
+		if pkg, ok := fun.X.(*ast.Ident); ok {
+			return pkg.Name + "." + fun.Sel.Name
+		}
+	}
+	return ""
+}
+
+func isBoundsField(sel *ast.SelectorExpr) bool {
+	owner, ok := sel.X.(*ast.Ident)
+	return ok && owner.Name == "bounds"
+}
+
+// problemsWithTheWaits holds every wait of the Test functions of file to a
+// field of bounds that no other wait takes, since total counts each field once.
+func problemsWithTheWaits(fset *token.FileSet, file *ast.File, fields, outside []string) []string {
+	var problems []string
+	problem := func(n ast.Node, format string, args ...any) {
+		problems = append(problems, fmt.Sprintf("%s: %s", fset.Position(n.Pos()), fmt.Sprintf(format, args...)))
+	}
+	var waits int
+	used := make(map[string]int)
+	taken := make(map[*ast.SelectorExpr]bool)
+	for _, decl := range file.Decls {
+		fn, ok := decl.(*ast.FuncDecl)
+		if !ok || !strings.HasPrefix(fn.Name.Name, "Test") {
+			continue
+		}
+		ast.Inspect(fn.Body, func(n ast.Node) bool {
+			switch n := n.(type) {
+			case *ast.CallExpr:
+				callee := calleeOf(n)
+				at, isWait := boundArgumentOf[callee]
+				switch {
+				case isWait:
+					waits++
+					if len(n.Args) <= at {
+						problem(n, "%s takes a bound as its argument %d", callee, at+1)
+						break
+					}
+					bound, ok := n.Args[at].(*ast.SelectorExpr)
+					if !ok || !isBoundsField(bound) {
+						problem(n, "%s is bounded by something that is not a field of bounds", callee)
+						break
+					}
+					taken[bound] = true
+					used[bound.Sel.Name]++
+				case slices.Contains(waitsWithoutABound, callee) || strings.HasPrefix(callee, "wait."):
+					problem(n, "%s waits without a field of bounds to bound it", callee)
+				}
+			case *ast.SelectorExpr:
+				if isBoundsField(n) && !taken[n] {
+					problem(n, "bounds.%s is not the bound of a wait that the test knows", n.Sel.Name)
+				}
+			}
+			return true
+		})
+	}
+	if waits == 0 {
+		problems = append(problems, "the file holds no wait")
+	}
+	for _, field := range fields {
+		want := 1
+		if slices.Contains(outside, field) {
+			want = 0
+		}
+		if used[field] != want {
+			problems = append(problems, fmt.Sprintf("bounds.%s bounds %d waits of the file, want %d", field, used[field], want))
+		}
+	}
+	return problems
+}
+
+func fieldsOfTheBounds() []string {
+	var names []string
+	for field := range reflect.TypeFor[boundSet]().Fields() {
+		names = append(names, field.Name)
+	}
+	return names
+}
+
+func TestEveryWaitOfTheJoinTestIsBoundedByAFieldOfTheBoundsThatNoOtherWaitTakes(t *testing.T) {
 	for field, bound := range reflect.ValueOf(bounds).Fields() {
 		if bound.Int() <= 0 {
 			t.Errorf("the bound %s is %s", field.Name, bound)
@@ -804,38 +912,78 @@ func TestEveryWaitOfTheJoinTestIsBoundedByAFieldOfTheBounds(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	boundAt := map[string]int{"until": 2, "settle": 3, "hold": 3, "whilePaused": 3}
-	var waits int
-	ast.Inspect(file, func(n ast.Node) bool {
-		call, ok := n.(*ast.CallExpr)
-		if !ok {
-			return true
+	for _, problem := range problemsWithTheWaits(fset, file, fieldsOfTheBounds(), boundsOutsideTheJoinTest) {
+		t.Error(problem)
+	}
+}
+
+func TestTheCheckOfTheWaitsRefusesWhatBreaksTheSumOfTheBounds(t *testing.T) {
+	call := func(callee string, at int, bound string) string {
+		args := make([]string, at+1)
+		for i := range args {
+			args[i] = "arg"
 		}
-		name, ok := call.Fun.(*ast.Ident)
-		if !ok {
-			return true
+		args[at] = bound
+		return callee + "(" + strings.Join(args, ", ") + ")"
+	}
+	var all, twice []string
+	for callee, at := range boundArgumentOf {
+		all = append(all, call(callee, at, "bounds."+string(rune('A'+len(all)))))
+	}
+	for callee, at := range boundArgumentOf {
+		twice = append(twice, call(callee, at, "bounds.A"))
+	}
+	fields := []string{"Install"}
+	for i := range all {
+		fields = append(fields, string(rune('A'+i)))
+	}
+	cases := []struct {
+		name, body, want string
+	}{
+		{"every wait takes a field of its own", strings.Join(all, "\n"), ""},
+		{"nothing waits", "", "holds no wait"},
+		{"a field that bounds two waits", strings.Join(twice, "\n"), fmt.Sprintf("bounds.A bounds %d waits", len(twice))},
+		{"a field that bounds no wait", strings.Join(all[1:], "\n"), "bounds.A bounds 0 waits"},
+		{"the install's bound", strings.Join(all, "\n") + "\n" + call("until", 2, "bounds.Install"), "bounds.Install bounds 1 waits of the file, want 0"},
+		{"a bound that is not a wait's", strings.Join(all, "\n") + "\nother(ctx, bounds.Install)", "bounds.Install is not the bound of a wait"},
+		{"a field that bounds a wait, written as a sum", strings.Join(all[1:], "\n") + "\nuntil(ctx, t, bounds.A+time.Second)", "is bounded by something that is not a field of bounds"},
+		{"a wait without a bound", strings.Join(all, "\n") + "\nuntil(ctx, t)", "until takes a bound as its argument 3"},
+		{"a wait with a field of another value", strings.Join(all[1:], "\n") + "\nuntil(ctx, t, other.A)", "is bounded by something that is not a field of bounds"},
+		{"a poll of apimachinery's wait package", strings.Join(all, "\n") + "\nwait.PollUntilContextTimeout(ctx, time.Second, time.Minute, true, f)", "wait.PollUntilContextTimeout waits without a field"},
+	}
+	for _, callee := range slices.Sorted(maps.Keys(boundArgumentOf)) {
+		at := boundArgumentOf[callee]
+		var others []string
+		for other, otherAt := range boundArgumentOf {
+			if other != callee {
+				others = append(others, call(other, otherAt, "bounds."+string(rune('B'+len(others)))))
+			}
 		}
-		at, isWait := boundAt[name.Name]
-		if !isWait {
-			return true
-		}
-		waits++
-		position := fset.Position(call.Pos())
-		if len(call.Args) <= at {
-			t.Errorf("%s: %s takes a bound as its argument %d", position, name.Name, at+1)
-			return true
-		}
-		bound, ok := call.Args[at].(*ast.SelectorExpr)
-		if !ok {
-			t.Errorf("%s: the wait is bounded by a value that is not a field of bounds", position)
-			return true
-		}
-		if owner, ok := bound.X.(*ast.Ident); !ok || owner.Name != "bounds" || !reflect.ValueOf(bounds).FieldByName(bound.Sel.Name).IsValid() {
-			t.Errorf("%s: the wait is bounded by %s, which is not a field of bounds", position, bound.Sel.Name)
-		}
-		return true
-	})
-	if waits == 0 {
-		t.Fatal("join_test.go holds no wait")
+		cases = append(cases, struct{ name, body, want string }{
+			callee + " bounded by a literal", call(callee, at, "5*time.Minute") + "\n" + strings.Join(others, "\n"), callee + " is bounded by something that is not a field of bounds",
+		})
+	}
+	for _, callee := range []string{
+		"time.Sleep", "time.After", "time.AfterFunc", "time.NewTimer", "time.NewTicker", "time.Tick",
+		"context.WithDeadline", "context.WithTimeoutCause", "context.WithDeadlineCause",
+	} {
+		cases = append(cases, struct{ name, body, want string }{callee, strings.Join(all, "\n") + "\n" + callee + "()", callee + " waits without a field"})
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			source := "package p\nfunc TestX() {\n" + c.body + "\n}\nfunc until() { wait.PollUntilContextTimeout(); time.Sleep(); bounds.Install() }\n"
+			fset := token.NewFileSet()
+			file, err := parser.ParseFile(fset, "x.go", source, 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			problems := strings.Join(problemsWithTheWaits(fset, file, fields, []string{"Install"}), "\n")
+			switch {
+			case c.want == "" && problems != "":
+				t.Fatalf("want accepted, got %s", problems)
+			case c.want != "" && !strings.Contains(problems, c.want):
+				t.Fatalf("want a problem with %q, got %q", c.want, problems)
+			}
+		})
 	}
 }
