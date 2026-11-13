@@ -61,9 +61,10 @@ const (
 	// callsWithoutBound covers the calls between the waits, of which the first
 	// to fail ends the test, and what a poll overshoots by.
 	callsWithoutBound = 2 * time.Minute
-	// outsideTheBinary is what the job spends beyond -timeout: the build before
-	// the binary starts, go test's minute of grace, and the removal of the
-	// containers and the cluster.
+	// outsideTheBinary is what the job spends beyond -timeout: its steps before
+	// make e2e, the runner's disk among them, the build before the binary
+	// starts, go test's minute of grace, and the removal of the containers and
+	// the cluster.
 	outsideTheBinary = 10 * time.Minute
 )
 

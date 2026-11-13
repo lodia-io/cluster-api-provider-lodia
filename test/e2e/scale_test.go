@@ -812,14 +812,14 @@ var (
 		"endAfter":            1,
 		"context.WithTimeout": 1,
 	}
-	contextsThatEnd          = []string{"context.WithTimeout", "endAfter"}
+	contextsThatEnd          = []string{"endAfter"}
 	waitsOnTheCallersContext = []string{
 		"pollUntil", "apply", "applyRelease", "available", "installCertManager", "deploymentsAvailable", "deploymentAvailableWithin",
 		"clusterctlproxy.MoveUntilBlocked",
 	}
-	waitsAStepMayCall = []string{"docker", "clusterContainers", "dump"}
+	waitsAStepMayCall = []string{"docker", "clusterContainers"}
 	waitsOfTheirOwn   = []string{
-		"dumpBounded", "dumpTenant", "dumpWorkers", "dumpAll", "dumpCluster", "install", "installLodia", "installProviders", "ko",
+		"dump", "dumpBounded", "dumpTenant", "dumpWorkers", "dumpAll", "dumpCluster", "install", "installLodia", "installProviders", "ko", "toolOutput", "renderProvider", "lodiaProvider",
 		"createWhenWebhooksAnswer", "gatedServer", "gatedTenant", "tenantThatNeverAnswers", "tenantThatNeverAnswersApis",
 		"managementThatHolds", "requestsOfTheDump", "returnsWithin", "dockerCalls",
 	}
@@ -860,8 +860,9 @@ func isAWait(callee string) bool {
 // field of bounds that no other wait takes, since total counts each field once,
 // and every wait that takes its bound from the context it runs on to a context
 // that a field of bounds ends in the same step. It refuses the waits that
-// bound themselves but for the few that a step may call, whose bound the model
-// holds per call (dockerFits) or for the whole of a dump (bounds.Dump).
+// bound themselves but for the two that a step may call, whose bound the model
+// holds per call (dockerFits), and the dump, which only a teardown may call,
+// since the model counts bounds.Dump once.
 func problemsWithTheWaits(fset *token.FileSet, file *ast.File, fields, outside []string) []string {
 	var problems []string
 	problem := func(n ast.Node, format string, args ...any) {
@@ -935,6 +936,7 @@ func problemsWithTheWaits(fset *token.FileSet, file *ast.File, fields, outside [
 					if ctx, ok := argumentOf(n, 0).(*ast.Ident); !ok || !ended[step()][ctx.Name] {
 						problem(n, "%s runs on a context that no field of bounds ends in this step", callee)
 					}
+				case callee == "dump" && inTheTeardown(path):
 				case slices.Contains(waitsOfTheirOwn, callee):
 					problem(n, "%s waits for a bound of its own, which the model of the bounds holds elsewhere and not for a step", callee)
 				case slices.Contains(waitsWithoutABound, callee) || isAPoll(callee):
@@ -961,6 +963,19 @@ func problemsWithTheWaits(fset *token.FileSet, file *ast.File, fields, outside [
 		}
 	}
 	return problems
+}
+
+func inTheTeardown(path []ast.Node) bool {
+	for i, n := range path[:len(path)-1] {
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
+			continue
+		}
+		if sel, ok := call.Fun.(*ast.SelectorExpr); ok && sel.Sel.Name == "Teardown" && slices.ContainsFunc(call.Args, func(arg ast.Expr) bool { return arg == path[i+1] }) {
+			return true
+		}
+	}
+	return false
 }
 
 func argumentOf(call *ast.CallExpr, at int) ast.Expr {
@@ -1063,8 +1078,9 @@ func TestTheCheckOfTheWaitsRefusesWhatBreaksTheSumOfTheBounds(t *testing.T) {
 	for _, callee := range waitsOnTheCallersContext {
 		cases = append(cases,
 			struct{ name, body, want string }{callee + " on the step's own context", strings.Join(all, "\n") + "\n" + callee + "(ctx)", callee + " runs on a context that no field of bounds ends in this step"},
-			struct{ name, body, want string }{callee + " on a context made in another step", "func() {\n" + madeBy("context.WithTimeout") + "\n}()\nfunc() {\n" + callee + "(bounded)\n}()", callee + " runs on a context that no field of bounds ends in this step"},
-			struct{ name, body, want string }{callee + " on a context made from a literal", strings.Join(all[1:], "\n") + "\nbounded, cancel := context.WithTimeout(ctx, 5*time.Minute)\n" + callee + "(bounded)", callee + " runs on a context that no field of bounds ends in this step"},
+			struct{ name, body, want string }{callee + " on a context made in another step", "func() {\n" + madeBy("endAfter") + "\n}()\nfunc() {\n" + callee + "(bounded)\n}()", callee + " runs on a context that no field of bounds ends in this step"},
+			struct{ name, body, want string }{callee + " on a context that context.WithTimeout made from a field", madeBy("context.WithTimeout") + "\n" + callee + "(bounded)", callee + " runs on a context that no field of bounds ends in this step"},
+			struct{ name, body, want string }{callee + " on a context made from a literal", strings.Join(all[1:], "\n") + "\nbounded, cancel := endAfter(ctx, 5*time.Minute)\n" + callee + "(bounded)", callee + " runs on a context that no field of bounds ends in this step"},
 		)
 		for _, maker := range contextsThatEnd {
 			cases = append(cases,
@@ -1079,6 +1095,16 @@ func TestTheCheckOfTheWaitsRefusesWhatBreaksTheSumOfTheBounds(t *testing.T) {
 	for _, callee := range waitsAStepMayCall {
 		cases = append(cases, struct{ name, body, want string }{callee + " in a step", strings.Join(all, "\n") + "\n" + callee + "()", ""})
 	}
+	inAFeature := func(steps, teardown string) string {
+		return strings.Join(all, "\n") + "\nfeatures.New(\"a\").Assess(\"b\", func() {\n" + steps + "\n}).Teardown(func() {\n" + teardown + "\n}).Feature()"
+	}
+	cases = append(cases,
+		struct{ name, body, want string }{"dump in the teardown", inAFeature("", "dump()"), ""},
+		struct{ name, body, want string }{"dump in a closure of the teardown", inAFeature("", "if t.Failed() {\nfunc() { dump() }()\n}"), ""},
+		struct{ name, body, want string }{"dump in a step of a feature that has a teardown", inAFeature("dump()", ""), "dump waits for a bound of its own"},
+		struct{ name, body, want string }{"dump in a step and in the teardown", inAFeature("dump()", "dump()"), "dump waits for a bound of its own"},
+		struct{ name, body, want string }{"a function of its own in the teardown", inAFeature("", "dumpAll()"), "dumpAll waits for a bound of its own"},
+	)
 	for _, callee := range slices.Sorted(maps.Keys(boundArgumentOf)) {
 		at := boundArgumentOf[callee]
 		var others []string
@@ -1132,6 +1158,7 @@ func TestTheCheckOfTheFunctionsThatWaitRefusesWhatItDoesNotKnow(t *testing.T) {
 		{"a helper that calls docker", "func helper() { docker() }", "helper calls docker"},
 		{"a helper that calls the dump", "func helper() { dump() }", "helper calls dump"},
 		{"a helper that calls a wait of its own", "func helper() { install() }", "helper calls install"},
+		{"a helper that runs a tool", "func helper() { toolOutput() }", "helper calls toolOutput"},
 		{"a helper that waits in a closure", "func helper() { f := func() { time.After() }; f() }", "helper calls time.After"},
 		{"a wait that takes its bound", "func until() { wait.PollUntilContextCancel() }", ""},
 		{"a wait on its caller's context", "func pollUntil() { wait.PollUntilContextCancel() }", ""},
@@ -1189,7 +1216,7 @@ func TestEveryFunctionOfThePackageThatWaitsIsOneThatTheCheckOfTheWaitsKnows(t *t
 }
 
 func TestTheFunctionsThatWaitThroughHelmAndClusterctlAreOnesNoStepMayCall(t *testing.T) {
-	for _, name := range []string{"installLodia", "installProviders", "ko"} {
+	for _, name := range []string{"installLodia", "installProviders", "ko", "toolOutput"} {
 		if !slices.Contains(waitsOfTheirOwn, name) {
 			t.Errorf("%s waits through calls that the check of the waits does not know by name, so it has to be in waitsOfTheirOwn", name)
 		}

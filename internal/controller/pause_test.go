@@ -161,13 +161,17 @@ func TestPauseStopsTheProvider(t *testing.T) {
 	}
 	eventually(t, paused("Cluster spec.paused is set to true"))
 	absent(t, controlPlaneOf(cluster))
-	consistently(t, func() error {
-		get(t, lcp)
-		if _, ok := lcp.Annotations[clusterctlv1.BlockMoveAnnotation]; ok {
-			return errors.New("block-move was written while the Cluster was paused")
-		}
-		return nil
-	})
+	unblocked := func(why string) {
+		t.Helper()
+		consistently(t, func() error {
+			get(t, lcp)
+			if _, ok := lcp.Annotations[clusterctlv1.BlockMoveAnnotation]; ok {
+				return fmt.Errorf("block-move was written while %s", why)
+			}
+			return nil
+		})
+	}
+	unblocked("the Cluster was paused")
 
 	before := lcp.DeepCopy()
 	metav1.SetMetaDataAnnotation(&lcp.ObjectMeta, clusterv1.PausedAnnotation, "")
@@ -182,6 +186,7 @@ func TestPauseStopsTheProvider(t *testing.T) {
 	}
 	eventually(t, paused("LodiaControlPlane has the cluster.x-k8s.io/paused annotation"))
 	absent(t, controlPlaneOf(cluster))
+	unblocked("the LodiaControlPlane was paused by its annotation")
 
 	before = lcp.DeepCopy()
 	delete(lcp.Annotations, clusterv1.PausedAnnotation)
