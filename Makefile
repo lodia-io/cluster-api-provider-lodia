@@ -68,6 +68,6 @@ e2e: e2e-cluster ## the e2e suite, on a kind cluster of its own that e2e-cluster
 	mkdir -p $(E2E_DIR)
 	go tool kind create cluster --name $(E2E_CLUSTER) --kubeconfig $(E2E_DIR)/kubeconfig --config test/e2e/testdata/kind.yaml
 	rm -rf $(E2E_DIR)/artifacts
-	$(REMOVE_WORKERS) && E2E_KUBECONFIG=$(E2E_DIR)/kubeconfig go test -v -tags e2e -count=1 -timeout 41m ./test/e2e/...; status=$$?; \
+	$(REMOVE_WORKERS) && E2E_KUBECONFIG=$(E2E_DIR)/kubeconfig go test -v -tags e2e -count=1 -timeout 55m ./test/e2e/...; status=$$?; \
 	$(REMOVE_WORKERS) || status=1; \
 	go tool kind delete cluster --name $(E2E_CLUSTER) --kubeconfig $(E2E_DIR)/kubeconfig; exit $$status

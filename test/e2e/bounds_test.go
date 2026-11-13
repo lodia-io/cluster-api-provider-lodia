@@ -19,6 +19,7 @@ import (
 type boundSet struct {
 	Install, Dump                                                                                                time.Duration
 	Apply, Initialized, Endpoint, Kindnet, Running, Ready, Konnectivity, Pod, Available, Move, Unpaused, Deleted time.Duration
+	Deployed, ScaleUp, ScaleReady, ScaleAgents, ScaleDown, Rescheduled                                           time.Duration
 }
 
 // bounds holds every wait of the suite. A step's own bound has to fail before
@@ -37,6 +38,12 @@ var bounds = boundSet{
 	Available:    time.Minute,
 	Move:         20 * time.Second,
 	Unpaused:     30 * time.Second,
+	Deployed:     time.Minute,
+	ScaleUp:      3 * time.Minute,
+	ScaleReady:   3 * time.Minute,
+	ScaleAgents:  2 * time.Minute,
+	ScaleDown:    3 * time.Minute,
+	Rescheduled:  2 * time.Minute,
 	Deleted:      3 * time.Minute,
 }
 

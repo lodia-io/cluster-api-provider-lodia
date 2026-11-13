@@ -17,15 +17,12 @@ import (
 	"time"
 
 	lodiav1alpha1 "go.lodia.io/lodia/api/v1alpha1"
-	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/wait"
-	"k8s.io/client-go/kubernetes"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	clusterctl "sigs.k8s.io/cluster-api/cmd/clusterctl/client"
 	"sigs.k8s.io/cluster-api/cmd/clusterctl/client/yamlprocessor"
@@ -39,8 +36,6 @@ import (
 	"go.lodia.io/cluster-api-provider-lodia/test/clusterctlproxy"
 )
 
-const agnhost = "registry.k8s.io/e2e-test-images/agnhost:2.66.1@sha256:6e2eef87d0dc77e070a7549bc5fdfa290c0fefe3359eb33c2ad1eda692fe66a4"
-
 func TestAWorkerJoinsAClusterOfLodiasControlPlane(t *testing.T) {
 	var (
 		k8s     client.Client
@@ -48,6 +43,9 @@ func TestAWorkerJoinsAClusterOfLodiasControlPlane(t *testing.T) {
 		tenant  *tenantAccess
 		machine *clusterv1.Machine
 		node    *corev1.Node
+		second  *clusterv1.Machine
+		deleted *clusterv1.Machine
+		kept    *clusterv1.Machine
 	)
 	f := features.New("a worker joins a cluster of Lodia's control plane").
 		Setup(func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
@@ -155,18 +153,11 @@ func TestAWorkerJoinsAClusterOfLodiasControlPlane(t *testing.T) {
 		}).
 		Assess("the Machine is Running with a nodeRef, and Lodia reported the version the MachineSet's preflight reads", func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
 			until(ctx, t, bounds.Running, "the Machine is Running with a nodeRef", func(ctx context.Context) error {
-				machines := &clusterv1.MachineList{}
-				if err := k8s.List(ctx, machines, client.InNamespace(key.Namespace), client.MatchingLabels{clusterv1.ClusterNameLabel: key.Name}); err != nil {
+				workers, err := runningWorkers(ctx, k8s, key, 1)
+				if err != nil {
 					return err
 				}
-				if len(machines.Items) != 1 {
-					return fmt.Errorf("%d Machines, want 1", len(machines.Items))
-				}
-				m := &machines.Items[0]
-				if m.Status.Phase != string(clusterv1.MachinePhaseRunning) || m.Status.NodeRef.Name == "" {
-					return fmt.Errorf("Machine %s is %s, its nodeRef is %q", m.Name, m.Status.Phase, m.Status.NodeRef.Name)
-				}
-				machine = m
+				machine = &workers[0]
 				return nil
 			})
 			lcp := &v1alpha1.LodiaControlPlane{}
@@ -179,35 +170,13 @@ func TestAWorkerJoinsAClusterOfLodiasControlPlane(t *testing.T) {
 			return ctx
 		}).
 		Assess("the Node carries the DevMachine's providerID, has no uninitialized taint and is Ready", func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
-			dm := &unstructured.Unstructured{}
-			dm.SetGroupVersionKind(devMachine)
-			if err := k8s.Get(ctx, client.ObjectKey{Namespace: key.Namespace, Name: machine.Spec.InfrastructureRef.Name}, dm); err != nil {
-				t.Fatal(err)
-			}
-			providerID, _, err := unstructured.NestedString(dm.Object, "spec", "providerID")
-			if err != nil || providerID == "" {
-				t.Fatalf("DevMachine %s has no spec.providerID: %v", dm.GetName(), err)
-			}
 			until(ctx, t, bounds.Ready, "Node "+machine.Status.NodeRef.Name+" has the providerID, no uninitialized taint, and is Ready", func(ctx context.Context) error {
-				joined := &corev1.Node{}
-				if err := tenant.client.Get(ctx, client.ObjectKey{Name: machine.Status.NodeRef.Name}, joined); err != nil {
+				joined, err := requireJoined(ctx, k8s, tenant, machine)
+				if err != nil {
 					return err
 				}
-				if joined.Spec.ProviderID != providerID {
-					return fmt.Errorf("the Node's providerID is %q, the DevMachine's %q", joined.Spec.ProviderID, providerID)
-				}
-				for _, taint := range joined.Spec.Taints {
-					if taint.Key == clusterv1.NodeUninitializedTaint.Key {
-						return fmt.Errorf("the Node still has the taint %s", taint.Key)
-					}
-				}
-				for _, c := range joined.Status.Conditions {
-					if c.Type == corev1.NodeReady && c.Status == corev1.ConditionTrue {
-						node = joined
-						return nil
-					}
-				}
-				return fmt.Errorf("the Node is not Ready: %+v", joined.Status.Conditions)
+				node = joined
+				return nil
 			})
 			return ctx
 		}).
@@ -234,30 +203,18 @@ func TestAWorkerJoinsAClusterOfLodiasControlPlane(t *testing.T) {
 		}).
 		Assess("the konnectivity agent is ready on the Node", func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
 			until(ctx, t, bounds.Konnectivity, "the konnectivity agent is ready", func(ctx context.Context) error {
-				agents := &appsv1.DaemonSet{}
-				if err := tenant.client.Get(ctx, client.ObjectKey{Namespace: metav1.NamespaceSystem, Name: "konnectivity-agent"}, agents); err != nil {
-					return err
-				}
-				if s := agents.Status; s.DesiredNumberScheduled != 1 || s.NumberReady != 1 {
-					return fmt.Errorf("%d of %d agents ready", s.NumberReady, s.DesiredNumberScheduled)
-				}
-				return nil
+				return requireAgents(ctx, tenant, 1)
 			})
 			return ctx
 		}).
 		Assess("a pod runs on the Node, and its logs are readable through the tenant's API server", func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
 			web := &corev1.Pod{
 				ObjectMeta: metav1.ObjectMeta{Namespace: metav1.NamespaceDefault, Name: "web"},
-				Spec: corev1.PodSpec{Containers: []corev1.Container{{
-					Name:  "web",
-					Image: agnhost,
-					Args:  []string{"netexec", "--http-port=8080"},
-				}}},
+				Spec:       corev1.PodSpec{Containers: []corev1.Container{agnhostContainer("web")}},
 			}
 			if err := tenant.client.Create(ctx, web); err != nil {
 				t.Fatal(err)
 			}
-			pods := kubernetes.NewForConfigOrDie(tenant.cfg).CoreV1().Pods(web.Namespace)
 			until(ctx, t, bounds.Pod, "pod web runs on Node "+node.Name+" and its logs are readable", func(ctx context.Context) error {
 				if err := tenant.client.Get(ctx, client.ObjectKeyFromObject(web), web); err != nil {
 					return err
@@ -268,14 +225,7 @@ func TestAWorkerJoinsAClusterOfLodiasControlPlane(t *testing.T) {
 				if err := running(web); err != nil {
 					return err
 				}
-				logs, err := pods.GetLogs(web.Name, &corev1.PodLogOptions{}).DoRaw(ctx)
-				if err != nil {
-					return err
-				}
-				if !strings.Contains(string(logs), "Started HTTP server on port 8080") {
-					return fmt.Errorf("the logs of pod web lack agnhost's start line:\n%s", logs)
-				}
-				return nil
+				return requireLogs(ctx, tenant, web)
 			})
 			return ctx
 		}).
@@ -309,6 +259,83 @@ func TestAWorkerJoinsAClusterOfLodiasControlPlane(t *testing.T) {
 			if err := requireUnpaused(ctx, k8s, key, bounds.Unpaused, 2*time.Second); err != nil {
 				t.Fatal(err)
 			}
+			return ctx
+		}).
+		Assess("a Deployment of one replica runs on the only worker", func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
+			if err := tenant.client.Create(ctx, workload()); err != nil {
+				t.Fatal(err)
+			}
+			until(ctx, t, bounds.Deployed, "the pod of Deployment "+workloadName+" runs on Node "+node.Name, func(ctx context.Context) error {
+				_, err := requirePodOn(ctx, tenant, node.Name)
+				return err
+			})
+			return ctx
+		}).
+		Assess("scaled to 2, the second Machine is Running with a nodeRef", func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
+			if err := scaleWorkers(ctx, k8s, key, 2); err != nil {
+				t.Fatal(err)
+			}
+			until(ctx, t, bounds.ScaleUp, "the second Machine is Running with a nodeRef", func(ctx context.Context) error {
+				workers, err := runningWorkers(ctx, k8s, key, 2)
+				if err != nil {
+					return err
+				}
+				other, err := otherThan(machine, workers)
+				if err != nil {
+					return err
+				}
+				second = other
+				return nil
+			})
+			return ctx
+		}).
+		Assess("the second Node carries the DevMachine's providerID, has no uninitialized taint and is Ready", func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
+			until(ctx, t, bounds.ScaleReady, "Node "+second.Status.NodeRef.Name+" has the providerID, no uninitialized taint, and is Ready", func(ctx context.Context) error {
+				_, err := requireJoined(ctx, k8s, tenant, second)
+				return err
+			})
+			return ctx
+		}).
+		Assess("the konnectivity agents are ready on both Nodes", func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
+			until(ctx, t, bounds.ScaleAgents, "the konnectivity agents are ready on both Nodes", func(ctx context.Context) error {
+				return requireAgents(ctx, tenant, 2)
+			})
+			return ctx
+		}).
+		Assess("scaled back to 1, the Machine that hosts the Deployment's pod is drained and gone with its DevMachine and its Node, and the other stays", func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
+			pod, err := workloadPod(ctx, tenant)
+			if err != nil {
+				t.Fatal(err)
+			}
+			workers, err := runningWorkers(ctx, k8s, key, 2)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if deleted, err = machineOn(workers, pod.Spec.NodeName); err != nil {
+				t.Fatal(err)
+			}
+			if kept, err = otherThan(deleted, workers); err != nil {
+				t.Fatal(err)
+			}
+			if err := markForDeletion(ctx, k8s, deleted); err != nil {
+				t.Fatal(err)
+			}
+			if err := scaleWorkers(ctx, k8s, key, 1); err != nil {
+				t.Fatal(err)
+			}
+			until(ctx, t, bounds.ScaleDown, "Machine "+deleted.Name+" is gone, drained, with its DevMachine and its Node, and Machine "+kept.Name+" stays", func(ctx context.Context) error {
+				return requireScaledDown(ctx, k8s, tenant, key, deleted, kept)
+			})
+			return ctx
+		}).
+		Assess("the Deployment's pod runs on the Node that stays, and its logs are readable through the tenant's API server", func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
+			until(ctx, t, bounds.Rescheduled, "the pod of Deployment "+workloadName+" runs on Node "+kept.Status.NodeRef.Name+" and its logs are readable", func(ctx context.Context) error {
+				pod, err := requirePodOn(ctx, tenant, kept.Status.NodeRef.Name)
+				if err != nil {
+					return err
+				}
+				return requireLogs(ctx, tenant, pod)
+			})
 			return ctx
 		}).
 		Assess("deleting the Cluster removes the LodiaControlPlane, the ControlPlane, the etcd claim, the copied Secrets and the worker's container", func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
@@ -392,27 +419,4 @@ func until(ctx context.Context, t *testing.T, timeout time.Duration, what string
 		t.Fatalf("%s: %v: %v", what, err, last)
 	}
 	t.Logf("%s, after %s", what, time.Since(start).Round(time.Second))
-}
-
-func running(pod *corev1.Pod) error {
-	if pod.Status.Phase != corev1.PodRunning {
-		return fmt.Errorf("pod %s is %s", pod.Name, pod.Status.Phase)
-	}
-	for _, container := range pod.Status.ContainerStatuses {
-		if !container.Ready {
-			return fmt.Errorf("container %s of pod %s is not ready", container.Name, pod.Name)
-		}
-	}
-	return nil
-}
-
-func gone(err error) error {
-	switch {
-	case err == nil:
-		return fmt.Errorf("still there")
-	case apierrors.IsNotFound(err):
-		return nil
-	default:
-		return err
-	}
 }

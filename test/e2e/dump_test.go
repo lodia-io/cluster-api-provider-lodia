@@ -63,6 +63,8 @@ var (
 		{appsv1.SchemeGroupVersion.WithKind("DaemonSet"), metav1.NamespaceSystem},
 		{eventKind, metav1.NamespaceSystem},
 		{eventKind, metav1.NamespaceDefault},
+		{appsv1.SchemeGroupVersion.WithKind("Deployment"), metav1.NamespaceDefault},
+		{appsv1.SchemeGroupVersion.WithKind("ReplicaSet"), metav1.NamespaceDefault},
 	}
 )
 
@@ -246,7 +248,7 @@ esac
 `, verb)
 }
 
-var tenantKinds = map[string]string{"nodes": "Node", "pods": "Pod", "daemonsets": "DaemonSet", "events": "Event"}
+var tenantKinds = map[string]string{"nodes": "Node", "pods": "Pod", "daemonsets": "DaemonSet", "events": "Event", "deployments": "Deployment", "replicasets": "ReplicaSet"}
 
 func tenantAPI(t *testing.T) *httptest.Server {
 	t.Helper()
@@ -266,7 +268,7 @@ func tenantHandler(t *testing.T) http.Handler {
 		case "/api/v1":
 			respond(t, w, `{"kind":"APIResourceList","groupVersion":"v1","resources":[{"name":"nodes","kind":"Node","namespaced":false,"verbs":["list"]},{"name":"pods","kind":"Pod","namespaced":true,"verbs":["list"]},{"name":"events","kind":"Event","namespaced":true,"verbs":["list"]}]}`)
 		case "/apis/apps/v1":
-			respond(t, w, `{"kind":"APIResourceList","groupVersion":"apps/v1","resources":[{"name":"daemonsets","kind":"DaemonSet","namespaced":true,"verbs":["list"]}]}`)
+			respond(t, w, `{"kind":"APIResourceList","groupVersion":"apps/v1","resources":[{"name":"daemonsets","kind":"DaemonSet","namespaced":true,"verbs":["list"]},{"name":"deployments","kind":"Deployment","namespaced":true,"verbs":["list"]},{"name":"replicasets","kind":"ReplicaSet","namespaced":true,"verbs":["list"]}]}`)
 		default:
 			groupVersion := "v1"
 			if strings.HasPrefix(r.URL.Path, "/apis/apps/v1/") {
@@ -450,6 +452,8 @@ func TestTheDumpWritesTheTenantTheEventsAndTheWorkers(t *testing.T) {
 		"tenant/objects/kube-system/DaemonSet.yaml": "/apis/apps/v1/namespaces/kube-system/daemonsets",
 		"tenant/objects/default/Pod.yaml":           "/api/v1/namespaces/default/pods",
 		"tenant/objects/default/Event.yaml":         "/api/v1/namespaces/default/events",
+		"tenant/objects/default/Deployment.yaml":    "/apis/apps/v1/namespaces/default/deployments",
+		"tenant/objects/default/ReplicaSet.yaml":    "/apis/apps/v1/namespaces/default/replicasets",
 		"worker/worker/journal.log":                 "journalctl --no-pager -u kubelet -u containerd",
 		"worker/worker/crictl-ps.txt":               "crictl ps -a",
 	}
