@@ -6,6 +6,7 @@
 package controller
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -443,7 +444,8 @@ func (r *Reconciler) applySecret(ctx context.Context, cluster *clusterv1.Cluster
 	} else if !apierrors.IsNotFound(err) {
 		return err
 	}
-	if name == secret.Name(cluster.Name, secret.Kubeconfig) && conditions.IsTrue(cluster, clusterv1.ClusterAvailableCondition) {
+	if name == secret.Name(cluster.Name, secret.Kubeconfig) &&
+		(conditions.IsTrue(cluster, clusterv1.ClusterAvailableCondition) || bytes.Contains(current.Data[secret.KubeconfigDataName], []byte("token: revoked"))) {
 		config, err := clientcmd.Load(data[secret.KubeconfigDataName])
 		if err != nil {
 			return err
