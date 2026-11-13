@@ -285,7 +285,7 @@ func (r *Reconciler) reconcileNormal(ctx context.Context, cluster *clusterv1.Clu
 		}
 		return r.annotate(ctx, lcp, written)
 	}
-	lcp.Status.ExternalManagedControlPlane = new(true)
+	lcp.Status.ExternalManagedControlPlane = nil
 
 	current, err := r.currentControlPlane(ctx, cluster, lcp)
 	if err != nil {
