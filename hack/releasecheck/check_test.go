@@ -240,6 +240,20 @@ func TestTheTagCheckDoesNotAskCIAboutACommitOffMain(t *testing.T) {
 	}
 }
 
+func TestTheTagCheckAsksOriginMainNotTheLocalMain(t *testing.T) {
+	r := newRepository(t)
+	r.originMain(r.commit(series("0.1.v1beta2")))
+	r.commit(series("0.1.v1beta2"))
+	ci := &fakeCI{runs: greenRuns()}
+
+	if _, err := checkTag(t.Context(), r.dir, ci, "v0.1.0", "HEAD"); err == nil || !strings.Contains(err.Error(), "is not on origin/main") {
+		t.Errorf("a commit only on the local main: want its refusal, got %v", err)
+	}
+	if len(ci.asked) != 0 {
+		t.Errorf("asked CI about %v", ci.asked)
+	}
+}
+
 func TestTheTagCheckRefusesWithoutOriginMainOrACommit(t *testing.T) {
 	r := newRepository(t)
 	r.commit(series("0.1.v1beta2"))
@@ -274,9 +288,9 @@ func TestTheMetadataCheck(t *testing.T) {
 		{name: "a CRD with two contract labels", head: series("0.1.v1beta2"), base: series("0.1.v1beta2"), labels: [][]string{{v1beta2, "cluster.x-k8s.io/v1beta1"}}, want: "has 2 contract labels"},
 		{name: "a series dropped", head: series("0.2.v1beta2"), base: series("0.1.v1beta2", "0.2.v1beta2"), labels: [][]string{{v1beta2}}, want: "has the series 0.1"},
 		{name: "a series replaced by the next", head: series("0.2.v1beta2"), base: series("0.1.v1beta2"), labels: [][]string{{v1beta2}}, want: "has the series 0.1"},
-		{name: "a series with another contract", head: series("0.1.v1beta2", "0.2.v1beta2"), base: series("0.1.v1beta1"), labels: [][]string{{v1beta2}}, want: "the series 0.1 has the contract v1beta1 on origin/main and v1beta2"},
+		{name: "a series with another contract", head: series("0.1.v1beta2", "0.2.v1beta2"), base: series("0.1.v1beta1"), labels: [][]string{{v1beta2}}, want: "the series 0.1 has the contract v1beta1 at the merge base with origin/main and v1beta2"},
 		{name: "a metadata.yaml that is not metadata", head: "kind: Other\n", base: series("0.1.v1beta2"), labels: [][]string{{v1beta2}}, want: "metadata.yaml:"},
-		{name: "a metadata.yaml on origin/main that is not metadata", head: series("0.1.v1beta2"), base: "releaseSeries: []\n", labels: [][]string{{v1beta2}}, want: "on origin/main"},
+		{name: "a metadata.yaml on origin/main that is not metadata", head: series("0.1.v1beta2"), base: "releaseSeries: []\n", labels: [][]string{{v1beta2}}, want: "at the merge base with origin/main: "},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -300,6 +314,59 @@ func TestTheMetadataCheck(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestTheMetadataCheckComparesWithTheMergeBase(t *testing.T) {
+	v1beta2 := "cluster.x-k8s.io/v1beta2"
+	t.Run("a series dropped by a commit of the branch", func(t *testing.T) {
+		r := newRepository(t)
+		r.originMain(r.commit(series("0.1.v1beta2", "0.2.v1beta2")))
+		r.commit(series("0.2.v1beta2"))
+		r.write(crdsDir+"/0.yaml", crd(v1beta2))
+
+		if err := checkMetadata(t.Context(), r.dir); err == nil || !strings.Contains(err.Error(), "has the series 0.1") {
+			t.Errorf("want its refusal, got %v", err)
+		}
+	})
+	t.Run("a series that main added after the branch point", func(t *testing.T) {
+		r := newRepository(t)
+		base := r.commit(series("0.1.v1beta2"))
+		r.originMain(base)
+		r.git("switch", "--quiet", "--create", "upstream")
+		r.originMain(r.commit(series("0.1.v1beta2", "0.2.v1beta2")))
+		r.git("switch", "--quiet", "--create", "topic", base)
+		r.commit(series("0.1.v1beta2"))
+		r.write(crdsDir+"/0.yaml", crd(v1beta2))
+
+		if err := checkMetadata(t.Context(), r.dir); err != nil {
+			t.Errorf("a branch that dropped nothing: %v", err)
+		}
+	})
+	t.Run("a series dropped by a branch that main has left behind", func(t *testing.T) {
+		r := newRepository(t)
+		base := r.commit(series("0.1.v1beta2"))
+		r.originMain(base)
+		r.git("switch", "--quiet", "--create", "upstream")
+		r.originMain(r.commit(series("0.1.v1beta2", "0.2.v1beta2")))
+		r.git("switch", "--quiet", "--create", "topic", base)
+		r.commit(series("0.3.v1beta2"))
+		r.write(crdsDir+"/0.yaml", crd(v1beta2))
+
+		if err := checkMetadata(t.Context(), r.dir); err == nil || !strings.Contains(err.Error(), "has the series 0.1") {
+			t.Errorf("want its refusal, got %v", err)
+		}
+	})
+	t.Run("a history that shares nothing with origin/main", func(t *testing.T) {
+		r := newRepository(t)
+		r.originMain(r.commit(series("0.1.v1beta2")))
+		r.git("switch", "--quiet", "--orphan", "other")
+		r.commit(series("0.2.v1beta2"))
+		r.write(crdsDir+"/0.yaml", crd(v1beta2))
+
+		if err := checkMetadata(t.Context(), r.dir); err == nil || !strings.Contains(err.Error(), "no merge base") {
+			t.Errorf("want its refusal, got %v", err)
+		}
+	})
 }
 
 func TestTheMetadataCheckNamesEveryProblem(t *testing.T) {

@@ -41,6 +41,10 @@ release-components: ## write $(RELEASE_DIR)/control-plane-components.yaml: confi
 	printf '%s\n' "$$rendered" | KO_DOCKER_REPO=$(IMAGE_REPOSITORY) go run $(KO) resolve --bare --platform=$(PLATFORMS) --push=$(KO_PUSH) --tags=$(IMAGE_TAG) -f - > $(RELEASE_DIR)/control-plane-components.yaml.tmp && \
 	mv $(RELEASE_DIR)/control-plane-components.yaml.tmp $(RELEASE_DIR)/control-plane-components.yaml
 
+.PHONY: release-image
+release-image: ## print the image that $(RELEASE_DIR)/control-plane-components.yaml names, after requiring it to be the only one, $(IMAGE_REPOSITORY):$(IMAGE_TAG) with a digest
+	@go run ./hack/releasecheck image --repository=$(IMAGE_REPOSITORY) --tag=$(IMAGE_TAG) $(RELEASE_DIR)/control-plane-components.yaml
+
 .PHONY: release-login
 release-login: ## log in to the registry of $(IMAGE_REPOSITORY) as $$GITHUB_ACTOR with $$GITHUB_TOKEN, which ko pushes with
 	@printf '%s' "$$GITHUB_TOKEN" | go run $(KO) login $(firstword $(subst /, ,$(IMAGE_REPOSITORY))) --username "$$GITHUB_ACTOR" --password-stdin
@@ -52,7 +56,7 @@ release-check: ## refuse TAG before it is pushed: a semver tag with a series in 
 	GITHUB_TOKEN="$${GITHUB_TOKEN:-$$(gh auth token)}" go run ./hack/releasecheck tag --commit="$(COMMIT)" "$(TAG)"
 
 .PHONY: metadata
-metadata: ## check metadata.yaml: the newest series' contract is the CRDs' contract label, and every series of origin/main is still there with its contract
+metadata: ## check metadata.yaml: the newest series' contract is the CRDs' contract label, and every series of the merge base with origin/main is still there with its contract
 	go run ./hack/releasecheck metadata
 
 .PHONY: verify
@@ -61,7 +65,7 @@ verify: ## the check that says a change is done
 	[ "$$before" = "$$(cat $(GENERATED) | cksum)" ] || { echo "make generate changed the generated files: review and commit them"; exit 1; }
 	go mod tidy -diff
 	$(MAKE) --no-print-directory components metadata lint test
-	$(MAKE) --no-print-directory release-components KO_PUSH=false IMAGE_TAG=v0.0.0-verify
+	$(MAKE) --no-print-directory release-components release-image KO_PUSH=false IMAGE_TAG=v0.0.0-verify
 
 # LC_ALL=C: a range in a case pattern follows the locale, and on macOS en_US.UTF-8 puts A in a-z.
 .PHONY: e2e-cluster

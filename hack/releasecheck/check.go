@@ -97,8 +97,12 @@ func parseTag(tag string) (*version.Version, error) {
 	return v, nil
 }
 
-// clusterctl lists the tags that version.ParseSemantic accepts, and no others:
+// clusterctl lists the release tags that version.ParseSemantic accepts while the
+// repository is private, and the Go proxy's semver tags once it is public, each
+// of which ParseSemantic accepts:
 // https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/cmd/clusterctl/client/repository/repository_github.go#L364
+// https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/cmd/clusterctl/client/repository/repository_github.go#L118-L133
+// https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/internal/goproxy/goproxy.go#L123-L131
 func tagsWithoutSeries(ctx context.Context, dir string, md *clusterctlv1.Metadata) ([]string, error) {
 	out, err := git(ctx, dir, "tag", "--list")
 	if err != nil {
@@ -181,13 +185,19 @@ func checkMetadata(ctx context.Context, dir string) error {
 	if _, err := git(ctx, dir, "rev-parse", "--verify", "--quiet", originMain); err != nil {
 		return errors.New("origin/main does not exist here: fetch it first")
 	}
-	out, err := git(ctx, dir, "show", originMain+":"+metadataFile)
+	// The merge base, not the tip: a branch that dropped nothing must not fail
+	// once main adds a series.
+	mergeBase, err := git(ctx, dir, "merge-base", "HEAD", originMain)
+	if err != nil {
+		return fmt.Errorf("HEAD and origin/main have no merge base, as in a shallow clone: %w", err)
+	}
+	out, err := git(ctx, dir, "show", strings.TrimSpace(string(mergeBase))+":"+metadataFile)
 	if err != nil {
 		return err
 	}
 	base, err := decodeMetadata(out)
 	if err != nil {
-		return fmt.Errorf("%s on origin/main: %w", metadataFile, err)
+		return fmt.Errorf("%s at the merge base with origin/main: %w", metadataFile, err)
 	}
 	for _, was := range base.ReleaseSeries {
 		i := slices.IndexFunc(head.ReleaseSeries, func(s clusterctlv1.ReleaseSeries) bool {
@@ -195,9 +205,9 @@ func checkMetadata(ctx context.Context, dir string) error {
 		})
 		switch {
 		case i < 0:
-			problems = append(problems, fmt.Errorf("%s on origin/main has the series %d.%d, and clusterctl upgrade plan fails for the releases of a series the newest release lacks: never drop one", metadataFile, was.Major, was.Minor))
+			problems = append(problems, fmt.Errorf("%s at the merge base with origin/main has the series %d.%d, and clusterctl upgrade plan fails for the releases of a series the newest release lacks: never drop one", metadataFile, was.Major, was.Minor))
 		case head.ReleaseSeries[i].Contract != was.Contract:
-			problems = append(problems, fmt.Errorf("the series %d.%d has the contract %s on origin/main and %s in %s: a released series keeps its contract", was.Major, was.Minor, was.Contract, head.ReleaseSeries[i].Contract, metadataFile))
+			problems = append(problems, fmt.Errorf("the series %d.%d has the contract %s at the merge base with origin/main and %s in %s: a released series keeps its contract", was.Major, was.Minor, was.Contract, head.ReleaseSeries[i].Contract, metadataFile))
 		}
 	}
 	return errors.Join(problems...)

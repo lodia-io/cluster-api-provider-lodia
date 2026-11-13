@@ -14,8 +14,6 @@ jobs:
     permissions:
       contents: write
       packages: write
-      checks: read
-      statuses: read
       actions: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -35,12 +33,10 @@ jobs:
         run: make release-login
       - name: Push the image and render the components YAML
         run: make release-components IMAGE_TAG="$GITHUB_REF_NAME"
-      - name: Pull the image without credentials
-        shell: bash
+      - name: Check the image and pull it without credentials
         run: |
-          images="$(grep -oE 'ghcr\.io/[^[:space:]"]+@sha256:[0-9a-f]{64}' out/control-plane-components.yaml | sort -u)" || images=
-          [ -n "$images" ] && [ "$(printf '%s\n' "$images" | wc -l)" -eq 1 ] || { echo "the components YAML must name one image by digest, it names: ${images:-none}"; exit 1; }
-          DOCKER_CONFIG="$(mktemp -d)" docker pull "$images"
+          image="$(make --no-print-directory release-image IMAGE_TAG="$GITHUB_REF_NAME")"
+          DOCKER_CONFIG="$(mktemp -d)" docker pull "$image"
       - name: Publish the release
         env:
           GH_TOKEN: ${{ github.token }}
