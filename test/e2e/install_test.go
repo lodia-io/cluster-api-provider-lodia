@@ -301,7 +301,7 @@ func installProviders(ctx context.Context, cfg *envconf.Config) error {
 	for _, p := range providers {
 		components = append(components, p.components)
 	}
-	if err := requireNoComponentVariablesInEnvironment(os.Environ(), components...); err != nil {
+	if err := requireNoClusterctlSettingsInEnvironment(os.Environ(), components...); err != nil {
 		return err
 	}
 	configPath, err := writeRepository(repositoryDir(cfg), providers, map[string]string{

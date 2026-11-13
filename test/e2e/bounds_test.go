@@ -120,13 +120,17 @@ func clientFits(requestTimeout, discovery time.Duration) error {
 }
 
 // clusterctl's calls go through the suite's Proxy, with the client's two
-// timeouts, and only their context ends what they ask. What it asks without one
+// timeouts, and only their context ends what they ask. What they ask without one
 // is a discovery: the version check of EnsureCustomResourceDefinitions, one
-// request, and then the first call of a client, up to three. A call to a
-// cluster that answers each of them just inside the timeout takes all four after
-// its bound, and the requests with a context, which the client's timeout above
-// the API server's keeps whole, end with it.
-// https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/cmd/clusterctl/client/cluster/inventory.go#L149-L158
+// request, and the first call of a client, up to three. The call after the
+// version check runs in a retry that returns on an ended context before its
+// first attempt, and a client asks nothing until its first call, so a call to a
+// cluster that answers each of them just inside the timeout ends after its
+// bound at most one client's three requests, never the version check besides;
+// the model counts the four as margin. The requests with a context, which the
+// client's timeout above the API server's keeps whole, end with it.
+// https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/cmd/clusterctl/client/cluster/inventory.go#L146-L158
+// https://github.com/kubernetes/apimachinery/blob/v0.37.2/pkg/util/wait/backoff.go#L494-L499
 func clusterctlFits(discovery time.Duration) error {
 	if discovery <= 0 || 4*discovery > callsWithoutBound {
 		return fmt.Errorf("the discovery timeout %s of clusterctl's calls is not positive, or four of them are more than the %s left for the calls without a bound: a call of clusterctl to a cluster that answers each just in time could overshoot its bound by that much", discovery, callsWithoutBound)

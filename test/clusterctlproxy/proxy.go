@@ -55,13 +55,16 @@ func New(ctx context.Context, configClient config.Client, cfg *rest.Config, requ
 	cfg.QPS = 500
 	cfg.Burst = 1000
 	p := &proxy{cfg: cfg, requestTimeout: requestTimeout, discoveryTimeout: discoveryTimeout}
-	factory := func(in clusterctl.ClusterClientFactoryInput) (cluster.Client, error) {
+	return clusterctl.New(ctx, "", clusterctl.InjectConfig(configClient), clusterctl.InjectClusterClientFactory(clusterClientFactory(configClient, p)))
+}
+
+func clusterClientFactory(configClient config.Client, p cluster.Proxy) clusterctl.ClusterClientFactory {
+	return func(in clusterctl.ClusterClientFactoryInput) (cluster.Client, error) {
 		if err := requireNoKubeconfig(in.Kubeconfig); err != nil {
 			return nil, err
 		}
 		return cluster.New(cluster.Kubeconfig{}, configClient, cluster.InjectProxy(p), cluster.InjectYamlProcessor(in.Processor)), nil
 	}
-	return clusterctl.New(ctx, "", clusterctl.InjectConfig(configClient), clusterctl.InjectClusterClientFactory(factory))
 }
 
 func requireNoKubeconfig(kubeconfig clusterctl.Kubeconfig) error {

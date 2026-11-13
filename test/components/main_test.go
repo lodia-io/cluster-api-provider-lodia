@@ -223,6 +223,7 @@ func TestEachRunIsChecked(t *testing.T) {
 		{"the User named without the variables", strings.Replace(ok, bootstrapSubject, "- apiGroup: rbac.authorization.k8s.io\n  kind: User\n  name: system:serviceaccount:capi-kubeadm-bootstrap-system:capi-kubeadm-bootstrap-manager\n", 1), false, true},
 		{"the User named by the variables in each other's place", strings.Replace(ok, bootstrapSubject, "- apiGroup: rbac.authorization.k8s.io\n  kind: User\n  name: 'system:serviceaccount:${LODIA_KUBEADM_BOOTSTRAP_SA_NAME:=capi-kubeadm-bootstrap-manager}:${LODIA_KUBEADM_BOOTSTRAP_SA_NAMESPACE:=capi-kubeadm-bootstrap-system}'\n", 1), true, true},
 		{"the User named by another variable for the name", strings.Replace(ok, "${LODIA_KUBEADM_BOOTSTRAP_SA_NAME:=", "${LODIA_OTHER_SA_NAME:=", 1), false, true},
+		{"the verb of the User's ClusterRole that is a variable's default", strings.Replace(ok, "verbs: [get]\n", "verbs: ['${X:=get}']\n", 1), false, true},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

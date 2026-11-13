@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 	"slices"
@@ -36,9 +37,10 @@ import (
 )
 
 const (
-	certManagerWait  = 2 * time.Minute
-	providerWait     = 2 * time.Minute
-	developmentPatch = 99
+	certManagerWait    = 2 * time.Minute
+	providerWait       = 2 * time.Minute
+	developmentPatch   = 99
+	overridesFolderKey = "overridesFolder"
 )
 
 type clusterctlProvider struct {
@@ -77,9 +79,9 @@ func writeRepository(dir string, providers []clusterctlProvider, variables map[s
 		configured = append(configured, map[string]string{"name": p.name, "type": string(p.kind), "url": "file://" + filepath.Join(dir, label, "latest", "components.yaml")})
 	}
 	values := map[string]any{
-		"providers":       configured,
-		"overridesFolder": overrides,
-		"cert-manager":    map[string]string{"externallyProvisioned": "true", "timeout": certManagerWait.String()},
+		"providers":        configured,
+		overridesFolderKey: overrides,
+		"cert-manager":     map[string]string{"externallyProvisioned": "true", "timeout": certManagerWait.String()},
 	}
 	for name, value := range variables {
 		values[name] = value
@@ -114,15 +116,25 @@ func developmentVersion(metadata []byte) (string, error) {
 
 // clusterctl reads a variable from the environment before its configuration
 // file, for every component alike, Cluster API's EXP_* and CAPD's among them,
-// and counts a variable set to nothing as set.
+// and counts a variable set to nothing as set. The folder of overrides is read
+// the same way, and a components.yaml or metadata.yaml in the one that the
+// environment names, or in the default one that an empty variable falls back
+// to, replaces the repository's.
 // https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/cmd/clusterctl/client/config/reader_viper.go#L82-L88
-func requireNoComponentVariablesInEnvironment(environ []string, components ...[]byte) error {
+// https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/cmd/clusterctl/client/repository/overrides.go#L70-L90
+func requireNoClusterctlSettingsInEnvironment(environ []string, components ...[]byte) error {
 	set := make(map[string]bool, len(environ))
 	for _, kv := range environ {
 		name, _, _ := strings.Cut(kv, "=")
 		set[name] = true
 	}
 	var errs []error
+	refuse := func(variable string) {
+		if set[strings.ToUpper(variable)] {
+			errs = append(errs, fmt.Errorf("%s is set in the environment, which clusterctl reads before its configuration and so changes what the suite installs", strings.ToUpper(variable)))
+		}
+	}
+	refuse(overridesFolderKey)
 	for _, raw := range components {
 		variables, err := yamlprocessor.NewSimpleProcessor().GetVariables(raw)
 		if err != nil {
@@ -130,9 +142,7 @@ func requireNoComponentVariablesInEnvironment(environ []string, components ...[]
 			continue
 		}
 		for _, variable := range variables {
-			if set[strings.ToUpper(variable)] {
-				errs = append(errs, fmt.Errorf("%s is set in the environment, which clusterctl reads before its configuration and so changes what the suite installs", variable))
-			}
+			refuse(variable)
 		}
 	}
 	return errors.Join(errs...)
@@ -253,6 +263,9 @@ func TestTheRepositoryIsWhatClusterctlReadsBack(t *testing.T) {
 	if got, ok := configClient.Variables().Get("SA_NAME"); ok != nil || got != "manager" {
 		t.Errorf("the variable SA_NAME reads %q and %v from the configuration", got, ok)
 	}
+	if got, ok := configClient.Variables().Get(overridesFolderKey); ok != nil || got != filepath.Join(dir, "overrides") {
+		t.Errorf("the folder of overrides reads %q and %v from the configuration, want the empty one beside the repository", got, ok)
+	}
 }
 
 func TestTheDevelopmentVersionIsTheNewestSeriesWithAPatchNoReleaseHas(t *testing.T) {
@@ -292,22 +305,33 @@ func TestAVariableOfAComponentInTheEnvironmentIsRefused(t *testing.T) {
 	}
 	components := [][]byte{component("EXP_CORE"), component("EXP_BOOTSTRAP"), component("CAPD_DOCKER_HOST"), component("LODIA_KUBEADM_BOOTSTRAP_SA_NAME")}
 	clean := []string{"PATH=/bin", "HOME=/home/x", "EXP_CORE_NOT=1", "X=EXP_CORE", "LODIA_KUBEADM_BOOTSTRAP_SA=a"}
-	if err := requireNoComponentVariablesInEnvironment(clean, components...); err != nil {
+	if err := requireNoClusterctlSettingsInEnvironment(clean, components...); err != nil {
 		t.Fatalf("want an environment without the variables accepted, got %v", err)
 	}
 	for _, variable := range []string{"EXP_CORE", "EXP_BOOTSTRAP", "CAPD_DOCKER_HOST", "LODIA_KUBEADM_BOOTSTRAP_SA_NAME"} {
 		for _, kv := range []string{variable + "=true", variable + "="} {
-			err := requireNoComponentVariablesInEnvironment(append(slices.Clone(clean), kv), components...)
+			err := requireNoClusterctlSettingsInEnvironment(append(slices.Clone(clean), kv), components...)
 			if err == nil || !strings.Contains(err.Error(), variable+" is set in the environment") {
 				t.Errorf("with %q set: want %s refused, got %v", kv, variable, err)
 			}
 		}
 	}
-	if err := requireNoComponentVariablesInEnvironment(append(slices.Clone(clean), "EXP_CORE=1", "CAPD_DOCKER_HOST=x"), components...); err == nil || !strings.Contains(err.Error(), "EXP_CORE") || !strings.Contains(err.Error(), "CAPD_DOCKER_HOST") {
+	if err := requireNoClusterctlSettingsInEnvironment(append(slices.Clone(clean), "EXP_CORE=1", "CAPD_DOCKER_HOST=x"), components...); err == nil || !strings.Contains(err.Error(), "EXP_CORE") || !strings.Contains(err.Error(), "CAPD_DOCKER_HOST") {
 		t.Errorf("want both variables named, got %v", err)
 	}
-	if err := requireNoComponentVariablesInEnvironment([]string{"EXP_CORE=1"}, []byte("a: ${X")); err == nil {
+	if err := requireNoClusterctlSettingsInEnvironment([]string{"EXP_CORE=1"}, []byte("a: ${X")); err == nil {
 		t.Error("a component clusterctl cannot read is accepted")
+	}
+}
+
+func TestTheFolderOfOverridesInTheEnvironmentIsRefused(t *testing.T) {
+	for _, kv := range []string{"OVERRIDESFOLDER=/from/env", "OVERRIDESFOLDER="} {
+		if err := requireNoClusterctlSettingsInEnvironment([]string{"PATH=/bin", kv}); err == nil || !strings.Contains(err.Error(), "OVERRIDESFOLDER is set in the environment") {
+			t.Errorf("with %q set: want the folder of overrides refused, got %v", kv, err)
+		}
+	}
+	if err := requireNoClusterctlSettingsInEnvironment([]string{"PATH=/bin", "OVERRIDES=/x", "OVERRIDESFOLDER_NOT=1"}); err != nil {
+		t.Errorf("want an environment without the variable accepted, got %v", err)
 	}
 }
 
@@ -424,6 +448,51 @@ func TestTheClusterctlClientEndsItsCallsAtTheSuitesTimeouts(t *testing.T) {
 			})
 		}
 	}
+}
+
+func clusterThatHoldsTheInventory(t *testing.T) http.Handler {
+	t.Helper()
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/version":
+			respond(t, w, `{"major":"1","minor":"35","gitVersion":"v1.35.0"}`)
+		case "/api":
+			respond(t, w, `{"kind":"APIVersions","versions":["v1"]}`)
+		case "/apis":
+			respond(t, w, `{"kind":"APIGroupList","apiVersion":"v1","groups":[{"name":"apiextensions.k8s.io","versions":[{"groupVersion":"apiextensions.k8s.io/v1","version":"v1"}],"preferredVersion":{"groupVersion":"apiextensions.k8s.io/v1","version":"v1"}}]}`)
+		case "/apis/apiextensions.k8s.io/v1":
+			respond(t, w, `{"kind":"APIResourceList","groupVersion":"apiextensions.k8s.io/v1","resources":[{"name":"customresourcedefinitions","kind":"CustomResourceDefinition","namespaced":false,"verbs":["get"]}]}`)
+		default:
+			<-r.Context().Done()
+		}
+	})
+}
+
+func TestTheClusterctlClientsRequestsAskForTheirOwnTimeouts(t *testing.T) {
+	shortenTheDiscovery(t, 7*time.Second)
+	shortenTheClientRequests(t, 11*time.Second)
+	empty := filepath.Join(t.TempDir(), "clusterctl.yaml")
+	if err := os.WriteFile(empty, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	url, asked := recordedServer(t, clusterThatHoldsTheInventory(t))
+	c, err := newClusterctl(t.Context(), configFor(t, url), empty)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+	defer cancel()
+	err = returnsWithin(t, 30*time.Second, "Init", func() error {
+		_, err := c.Init(ctx, clusterctl.InitOptions{CoreProvider: "cluster-api"})
+		return err
+	})
+	if err == nil {
+		t.Fatal("Init says nothing about a cluster that holds the inventory's CustomResourceDefinition")
+	}
+	for _, suffix := range []string{"/version", "/api", "/apis", "/apis/apiextensions.k8s.io/v1"} {
+		requireRequestTimeout(t, asked(), suffix, discoveryTimeout)
+	}
+	requireRequestTimeout(t, asked(), "/customresourcedefinitions/providers.clusterctl.cluster.x-k8s.io", clientRequestTimeout)
 }
 
 const templatedFile = "/etc/capl-e2e/control-plane-version"

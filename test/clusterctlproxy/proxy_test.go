@@ -5,6 +5,7 @@ package clusterctlproxy
 
 import (
 	"context"
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -227,6 +228,36 @@ func TestNoCallReadsAKubeconfigOrTheCurrentContext(t *testing.T) {
 	}
 }
 
+func TestEveryClusterClientTheFactoryMakesReachesTheClusterOfTheRestConfig(t *testing.T) {
+	trap := serve(t, neverAnswers)
+	home := t.TempDir()
+	writeKubeconfig(t, filepath.Join(home, ".kube", "config"), trap.url)
+	writeKubeconfig(t, filepath.Join(home, "elsewhere"), trap.url)
+	t.Setenv("HOME", home)
+	t.Setenv("KUBECONFIG", filepath.Join(home, "elsewhere"))
+	s := serve(t, neverAnswers)
+	configClient, err := config.New(t.Context(), "", config.InjectReader(config.NewMemoryReader()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	factory := clusterClientFactory(configClient, &proxy{cfg: restConfig(s), requestTimeout: request, discoveryTimeout: discovery})
+	for name, kubeconfig := range map[string]clusterctl.Kubeconfig{"the end that names none": {}, "the end that names the proxy's": Kubeconfig} {
+		t.Run(name, func(t *testing.T) {
+			c, err := factory(clusterctl.ClusterClientFactoryInput{Kubeconfig: kubeconfig})
+			if err != nil {
+				t.Fatal(err)
+			}
+			got, err := c.Proxy().GetConfig()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.Host != s.url || got.Timeout != request {
+				t.Errorf("the client reaches %s with the request timeout %s, want %s and %s", got.Host, got.Timeout, s.url, request)
+			}
+		})
+	}
+}
+
 func TestAKubeconfigThatTheProxyWouldIgnoreIsRefused(t *testing.T) {
 	for name, kubeconfig := range map[string]clusterctl.Kubeconfig{
 		"a path":    {Path: "/somewhere/kubeconfig"},
@@ -282,11 +313,111 @@ func TestTheSchemeHoldsTheKindsOfClusterctlsOwn(t *testing.T) {
 	}
 }
 
+const (
+	clusterctlClient  = "sigs.k8s.io/cluster-api/cmd/clusterctl/client"
+	clusterctlCluster = clusterctlClient + "/cluster"
+	capiTestFramework = "sigs.k8s.io/cluster-api/test/framework"
+)
+
+// builtOutsideTheFactory lists the calls and imports of a file that build a
+// clusterctl client in a way New does not. A call such as cluster.GetOwnerGraph
+// makes clusterctl's own proxy from the kubeconfig path it is given, which loads
+// KUBECONFIG and the current context when the path is empty:
+// https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/cmd/clusterctl/client/cluster/ownergraph.go#L71-L72
+func builtOutsideTheFactory(path string, src any) ([]string, error) {
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, path, src, parser.SkipObjectResolution)
+	if err != nil {
+		return nil, err
+	}
+	var found []string
+	names := make(map[string]string)
+	for _, imp := range file.Imports {
+		importPath, err := strconv.Unquote(imp.Path.Value)
+		if err != nil {
+			return nil, err
+		}
+		if importPath == capiTestFramework || strings.HasPrefix(importPath, capiTestFramework+"/") {
+			found = append(found, fmt.Sprintf("%s imports %s, whose clients take a kubeconfig path", fset.Position(imp.Pos()), importPath))
+		}
+		if importPath != clusterctlClient && importPath != clusterctlCluster {
+			continue
+		}
+		switch {
+		case imp.Name == nil:
+			names[filepath.Base(importPath)] = importPath
+		case imp.Name.Name == ".":
+			found = append(found, fmt.Sprintf("%s imports %s with a dot, which hides its calls from the scan", fset.Position(imp.Pos()), importPath))
+		default:
+			names[imp.Name.Name] = importPath
+		}
+	}
+	ast.Inspect(file, func(n ast.Node) bool {
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		selector, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok {
+			return true
+		}
+		x, ok := selector.X.(*ast.Ident)
+		if !ok || names[x.Name] == "" {
+			return true
+		}
+		if names[x.Name] == clusterctlCluster && (selector.Sel.Name == "InjectProxy" || selector.Sel.Name == "InjectYamlProcessor") {
+			return true
+		}
+		found = append(found, fmt.Sprintf("%s calls %s.%s", fset.Position(call.Pos()), x.Name, selector.Sel.Name))
+		return true
+	})
+	return found, nil
+}
+
+func TestTheScanRefusesEveryClusterctlClientNotBuiltByTheFactory(t *testing.T) {
+	const (
+		clusterImport = `import "` + clusterctlCluster + `"` + "\n"
+		clientImport  = `import clusterctl "` + clusterctlClient + `"` + "\n"
+	)
+	cases := []struct {
+		name, src string
+		want      int
+	}{
+		{"clusterctl's own client", "package p\n" + clientImport + "var _, _ = clusterctl.New(nil, \"\")\n", 1},
+		{"a cluster client", "package p\n" + clusterImport + "var _ = cluster.New(cluster.Kubeconfig{}, nil)\n", 1},
+		{"clusterctl's own proxy", "package p\n" + clusterImport + "var _ = cluster.NewProxy(cluster.Kubeconfig{Path: \"/x\"}, 0)\n", 1},
+		{"the owner graph from a kubeconfig path", "package p\n" + clusterImport + "var _, _ = cluster.GetOwnerGraph(nil, \"capi-join\", \"/some/kubeconfig\", nil)\n", 1},
+		{"the owner graph from an empty path", "package p\n" + clusterImport + "var _, _ = cluster.GetOwnerGraph(nil, \"capi-join\", \"\", nil)\n", 1},
+		{"a call of a package imported under another name", "package p\n" + `import owners "` + clusterctlCluster + `"` + "\nvar _, _ = owners.GetOwnerGraph(nil, \"n\", \"\", nil)\n", 1},
+		{"two calls", "package p\n" + clusterImport + "var _ = cluster.NewProxy(cluster.Kubeconfig{}, 0)\nvar _, _ = cluster.GetOwnerGraph(nil, \"n\", \"\", nil)\n", 2},
+		{"a package imported with a dot", "package p\n" + `import . "` + clusterctlCluster + `"` + "\nvar _, _ = GetOwnerGraph(nil, \"n\", \"\", nil)\n", 1},
+		{"the test framework's clusterctl", "package p\n" + `import "` + capiTestFramework + `/clusterctl"` + "\n", 1},
+		{"the test framework", "package p\n" + `import _ "` + capiTestFramework + `"` + "\n", 1},
+		{"a package beside the test framework", "package p\n" + `import "` + capiTestFramework + `x"` + "\n", 0},
+		{"the option that gives cluster.New its Proxy", "package p\n" + clusterImport + "var _ = cluster.InjectProxy(nil)\n", 0},
+		{"the option that gives cluster.New its processor", "package p\n" + clusterImport + "var _ = cluster.InjectYamlProcessor(nil)\n", 0},
+		{"an option of the client package", "package p\n" + clientImport + "var _ = clusterctl.InjectConfig(nil)\n", 1},
+		{"a type and a literal of the client", "package p\n" + clientImport + "var _ clusterctl.Client\nvar _ = clusterctl.Kubeconfig{Context: \"c\"}\n", 0},
+		{"a call on a client", "package p\n" + clientImport + "func f(c clusterctl.Client) { _, _ = c.Init(nil, clusterctl.InitOptions{}) }\n", 0},
+		{"a package of that name that is not clusterctl's", "package p\n" + `import "example.invalid/cluster"` + "\nvar _ = cluster.New()\n", 0},
+		{"clusterctl's configuration", "package p\n" + `import "` + clusterctlClient + `/config"` + "\nvar _, _ = config.New(nil, \"\")\n", 0},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			found, err := builtOutsideTheFactory("p.go", c.src)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(found) != c.want {
+				t.Errorf("the scan found %d, want %d: %v", len(found), c.want, found)
+			}
+		})
+	}
+}
+
 // Every clusterctl client the suite builds has to go through New, or it reads
 // the kubeconfig that clusterctl's own proxy loads and has no bound.
 func TestEveryClusterctlClientIsBuiltThroughTheFactory(t *testing.T) {
-	const clusterctlClient = "sigs.k8s.io/cluster-api/cmd/clusterctl/client"
-	builders := map[string]bool{clusterctlClient: true, clusterctlClient + "/cluster": true}
 	allowed, err := filepath.Abs("proxy.go")
 	if err != nil {
 		t.Fatal(err)
@@ -306,37 +437,14 @@ func TestEveryClusterctlClientIsBuiltThroughTheFactory(t *testing.T) {
 		if err != nil || !strings.HasSuffix(path, ".go") || abs == allowed {
 			return err
 		}
-		file, err := parser.ParseFile(token.NewFileSet(), path, nil, parser.SkipObjectResolution)
+		found, err := builtOutsideTheFactory(path, nil)
 		if err != nil {
 			return err
 		}
 		scanned++
-		names := make(map[string]bool)
-		for _, imp := range file.Imports {
-			importPath, err := strconv.Unquote(imp.Path.Value)
-			if err != nil || !builders[importPath] {
-				continue
-			}
-			name := filepath.Base(importPath)
-			if imp.Name != nil {
-				name = imp.Name.Name
-			}
-			names[name] = true
+		for _, f := range found {
+			t.Errorf("%s: clusterctl's clients are built by clusterctlproxy.New alone", f)
 		}
-		ast.Inspect(file, func(n ast.Node) bool {
-			call, ok := n.(*ast.CallExpr)
-			if !ok {
-				return true
-			}
-			selector, ok := call.Fun.(*ast.SelectorExpr)
-			if !ok {
-				return true
-			}
-			if x, ok := selector.X.(*ast.Ident); ok && names[x.Name] && (selector.Sel.Name == "New" || selector.Sel.Name == "NewProxy") {
-				t.Errorf("%s calls %s.%s: clusterctl's clients are built by clusterctlproxy.New alone", path, x.Name, selector.Sel.Name)
-			}
-			return true
-		})
 		return nil
 	})
 	if err != nil {
