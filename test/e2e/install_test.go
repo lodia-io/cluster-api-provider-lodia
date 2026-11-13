@@ -226,7 +226,7 @@ func installLodia(ctx context.Context, cfg *envconf.Config) error {
 	}
 	args := []string{"--install", "--create-namespace"}
 	for _, build := range []struct{ values, command string }{{"image", "./cmd/lodia"}, {"signerImage", "./cmd/lodia-signer"}, {"tunnelImage", "./cmd/lodia-tunnel"}} {
-		out, err := ko(ctx, cfg, lodia, []string{"VERSION=" + version}, nil, "build", build.command)
+		out, err := ko(ctx, cfg, lodia, []string{"VERSION=" + version}, build.command)
 		if err != nil {
 			return err
 		}
@@ -253,13 +253,7 @@ func installLodia(ctx context.Context, cfg *envconf.Config) error {
 }
 
 func installProvider(ctx context.Context, cfg *envconf.Config) error {
-	kustomize := exec.CommandContext(ctx, "go", "run", "sigs.k8s.io/kustomize/kustomize/v5@v5.7.0", "build", "config/default")
-	kustomize.Dir = root
-	built, err := toolOutput(kustomize)
-	if err != nil {
-		return fmt.Errorf("build config/default: %w", err)
-	}
-	resolved, err := ko(ctx, cfg, root, nil, bytes.NewReader(built), "resolve", "-f", "-")
+	resolved, err := renderProvider(ctx, cfg)
 	if err != nil {
 		return err
 	}
@@ -267,6 +261,18 @@ func installProvider(ctx context.Context, cfg *envconf.Config) error {
 		return fmt.Errorf("apply the provider: %w", err)
 	}
 	return available(ctx, cfg, providerNamespace, "cluster-api-provider-lodia-controller-manager")
+}
+
+func renderProvider(ctx context.Context, cfg *envconf.Config) ([]byte, error) {
+	cluster, err := kindCluster(cfg.KubeconfigFile())
+	if err != nil {
+		return nil, err
+	}
+	dir := filepath.Join(workDir(cfg), "release")
+	if _, err := toolOutput(releaseComponentsCommand(ctx, cluster, dir)); err != nil {
+		return nil, fmt.Errorf("make release-components into kind: %w", err)
+	}
+	return os.ReadFile(filepath.Join(dir, "control-plane-components.yaml"))
 }
 
 func lodiaVersion(ctx context.Context, lodia string) (string, error) {
@@ -277,19 +283,18 @@ func lodiaVersion(ctx context.Context, lodia string) (string, error) {
 	return strings.TrimSpace(string(out)), nil
 }
 
-func ko(ctx context.Context, cfg *envconf.Config, dir string, env []string, stdin io.Reader, verb string, args ...string) ([]byte, error) {
+func ko(ctx context.Context, cfg *envconf.Config, dir string, env []string, args ...string) ([]byte, error) {
 	cluster, err := kindCluster(cfg.KubeconfigFile())
 	if err != nil {
 		return nil, err
 	}
-	run := append([]string{"run", "github.com/google/ko@v0.19.1", verb, "--base-import-paths", "--platform=linux/" + goruntime.GOARCH}, args...)
+	run := append([]string{"run", koModule, "build", "--base-import-paths", "--platform=linux/" + goruntime.GOARCH}, args...)
 	cmd := exec.CommandContext(ctx, "go", run...)
 	cmd.Dir = dir
 	cmd.Env = koEnv(os.Environ(), cluster, env...)
-	cmd.Stdin = stdin
 	out, err := toolOutput(cmd)
 	if err != nil {
-		return nil, fmt.Errorf("ko %s into kind: %w", verb, err)
+		return nil, fmt.Errorf("ko build into kind: %w", err)
 	}
 	return out, nil
 }

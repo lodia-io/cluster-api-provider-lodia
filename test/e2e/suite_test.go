@@ -18,10 +18,7 @@ import (
 	"sigs.k8s.io/e2e-framework/pkg/envconf"
 )
 
-var (
-	testenv env.Environment
-	root    = filepath.Join("..", "..")
-)
+var testenv env.Environment
 
 func TestMain(m *testing.M) {
 	path := os.Getenv("E2E_KUBECONFIG")

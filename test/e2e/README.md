@@ -27,11 +27,11 @@ In this order, each Deployment waited on until `Available`:
 | Cluster API and its kubeadm bootstrap provider v1.15.0-beta.0 | their release YAMLs |
 | Cluster API provider Docker v1.15.0-beta.0 | the release's `infrastructure-components-development.yaml`, whose image is built for the [staging registry](https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/Makefile#L1071-L1074) |
 | Lodia and etcd-druid | the chart of the [Lodia commit](https://github.com/lodia-io/lodia/tree/57375832e7fe8b3a06374613797eb4c544fe7612) that `go.mod` pins, fetched by `make e2e-lodia` into `work/lodia`, with images built by ko into the kind cluster |
-| this provider | `config/default`, built by kustomize and ko into the kind cluster |
+| this provider | `make release-components`, the target that renders the release's components YAML, with the image repository `kind.local/cluster-api-provider-lodia` and the host's one platform, so that ko loads the image into the kind cluster |
 
 A release YAML is checked against a sha256 kept in [`install_test.go`](install_test.go), rendered with Cluster API's `yamlprocessor`, and every `image:` in it gets a digest from the same file; an `image:` without one fails the install, and so does any container or init container image of the decoded documents that has none, whatever the shape of its line.
 Every create is retried for a minute on a webhook or x509 error, since a webhook can be `Available` before its certificate is in place, which clusterctl [guards](https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/cmd/clusterctl/client/cluster/cert_manager.go#L565-L571) against with a throwaway Issuer and Certificate.
-kind is a `go tool`; ko and kustomize run through `go run` at pinned versions, which keeps them out of `go.mod` (kustomize's is in `install_test.go` and in the `Makefile`); helm v4.3.1 comes from the workflow.
+kind is a `go tool`; ko and kustomize run through `go run` at pinned versions, which keeps them out of `go.mod` (kustomize's is in the `Makefile`, ko's in the `Makefile` and in `tool_test.go`, and `TestTheSuiteAndTheMakefileRunTheSameKo` fails when they differ); helm v4.3.1 comes from the workflow.
 
 To move a pin, change the version, the sum and the digests together, and the version in the table above.
 Read a digest with `go run github.com/google/go-containerregistry/cmd/crane@v0.22.1 digest <image>` and a sum from the release asset.

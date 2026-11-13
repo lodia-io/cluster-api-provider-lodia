@@ -5,6 +5,11 @@ LODIA_DIR = $(CURDIR)/work/lodia
 LODIA_COMMIT = 57375832e7fe8b3a06374613797eb4c544fe7612
 REMOVE_WORKERS = docker ps --all --quiet --filter label=io.x-k8s.kind.cluster=$(E2E_CLUSTER)-w | xargs -r docker rm --force --volumes
 KUSTOMIZE = sigs.k8s.io/kustomize/kustomize/v5@v5.7.0
+KO = github.com/google/ko@v0.19.1
+IMAGE_REPOSITORY ?= ghcr.io/lodia-io/cluster-api-provider-lodia
+PLATFORMS ?= linux/amd64,linux/arm64
+KO_PUSH ?= true
+RELEASE_DIR ?= out
 GENERATED = api/v1alpha1/zz_generated.deepcopy.go config/crd/bases/*.yaml config/rbac/role.yaml
 
 .PHONY: generate
@@ -26,6 +31,13 @@ test: ## unit and envtest tests; envtest runs a real API server and etcd
 components: ## render config/default and check that every variable has a non-empty default, its Namespace, labels and manager container as rendered, and the roles that reach the manager's ServiceAccount on what clusterctl installs with the defaults and with explicit values
 	@rendered="$$(go run $(KUSTOMIZE) build config/default)" || exit 1; \
 	printf '%s\n' "$$rendered" | go run ./test/components
+
+.PHONY: release-components
+release-components: ## write $(RELEASE_DIR)/control-plane-components.yaml: config/default with the manager's image built by ko for $(PLATFORMS) and named by digest in $(IMAGE_REPOSITORY), pushed unless KO_PUSH=false
+	@rendered="$$(go run $(KUSTOMIZE) build config/default)" || exit 1; \
+	mkdir -p $(RELEASE_DIR) && \
+	printf '%s\n' "$$rendered" | KO_DOCKER_REPO=$(IMAGE_REPOSITORY) go run $(KO) resolve --bare --platform=$(PLATFORMS) --push=$(KO_PUSH) -f - > $(RELEASE_DIR)/control-plane-components.yaml.tmp && \
+	mv $(RELEASE_DIR)/control-plane-components.yaml.tmp $(RELEASE_DIR)/control-plane-components.yaml
 
 .PHONY: verify
 verify: ## the check that says a change is done
