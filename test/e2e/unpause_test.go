@@ -340,6 +340,16 @@ func failureOf(t *testing.T, call func(testing.TB)) string {
 	return f.message
 }
 
+func requireEndedAtItsBound(t *testing.T, took, bound time.Duration) {
+	t.Helper()
+	if took < bound {
+		t.Errorf("the call ended after %s, before its bound %s", took, bound)
+	}
+	if limit := bound + bound/2; took > limit {
+		t.Errorf("the call took %s, more than %s: it has to end at its bound %s", took, limit, bound)
+	}
+}
+
 func requireNamed(t *testing.T, err error, deadlined *atomic.Int32, want ...string) {
 	t.Helper()
 	if err == nil {
@@ -359,6 +369,7 @@ func requireNamed(t *testing.T, err error, deadlined *atomic.Int32, want ...stri
 }
 
 func TestUntilFailsWithTheCauseOfItsEndAndTheReasonOfTheLastCheckWhereTheClientsLimiterWouldHoldARead(t *testing.T) {
+	const bound = 300 * time.Millisecond
 	shortenTheUntil(t, 20*time.Millisecond)
 	cases := []struct {
 		name     string
@@ -373,8 +384,9 @@ func TestUntilFailsWithTheCauseOfItsEndAndTheReasonOfTheLastCheckWhereTheClients
 			var deadlined atomic.Int32
 			limiter := flowcontrol.NewTokenBucketRateLimiter(0.001, 1)
 			var reads int
+			start := time.Now()
 			message := failureOf(t, func(f testing.TB) {
-				until(t.Context(), f, 200*time.Millisecond, "the step", func(ctx context.Context) error {
+				until(t.Context(), f, bound, "the step", func(ctx context.Context) error {
 					reads++
 					if err := throttled(ctx, limiter, &deadlined); err != nil {
 						return err
@@ -391,6 +403,7 @@ func TestUntilFailsWithTheCauseOfItsEndAndTheReasonOfTheLastCheckWhereTheClients
 				}
 				return
 			}
+			requireEndedAtItsBound(t, time.Since(start), bound)
 			requireNamed(t, errors.New(message), &deadlined, c.failure...)
 		})
 	}

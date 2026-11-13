@@ -63,6 +63,7 @@ func pauseCycle(ctx context.Context, c client.Client, key client.ObjectKey, boun
 	var err error
 	if pause {
 		_, err = setClusterPaused(bounded, c, key, true)
+		err = cutShort(bounded, err)
 	}
 	holding := pause
 	if err == nil {
@@ -77,7 +78,7 @@ func pauseCycle(ctx context.Context, c client.Client, key client.ObjectKey, boun
 		} else {
 			holding = true
 			if act != nil {
-				err = act(bounded)
+				err = cutShort(bounded, act(bounded))
 			}
 		}
 	}
@@ -324,6 +325,13 @@ func TestAPauseEndsAtItsBoundAndItsUnpauseAtItsOwnWhenTheClusterStopsAnswering(t
 			took := time.Since(start)
 			if err == nil {
 				t.Fatal("want a failure, got none")
+			}
+			wantCause := "context deadline exceeded after " + bound.String()
+			if c.callersBound > 0 {
+				wantCause = context.DeadlineExceeded.Error()
+			}
+			if !strings.Contains(err.Error(), wantCause) {
+				t.Errorf("the failure does not say %q: %v", wantCause, err)
 			}
 			if want := min(bound, cmp.Or(c.callersBound, bound)); took < want {
 				t.Errorf("the call ended after %s, before its bound %s", took, want)

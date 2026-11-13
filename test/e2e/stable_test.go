@@ -109,7 +109,7 @@ func (s snapshot) changesTo(next snapshot) []string {
 // https://github.com/kubernetes/client-go/blob/v0.37.2/rest/request.go#L672-L678
 func endAfter(ctx context.Context, d time.Duration) (context.Context, context.CancelFunc) {
 	ctx, cancel := context.WithCancelCause(ctx)
-	timer := time.AfterFunc(d, func() { cancel(context.DeadlineExceeded) })
+	timer := time.AfterFunc(d, func() { cancel(fmt.Errorf("%w after %s", context.DeadlineExceeded, d)) })
 	return ctx, func() {
 		timer.Stop()
 		cancel(context.Canceled)
@@ -123,6 +123,16 @@ func endedBy(ctx context.Context, err error) error {
 		return cause
 	}
 	return err
+}
+
+// cutShort gives the error of a call that the end of bounded cut short the
+// cause that endAfter gave it, since the call reports only context.Canceled.
+func cutShort(bounded context.Context, err error) error {
+	cause := context.Cause(bounded)
+	if err == nil || cause == nil {
+		return err
+	}
+	return errors.Join(err, cause)
 }
 
 // settle waits until settleReads reads in a row agree with the one before,
@@ -543,5 +553,25 @@ func TestTheStabilityChecksReadAsOftenAndAsLongAsClusterAPIsDo(t *testing.T) {
 	}
 	if bounds.Stable < holdWindow {
 		t.Errorf("the window of step 23 is %s, shorter than Cluster API's %s", bounds.Stable, holdWindow)
+	}
+}
+
+func TestAnErrorOfACallThatItsBoundCutShortNamesTheBoundAndTheCauseOfTheEnd(t *testing.T) {
+	ended, cancel := endAfter(t.Context(), time.Millisecond)
+	defer cancel()
+	<-ended.Done()
+	running, stop := endAfter(t.Context(), time.Minute)
+	defer stop()
+	refused := errors.New("forbidden")
+
+	err := cutShort(ended, fmt.Errorf("patch: %w", context.Canceled))
+	if !errors.Is(err, context.DeadlineExceeded) || !errors.Is(err, context.Canceled) || !strings.Contains(err.Error(), "patch") || !strings.Contains(err.Error(), "context deadline exceeded after 1ms") {
+		t.Errorf("a call cut short fails with %v, want its own error and the cause of the end with its bound", err)
+	}
+	if err := cutShort(running, refused); !errors.Is(err, refused) || err.Error() != refused.Error() {
+		t.Errorf("a call that failed before its bound ended fails with %v, want its own error as it is", err)
+	}
+	if err := cutShort(ended, nil); err != nil {
+		t.Errorf("a call that did not fail fails with %v", err)
 	}
 }

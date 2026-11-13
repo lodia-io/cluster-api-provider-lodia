@@ -245,6 +245,7 @@ func TestADeploymentIsAvailableWhenItsAvailableConditionIsTrue(t *testing.T) {
 }
 
 func TestACreateIsRetriedWhileTheWebhooksDoNotAnswerAndFailsWithTheirErrorWhereTheClientsLimiterWouldHoldARead(t *testing.T) {
+	const bound = 300 * time.Millisecond
 	webhook := apierrors.NewInternalError(errors.New(`failed calling webhook "validate.example.com": connection refused`))
 	cases := []struct {
 		name     string
@@ -253,20 +254,21 @@ func TestACreateIsRetriedWhileTheWebhooksDoNotAnswerAndFailsWithTheirErrorWhereT
 		wantErr  []string
 		creates  int32
 		maxTakes time.Duration
+		atBound  bool
 	}{
-		{"webhooks that never answer, and a limiter that holds the third create", func(int) error { return webhook }, 2, []string{`failed calling webhook "validate.example.com"`}, 0, 0},
+		{"webhooks that never answer, and a limiter that holds the third create", func(int) error { return webhook }, 2, []string{`failed calling webhook "validate.example.com"`}, 0, 0, true},
 		{"webhooks that answer at the third create", func(n int) error {
 			if n < 3 {
 				return webhook
 			}
 			return nil
-		}, 0, nil, 3, time.Second},
+		}, 0, nil, 3, time.Second, false},
 		{"a create that is refused", func(int) error {
 			return apierrors.NewForbidden(schema.GroupResource{Resource: "configmaps"}, "c", errors.New("no"))
-		}, 0, []string{"forbidden"}, 1, time.Second},
+		}, 0, []string{"forbidden"}, 1, time.Second, false},
 		{"a create of an object that exists", func(int) error {
 			return apierrors.NewAlreadyExists(schema.GroupResource{Resource: "configmaps"}, "c")
-		}, 0, []string{"already exists"}, 1, time.Second},
+		}, 0, []string{"already exists"}, 1, time.Second, false},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -282,7 +284,10 @@ func TestACreateIsRetriedWhileTheWebhooksDoNotAnswerAndFailsWithTheirErrorWhereT
 				},
 			})
 			start := time.Now()
-			err := createWhenWebhooksAnswer(base, 200*time.Millisecond, 10*time.Millisecond)(t.Context(), &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Namespace: "ns", Name: "c"}})
+			err := createWhenWebhooksAnswer(base, bound, 10*time.Millisecond)(t.Context(), &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Namespace: "ns", Name: "c"}})
+			if c.atBound {
+				requireEndedAtItsBound(t, time.Since(start), bound)
+			}
 			if c.wantErr == nil {
 				if err != nil {
 					t.Fatalf("want accepted, got %v", err)
@@ -314,6 +319,7 @@ func TestACreateThatTheClusterHoldsThroughItsBoundFailsWithTheCauseOfTheEnd(t *t
 }
 
 func TestDeploymentsAreAvailableWhenEachBecomesAvailableWithinItsBoundAndTheFailureNamesTheOneThatDoesNotWhereTheClientsLimiterWouldHoldARead(t *testing.T) {
+	const bound = 300 * time.Millisecond
 	deployment := func(name string, available corev1.ConditionStatus) *appsv1.Deployment {
 		return &appsv1.Deployment{
 			ObjectMeta: metav1.ObjectMeta{Namespace: "ns", Name: name},
@@ -325,11 +331,12 @@ func TestDeploymentsAreAvailableWhenEachBecomesAvailableWithinItsBoundAndTheFail
 		names   []string
 		passes  int
 		wantErr []string
+		atBound bool
 	}{
-		{"both are Available", []string{"a", "c"}, 0, nil},
-		{"the second is not, and a limiter that holds the third read", []string{"a", "b"}, 2, []string{"deployment ns/b is not Available: context deadline exceeded"}},
-		{"the first is not, and a limiter that holds the second read", []string{"b", "a"}, 1, []string{"deployment ns/b is not Available: context deadline exceeded"}},
-		{"one does not exist", []string{"a", "missing"}, 0, []string{"deployment ns/missing is not Available", "not found"}},
+		{"both are Available", []string{"a", "c"}, 0, nil, false},
+		{"the second is not, and a limiter that holds the third read", []string{"a", "b"}, 2, []string{"deployment ns/b is not Available: context deadline exceeded"}, true},
+		{"the first is not, and a limiter that holds the second read", []string{"b", "a"}, 1, []string{"deployment ns/b is not Available: context deadline exceeded"}, true},
+		{"one does not exist", []string{"a", "missing"}, 0, []string{"deployment ns/missing is not Available", "not found"}, false},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -343,7 +350,11 @@ func TestDeploymentsAreAvailableWhenEachBecomesAvailableWithinItsBoundAndTheFail
 					return w.Get(ctx, key, obj, opts...)
 				},
 			})
-			err := deploymentsAvailable(t.Context(), reads, "ns", 200*time.Millisecond, 10*time.Millisecond, c.names...)
+			start := time.Now()
+			err := deploymentsAvailable(t.Context(), reads, "ns", bound, 10*time.Millisecond, c.names...)
+			if c.atBound {
+				requireEndedAtItsBound(t, time.Since(start), bound)
+			}
 			if c.wantErr == nil {
 				if err != nil {
 					t.Fatalf("want accepted, got %v", err)

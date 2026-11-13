@@ -60,7 +60,7 @@ func TestAWorkerJoinsAClusterOfLodiasControlPlane(t *testing.T) {
 			return ctx
 		}).
 		Assess("the objects are applied, and the DevCluster, whose infrastructure the suite manages, is marked provisioned", func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
-			bounded, cancel := context.WithTimeout(ctx, bounds.Apply)
+			bounded, cancel := endAfter(ctx, bounds.Apply)
 			defer cancel()
 			for _, file := range []string{"cluster.yaml", "workers.yaml"} {
 				manifest, err := render(file, key.Name)
@@ -77,7 +77,7 @@ func TestAWorkerJoinsAClusterOfLodiasControlPlane(t *testing.T) {
 			provisioned.SetName(key.Name)
 			patch := client.RawPatch(types.MergePatchType, []byte(`{"status":{"initialization":{"provisioned":true}}}`))
 			if err := k8s.Status().Patch(bounded, provisioned, patch); err != nil {
-				t.Fatal(err)
+				t.Fatal(cutShort(bounded, err))
 			}
 			return ctx
 		}).
@@ -247,11 +247,11 @@ func TestAWorkerJoinsAClusterOfLodiasControlPlane(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			bounded, cancel := context.WithTimeout(ctx, bounds.Move)
+			bounded, cancel := endAfter(ctx, bounds.Move)
 			defer cancel()
 			options := clusterctl.MoveOptions{FromKubeconfig: clusterctlproxy.Kubeconfig, ToKubeconfig: clusterctlproxy.Kubeconfig, Namespace: key.Namespace}
 			if err := clusterctlproxy.MoveUntilBlocked(bounded, c, options, "LodiaControlPlane", key.Name); err != nil {
-				t.Fatal(err)
+				t.Fatal(cutShort(bounded, err))
 			}
 			return ctx
 		}).
