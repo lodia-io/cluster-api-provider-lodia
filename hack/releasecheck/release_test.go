@@ -22,8 +22,10 @@ type workflow struct {
 	Jobs        map[string]struct {
 		Permissions map[string]string `json:"permissions"`
 		Steps       []struct {
-			Name string `json:"name"`
-			Run  string `json:"run"`
+			Name            string `json:"name"`
+			Run             string `json:"run"`
+			If              any    `json:"if"`
+			ContinueOnError any    `json:"continue-on-error"`
 		} `json:"steps"`
 	} `json:"jobs"`
 }
@@ -43,6 +45,10 @@ func readRelease(t *testing.T) workflow {
 
 func runMake(t *testing.T, args ...string) (string, string, error) {
 	t.Helper()
+	// go test caches a result by the files its process opens, https://github.com/golang/go/blob/go1.26.10/src/cmd/go/internal/test/test.go#L2008-L2060, and make opens the Makefile in a child.
+	if _, err := os.ReadFile(filepath.Join(root, "Makefile")); err != nil {
+		t.Fatal(err)
+	}
 	cmd := exec.CommandContext(t.Context(), "make", append([]string{"--no-print-directory"}, args...)...)
 	cmd.Dir = root
 	var stdout, stderr bytes.Buffer
@@ -69,19 +75,30 @@ func TestTheReleaseWorkflowGrantsOnlyWhatItUses(t *testing.T) {
 }
 
 func TestTheReleaseWorkflowPullsTheImageThatTheMakefileChecks(t *testing.T) {
-	steps := map[string]string{}
+	var names []string
+	runs := map[string]string{}
 	for _, step := range readRelease(t).Jobs["release"].Steps {
-		steps[step.Name] = step.Run
+		if step.If != nil || step.ContinueOnError != nil {
+			t.Errorf("the step %q has an if or a continue-on-error, so a failed step may not stop the job", step.Name)
+		}
+		if step.Name != "" {
+			names = append(names, step.Name)
+			runs[step.Name] = step.Run
+		}
 	}
 
-	if got := steps["Push the image and render the components YAML"]; got != `make release-components IMAGE_TAG="$GITHUB_REF_NAME"` {
-		t.Errorf("the render step runs %q", got)
+	const render, pull, publish = "Push the image and render the components YAML", "Check the image and pull it without credentials", "Publish the release"
+	want := []string{"Check the tag", "Log in to the registry", render, pull, publish}
+	if diff := cmp.Diff(want, names); diff != "" {
+		t.Errorf("the named steps of the release job (-want +got):\n%s", diff)
 	}
-	pull := steps["Check the image and pull it without credentials"]
-	for _, want := range []string{`image="$(make --no-print-directory release-image IMAGE_TAG="$GITHUB_REF_NAME")"`, `DOCKER_CONFIG="$(mktemp -d)" docker pull "$image"`} {
-		if !strings.Contains(pull, want) {
-			t.Errorf("the pull step lacks %q:\n%s", want, pull)
-		}
+	if wantRender := `make release-components IMAGE_TAG="$GITHUB_REF_NAME"`; runs[render] != wantRender {
+		t.Errorf("the render step runs %q, want %q", runs[render], wantRender)
+	}
+	wantPull := `image="$(make --no-print-directory release-image IMAGE_TAG="$GITHUB_REF_NAME")"` + "\n" +
+		`DOCKER_CONFIG="$(mktemp -d)" docker pull "$image"` + "\n"
+	if runs[pull] != wantPull {
+		t.Errorf("the pull step runs %q, want %q", runs[pull], wantPull)
 	}
 }
 
