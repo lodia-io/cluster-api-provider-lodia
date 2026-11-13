@@ -297,7 +297,7 @@ func managementHandler(t *testing.T) http.Handler {
 		case strings.HasSuffix(r.URL.Path, "/clusters"):
 			respond(t, w, `{"kind":"ClusterList","apiVersion":"cluster.x-k8s.io/v1beta2","items":[]}`)
 		case strings.HasSuffix(r.URL.Path, "/pods"):
-			respond(t, w, `{"kind":"PodList","apiVersion":"v1","items":[{"metadata":{"name":"p"},"spec":{"containers":[{"name":"c"},{"name":"c2"}]},"status":{"containerStatuses":[{"name":"c","restartCount":1},{"name":"c2","restartCount":0}]}},{"metadata":{"name":"q"},"spec":{"containers":[{"name":"d"},{"name":"e"}]},"status":{"containerStatuses":[{"name":"d"},{"name":"e"}]}}]}`)
+			respond(t, w, `{"kind":"PodList","apiVersion":"v1","items":[{"metadata":{"name":"q"},"spec":{"containers":[{"name":"d"},{"name":"e"}]},"status":{"containerStatuses":[{"name":"d"},{"name":"e"}]}},{"metadata":{"name":"p"},"spec":{"containers":[{"name":"c"},{"name":"c2"}]},"status":{"containerStatuses":[{"name":"c","restartCount":1},{"name":"c2","restartCount":0}]}}]}`)
 		case strings.HasSuffix(r.URL.Path, "/pods/q/log") && r.URL.Query().Get("container") == "d":
 			http.Error(w, "container d is waiting to start: ContainerCreating", http.StatusBadRequest)
 		case strings.HasSuffix(r.URL.Path, "/log"):
