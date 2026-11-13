@@ -17,6 +17,76 @@ How each rule of the contract is met, the life of the objects and the reasons: [
   No image is published and there are no release artifacts.
 - **A clusterctl install does not deliver the grant** that lets the kubeadm bootstrap provider read a `LodiaControlPlane`, which it needs for files with `contentFormat: Template` and, with v1.14.0 to v1.15.0-beta.0, for every join ([why](docs/design.md#what-the-provider-writes)).
 
+## Manager flags
+
+The manager takes the flags of [Cluster API's kubeadm control plane provider](https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/controlplane/kubeadm/main.go#L128-L217) that apply to it, under their names and with their defaults; `--help` lists them.
+It logs through klog: `--v` sets the verbosity, `--logging-format` the format, and, unless `--insecure-diagnostics` is set, `/debug/flags/v` on the diagnostics address changes the level while it runs.
+`--namespace` limits the manager to one namespace.
+`--watch-filter` limits it to the Clusters and `LodiaControlPlane`s that carry the label `cluster.x-k8s.io/watch-filter` with that value.
+`--lodiacontrolplane-concurrency` (default 10) sets how many `LodiaControlPlane`s are reconciled at once.
+The manifest passes `--leader-elect`, `--diagnostics-address` and `--insecure-diagnostics`; the last two take the clusterctl variables `CAPI_DIAGNOSTICS_ADDRESS` (default `:8443`) and `CAPI_INSECURE_DIAGNOSTICS` (default `false`), which [Cluster API documents for every provider](https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/docs/book/src/user/guide/providers/observability.md?plain=1#L7-L37).
+
+Several instances of the provider from the released YAML are not supported.
+A second install rewrites the subjects of the ClusterRoleBindings it shares with the first, which takes the first instance's grants away ([clusterctl](https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/cmd/clusterctl/client/repository/components.go#L349-L366)), and the leader election Lease has a fixed name, so every instance needs a manager namespace of its own.
+`--namespace` and `--watch-filter` are there because the clusterctl contract asks for them and cluster-api-operator can pass them; Cluster API itself gives several instances [best-effort support only](https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/docs/book/src/developer/core/support-multiple-instances.md?plain=1#L22-L37).
+
+### Under cluster-api-operator
+
+The operator writes the fields of a provider's `spec.manager` as flags of the manager ([customizer](https://github.com/kubernetes-sigs/cluster-api-operator/blob/v0.30.0/internal/controller/component_customizer.go#L198-L421)).
+`--watch-filter` and the `--tls-*` flags have no field of their own and reach the manager only through `spec.manager.additionalArgs` or the Deployment's args.
+
+#### Fields that work
+
+- `controller.groupKindConcurrency`
+  Only with the key `LodiaControlPlane`: the operator writes `--<key>-concurrency` in lower case.
+- `cacheNamespace`
+- `metrics.diagnosticsAddress`
+  The container's port `metrics` stays 8443, so a Service or scrape config that names it follows only while the address uses that port.
+- `metrics.insecureDiagnostics`
+- `profilerAddress`
+- `leaderElection.leaderElect`
+- `leaderElection.leaseDuration`
+- `leaderElection.renewDeadline`
+- `leaderElection.retryPeriod`
+- `syncPeriod`
+- `verbosity`
+- `additionalArgs`
+  For `--watch-filter` and the three `--tls-*` flags.
+
+#### A field that works only as `:9440`
+
+- `health.healthProbeBindAddress`
+  The probes use the container's port `healthz`, 9440, which the operator never changes.
+  Any other port, or a loopback host, fails the probes and restarts the pod.
+
+#### Fields that make the manager exit at start
+
+The operator writes a flag the manager does not define.
+
+- `controller.groupKindConcurrency`
+  With any other key, such as `LodiaControlPlane.controlplane.lodia.io`, which the field's own documentation asks for.
+- `maxConcurrentReconciles`
+  Cluster API's kubeadm control plane provider refuses it too.
+- `metrics.bindAddress`
+  Cluster API's kubeadm control plane provider refuses it too.
+- `webhook.host`
+  Cluster API's kubeadm control plane provider refuses it too.
+- `leaderElection.resourceName`
+  With `leaderElection.resourceNamespace` and `leaderElect: true` the operator writes `--leader-election-id`, which Cluster API's kubeadm control plane provider refuses too.
+- `webhook.port`
+  The provider has no webhooks; Cluster API's kubeadm control plane provider accepts it.
+- `webhook.certDir`
+  The provider has no webhooks; Cluster API's kubeadm control plane provider accepts it.
+- `featureGates`
+  The provider has no feature gates; Cluster API's kubeadm control plane provider accepts it.
+
+#### Fields that break the probes
+
+The operator writes no flag, and moves the probes off `/healthz` and `/readyz`, which the manager serves.
+
+- `health.livenessEndpointName`
+- `health.readinessEndpointName`
+
 ## Build and test
 
 You need Go (the version in `go.mod`) and [golangci-lint](https://golangci-lint.run/) v2.13.2.

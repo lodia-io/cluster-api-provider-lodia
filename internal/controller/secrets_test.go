@@ -21,8 +21,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
-
-	"go.lodia.io/cluster-api-provider-lodia/internal/controller"
 )
 
 func TestAFailureOnOneSecretDoesNotStopTheOther(t *testing.T) {
@@ -156,14 +154,6 @@ func TestATransientReadOfASourceSecretIsReturned(t *testing.T) {
 }
 
 func TestAResyncRepairsTheProvidersSecrets(t *testing.T) {
-	options, err := controller.CacheOptions()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if options.SyncPeriod == nil || *options.SyncPeriod != 10*time.Minute {
-		t.Errorf("sync period %v", options.SyncPeriod)
-	}
-
 	ns := namespace(t)
 	startManager(t, ns, func(o *cache.Options) { o.SyncPeriod = new(time.Second) })
 	cluster, _ := create(t, ns, "pi")

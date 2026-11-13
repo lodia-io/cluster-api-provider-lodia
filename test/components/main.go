@@ -128,7 +128,7 @@ func main() {
 }
 
 func check(r io.Reader) error {
-	options, err := controller.ManagerOptions("0", "0", true)
+	options, err := controller.ManagerOptions(controller.Config{})
 	if err != nil {
 		return err
 	}

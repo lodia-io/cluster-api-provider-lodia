@@ -225,14 +225,39 @@ func TestATransientErrorReadingInitializationCreatesNothing(t *testing.T) {
 	absent(t, controlPlaneOf(cluster))
 }
 
-func TestTheControllerRunsTenWorkersAndBoundsAPass(t *testing.T) {
-	options := controller.ControllerOptions()
-	if options.MaxConcurrentReconciles != 10 || options.ReconciliationTimeout != time.Minute {
+func TestTheControllerRunsTheConfiguredWorkersAndBoundsAPass(t *testing.T) {
+	options := controller.ControllerOptions(controller.Config{Concurrency: 7})
+	if options.MaxConcurrentReconciles != 7 || options.ReconciliationTimeout != time.Minute {
 		t.Errorf("options %+v", options)
 	}
 }
 
 func TestOneTenantsBlockedWriteDoesNotHoldUpAnother(t *testing.T) {
+	blockTenantA(t, 10, func(ns string) {
+		second, _ := create(t, ns, "tenant-b")
+		cp := controlPlaneOf(second)
+		eventually(t, func() error { return k8s.Get(t.Context(), client.ObjectKeyFromObject(cp), cp) })
+	})
+}
+
+func TestOneWorkerHoldsUpTheTenantBehindABlockedWrite(t *testing.T) {
+	blockTenantA(t, 1, func(ns string) {
+		second, _ := create(t, ns, "tenant-b")
+		consistently(t, 3*time.Second, func() error {
+			cp := controlPlaneOf(second)
+			switch err := k8s.Get(t.Context(), client.ObjectKeyFromObject(cp), cp); {
+			case err == nil:
+				return errors.New("tenant B's ControlPlane exists while tenant A's write is blocked")
+			case !apierrors.IsNotFound(err):
+				return err
+			}
+			return nil
+		})
+	})
+}
+
+func blockTenantA(t *testing.T, workers int, whileBlocked func(ns string)) {
+	t.Helper()
 	c, err := client.NewWithWatch(asController, client.Options{Scheme: controller.Scheme()})
 	if err != nil {
 		t.Fatal(err)
@@ -240,7 +265,7 @@ func TestOneTenantsBlockedWriteDoesNotHoldUpAnother(t *testing.T) {
 	release := make(chan struct{})
 	blocked := make(chan bool, 1)
 	ns := namespace(t)
-	startManagerWith(t, ns, func(ctrl.Manager) client.Client {
+	startManagerWith(t, controller.Config{Namespace: ns, Concurrency: workers}, func(ctrl.Manager) client.Client {
 		return interceptor.NewClient(c, interceptor.Funcs{
 			Apply: func(ctx context.Context, c client.WithWatch, obj runtime.ApplyConfiguration, opts ...client.ApplyOption) error {
 				if a, ok := obj.(interface{ GetName() string }); ok && a.GetName() == "tenant-a" {
@@ -270,9 +295,7 @@ func TestOneTenantsBlockedWriteDoesNotHoldUpAnother(t *testing.T) {
 		t.Fatal("tenant A never reached its apply")
 	}
 
-	second, _ := create(t, ns, "tenant-b")
-	cp := controlPlaneOf(second)
-	eventually(t, func() error { return k8s.Get(t.Context(), client.ObjectKeyFromObject(cp), cp) })
+	whileBlocked(ns)
 
 	close(release)
 	held := controlPlaneOf(first)

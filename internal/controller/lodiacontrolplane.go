@@ -30,8 +30,11 @@ import (
 	"sigs.k8s.io/cluster-api/util/annotations"
 	"sigs.k8s.io/cluster-api/util/conditions"
 	"sigs.k8s.io/cluster-api/util/finalizers"
+	"sigs.k8s.io/cluster-api/util/flags"
+	capilabels "sigs.k8s.io/cluster-api/util/labels"
 	"sigs.k8s.io/cluster-api/util/patch"
 	"sigs.k8s.io/cluster-api/util/paused"
+	"sigs.k8s.io/cluster-api/util/predicates"
 	"sigs.k8s.io/cluster-api/util/secret"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
@@ -40,8 +43,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
-	"sigs.k8s.io/controller-runtime/pkg/metrics/filters"
-	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
@@ -80,24 +81,51 @@ func Scheme() *runtime.Scheme {
 	return scheme
 }
 
-// ManagerOptions are the manager's: leader-elected, with the metrics served
-// over HTTPS behind authentication and authorization, and CacheOptions.
-func ManagerOptions(metricsAddr, probeAddr string, leaderElect bool) (ctrl.Options, error) {
-	cache, err := CacheOptions()
+// Config is what the manager's flags set.
+type Config struct {
+	Namespace string
+	// WatchFilterValue is the value of the label cluster.x-k8s.io/watch-filter
+	// that a Cluster and a LodiaControlPlane need to be reconciled; empty
+	// reconciles all.
+	WatchFilterValue string
+	SyncPeriod       time.Duration
+	Concurrency      int
+	LeaderElect      bool
+	LeaseDuration    time.Duration
+	RenewDeadline    time.Duration
+	RetryPeriod      time.Duration
+	HealthAddr       string
+	ProfilerAddress  string
+	Diagnostics      flags.ManagerOptions
+}
+
+// ManagerOptions are the manager's: leader-elected on request, with the
+// diagnostics served as Cluster API's util/flags serves them, and CacheOptions
+// limited to Config.Namespace.
+func ManagerOptions(c Config) (ctrl.Options, error) {
+	cacheOptions, err := CacheOptions()
+	if err != nil {
+		return ctrl.Options{}, err
+	}
+	cacheOptions.SyncPeriod = &c.SyncPeriod
+	if c.Namespace != "" {
+		cacheOptions.DefaultNamespaces = map[string]cache.Config{c.Namespace: {}}
+	}
+	_, metrics, err := flags.GetManagerOptions(c.Diagnostics)
 	if err != nil {
 		return ctrl.Options{}, err
 	}
 	return ctrl.Options{
-		Scheme: Scheme(),
-		Metrics: metricsserver.Options{
-			BindAddress:    metricsAddr,
-			SecureServing:  true,
-			FilterProvider: filters.WithAuthenticationAndAuthorization,
-		},
-		HealthProbeBindAddress: probeAddr,
-		LeaderElection:         leaderElect,
+		Scheme:                 Scheme(),
+		Metrics:                *metrics,
+		HealthProbeBindAddress: c.HealthAddr,
+		PprofBindAddress:       c.ProfilerAddress,
+		LeaderElection:         c.LeaderElect,
 		LeaderElectionID:       "controlplane.lodia.io",
-		Cache:                  cache,
+		LeaseDuration:          &c.LeaseDuration,
+		RenewDeadline:          &c.RenewDeadline,
+		RetryPeriod:            &c.RetryPeriod,
+		Cache:                  cacheOptions,
 	}, nil
 }
 
@@ -109,32 +137,35 @@ func CacheOptions() (cache.Options, error) {
 		return cache.Options{}, err
 	}
 	return cache.Options{
-		SyncPeriod: new(10 * time.Minute),
 		ByObject: map[client.Object]cache.ByObject{
 			&corev1.Secret{}: {Label: labels.NewSelector().Add(*lodias)},
 		},
 	}, nil
 }
 
-// ControllerOptions keep one tenant's blocked write from holding up the
-// others, and bound a pass.
-func ControllerOptions() controller.Options {
-	return controller.Options{MaxConcurrentReconciles: 10, ReconciliationTimeout: time.Minute}
+// ControllerOptions run Config.Concurrency workers, which keep one tenant's
+// blocked write from holding up the others, and bound a pass.
+func ControllerOptions(c Config) controller.Options {
+	return controller.Options{MaxConcurrentReconciles: c.Concurrency, ReconciliationTimeout: time.Minute}
 }
 
-func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
+// SetupWithManager filters by Config.WatchFilterValue the events of the
+// LodiaControlPlane and the Cluster; the events of the ControlPlane and the
+// Secrets carry no such label, so their map functions check the Cluster's.
+func (r *Reconciler) SetupWithManager(mgr ctrl.Manager, c Config) error {
+	watched := predicates.ResourceHasFilterLabel(mgr.GetScheme(), mgr.GetLogger().WithValues("controller", Name), c.WatchFilterValue)
 	return ctrl.NewControllerManagedBy(mgr).
 		Named(Name).
-		WithOptions(ControllerOptions()).
-		For(&v1alpha1.LodiaControlPlane{}).
+		WithOptions(ControllerOptions(c)).
+		For(&v1alpha1.LodiaControlPlane{}, builder.WithPredicates(watched)).
 		Watches(&clusterv1.Cluster{},
 			handler.EnqueueRequestsFromMapFunc(func(_ context.Context, o client.Object) []reconcile.Request {
 				return lodiaControlPlaneOf(o.(*clusterv1.Cluster))
 			}),
-			builder.WithPredicates(predicate.GenerationChangedPredicate{})).
+			builder.WithPredicates(watched, predicate.GenerationChangedPredicate{})).
 		Watches(&lodiav1alpha1.ControlPlane{},
 			handler.EnqueueRequestsFromMapFunc(func(ctx context.Context, o client.Object) []reconcile.Request {
-				return r.forCluster(ctx, o.GetNamespace(), o.GetName())
+				return r.forCluster(ctx, c.WatchFilterValue, o.GetNamespace(), o.GetName())
 			})).
 		WatchesMetadata(&corev1.Secret{},
 			handler.EnqueueRequestsFromMapFunc(func(ctx context.Context, o client.Object) []reconcile.Request {
@@ -142,14 +173,17 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 				if o.GetName() != lodiav1alpha1.AdminKubeconfigSecret.Name(cp) && o.GetName() != lodiav1alpha1.CABundleSecret.Name(cp) {
 					return nil
 				}
-				return r.forCluster(ctx, o.GetNamespace(), cp)
+				return r.forCluster(ctx, c.WatchFilterValue, o.GetNamespace(), cp)
 			})).
 		Complete(r)
 }
 
-func (r *Reconciler) forCluster(ctx context.Context, namespace, name string) []reconcile.Request {
+func (r *Reconciler) forCluster(ctx context.Context, watchFilterValue, namespace, name string) []reconcile.Request {
 	cluster := &clusterv1.Cluster{}
 	if err := r.Get(ctx, client.ObjectKey{Namespace: namespace, Name: name}, cluster); err != nil {
+		return nil
+	}
+	if watchFilterValue != "" && !capilabels.HasWatchLabel(cluster, watchFilterValue) {
 		return nil
 	}
 	return lodiaControlPlaneOf(cluster)

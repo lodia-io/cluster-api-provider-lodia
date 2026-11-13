@@ -161,30 +161,26 @@ func boundToTheClusterRole(cfg *rest.Config) (*rest.Config, error) {
 
 func startManager(t *testing.T, ns string, mutate ...func(*cache.Options)) ctrl.Manager {
 	t.Helper()
-	return startManagerWith(t, ns, ctrl.Manager.GetClient, mutate...)
+	return startManagerWith(t, controller.Config{Namespace: ns, Concurrency: 10}, ctrl.Manager.GetClient, mutate...)
 }
 
-func startManagerWith(t *testing.T, ns string, clientOf func(ctrl.Manager) client.Client, mutate ...func(*cache.Options)) ctrl.Manager {
+func startManagerWith(t *testing.T, c controller.Config, clientOf func(ctrl.Manager) client.Client, mutate ...func(*cache.Options)) ctrl.Manager {
 	t.Helper()
-	options, err := controller.CacheOptions()
+	options, err := controller.ManagerOptions(c)
 	if err != nil {
 		t.Fatal(err)
 	}
-	options.DefaultNamespaces = map[string]cache.Config{ns: {}}
-	options.ReaderFailOnMissingInformer = true
+	options.Cache.ReaderFailOnMissingInformer = true
 	for _, m := range mutate {
-		m(&options)
+		m(&options.Cache)
 	}
-	mgr, err := ctrl.NewManager(asController, ctrl.Options{
-		Scheme:     controller.Scheme(),
-		Metrics:    metricsserver.Options{BindAddress: "0"},
-		Cache:      options,
-		Controller: config.Controller{SkipNameValidation: new(true)},
-	})
+	options.Metrics = metricsserver.Options{BindAddress: "0"}
+	options.Controller = config.Controller{SkipNameValidation: new(true)}
+	mgr, err := ctrl.NewManager(asController, options)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := (&controller.Reconciler{Client: clientOf(mgr), APIReader: mgr.GetAPIReader()}).SetupWithManager(mgr); err != nil {
+	if err := (&controller.Reconciler{Client: clientOf(mgr), APIReader: mgr.GetAPIReader()}).SetupWithManager(mgr, c); err != nil {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithCancel(t.Context())
@@ -427,6 +423,15 @@ func eventually(t *testing.T, check func() error) {
 	})
 	if err != nil {
 		t.Fatalf("%v: %v", err, last)
+	}
+}
+
+func consistently(t *testing.T, d time.Duration, check func() error) {
+	t.Helper()
+	for deadline := time.Now().Add(d); time.Now().Before(deadline); time.Sleep(100 * time.Millisecond) {
+		if err := check(); err != nil {
+			t.Fatal(err)
+		}
 	}
 }
 

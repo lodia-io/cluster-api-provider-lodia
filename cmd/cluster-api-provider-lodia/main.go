@@ -2,33 +2,90 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Command cluster-api-provider-lodia runs the LodiaControlPlane controller:
-// one manager, leader-elected, whose cache holds no Secret data.
+// one manager, leader-elected on request, whose cache holds no Secret data.
 package main
 
 import (
 	"flag"
+	"fmt"
 	"os"
+	"time"
 
+	"github.com/spf13/pflag"
+	cliflag "k8s.io/component-base/cli/flag"
+	logsv1 "k8s.io/component-base/logs/api/v1"
+	_ "k8s.io/component-base/logs/json/register"
+	"k8s.io/klog/v2"
+	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
+	"sigs.k8s.io/cluster-api/util/flags"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
-	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 
 	"go.lodia.io/cluster-api-provider-lodia/internal/controller"
 )
 
+var (
+	config     controller.Config
+	logOptions = logsv1.NewLoggingConfiguration()
+)
+
+// InitFlags registers the flags of Cluster API's kubeadm control plane
+// provider that apply here, under its names and with its defaults:
+// https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/controlplane/kubeadm/main.go#L128-L217
+func InitFlags(fs *pflag.FlagSet) {
+	logsv1.AddFlags(logOptions, fs)
+
+	fs.BoolVar(&config.LeaderElect, "leader-elect", false,
+		"Enable leader election for controller manager. Enabling this will ensure there is only one active controller manager.")
+
+	fs.DurationVar(&config.LeaseDuration, "leader-elect-lease-duration", 1*time.Minute,
+		"Interval at which non-leader candidates will wait to force acquire leadership (duration string)")
+
+	fs.DurationVar(&config.RenewDeadline, "leader-elect-renew-deadline", 40*time.Second,
+		"Duration that the leading controller manager will retry refreshing leadership before giving up (duration string)")
+
+	fs.DurationVar(&config.RetryPeriod, "leader-elect-retry-period", 5*time.Second,
+		"Duration the LeaderElector clients should wait between tries of actions (duration string)")
+
+	fs.StringVar(&config.Namespace, "namespace", "",
+		"Namespace that the controller watches to reconcile cluster-api objects. If unspecified, the controller watches for cluster-api objects across all namespaces.")
+
+	fs.StringVar(&config.WatchFilterValue, "watch-filter", "",
+		fmt.Sprintf("Label value that the controller watches to reconcile cluster-api objects. Label key is always %s. If unspecified, the controller watches for all cluster-api objects.", clusterv1.WatchLabel))
+
+	fs.StringVar(&config.ProfilerAddress, "profiler-address", "",
+		"Bind address to expose the pprof profiler (e.g. localhost:6060)")
+
+	fs.IntVar(&config.Concurrency, "lodiacontrolplane-concurrency", 10,
+		"Number of LodiaControlPlanes to process simultaneously")
+
+	fs.DurationVar(&config.SyncPeriod, "sync-period", 10*time.Minute,
+		"The minimum interval at which watched resources are reconciled (e.g. 15m)")
+
+	fs.StringVar(&config.HealthAddr, "health-addr", ":9440",
+		"The address the health endpoint binds to.")
+
+	flags.AddManagerOptions(fs, &config.Diagnostics)
+}
+
 func main() {
-	var metricsAddr, probeAddr string
-	var leaderElect bool
-	flag.StringVar(&metricsAddr, "metrics-bind-address", ":8443", "Address of the metrics endpoint, served over HTTPS behind authentication and authorization.")
-	flag.StringVar(&probeAddr, "health-probe-bind-address", ":8081", "Address of the health and readiness probes.")
-	flag.BoolVar(&leaderElect, "leader-elect", true, "Run the controller only in the replica that holds the leader lease.")
-	opts := zap.Options{}
-	opts.BindFlags(flag.CommandLine)
-	flag.Parse()
-	ctrl.SetLogger(zap.New(zap.UseFlagOptions(&opts)))
+	InitFlags(pflag.CommandLine)
+	pflag.CommandLine.SetNormalizeFunc(cliflag.WordSepNormalizeFunc)
+	pflag.CommandLine.AddGoFlagSet(flag.CommandLine)
+	if err := pflag.CommandLine.Set("v", "2"); err != nil {
+		fmt.Printf("Failed to set default log level: %v\n", err)
+		os.Exit(1)
+	}
+	pflag.Parse()
+
+	if err := logsv1.ValidateAndApply(logOptions, nil); err != nil {
+		fmt.Printf("Unable to start manager: %v\n", err)
+		os.Exit(1)
+	}
+	ctrl.SetLogger(klog.Background())
 	log := ctrl.Log.WithName("setup")
 
-	options, err := controller.ManagerOptions(metricsAddr, probeAddr, leaderElect)
+	options, err := controller.ManagerOptions(config)
 	if err != nil {
 		log.Error(err, "build the manager options")
 		os.Exit(1)
@@ -38,7 +95,7 @@ func main() {
 		log.Error(err, "create the manager")
 		os.Exit(1)
 	}
-	if err := (&controller.Reconciler{Client: mgr.GetClient(), APIReader: mgr.GetAPIReader()}).SetupWithManager(mgr); err != nil {
+	if err := (&controller.Reconciler{Client: mgr.GetClient(), APIReader: mgr.GetAPIReader()}).SetupWithManager(mgr, config); err != nil {
 		log.Error(err, "set up the controller")
 		os.Exit(1)
 	}
