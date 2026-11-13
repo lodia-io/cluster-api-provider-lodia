@@ -253,8 +253,10 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (_ ctrl.Re
 	if err != nil || cluster == nil {
 		return ctrl.Result{}, err
 	}
-	if added, err := finalizers.EnsureFinalizer(ctx, r.Client, lcp, v1alpha1.Finalizer); err != nil || added {
-		return ctrl.Result{}, err
+	if _, hasUID := lcp.Annotations[v1alpha1.UIDAnnotation]; !hasUID {
+		if added, err := finalizers.EnsureFinalizer(ctx, r.Client, lcp, v1alpha1.Finalizer); err != nil || added {
+			return ctrl.Result{}, err
+		}
 	}
 	patchHelper, err := patch.NewHelper(lcp, r.Client)
 	if err != nil {
