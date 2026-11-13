@@ -379,7 +379,9 @@ func (r *Reconciler) applyControlPlane(ctx context.Context, cluster *clusterv1.C
 		cp.SetUID(current.GetUID())
 	}
 	cp.SetLabels(map[string]string{clusterv1.ClusterNameLabel: cluster.Name})
-	cp.SetOwnerReferences([]metav1.OwnerReference{*metav1.NewControllerRef(lcp, v1alpha1.GroupVersion.WithKind("LodiaControlPlane"))})
+	if initialized := lcp.Status.Initialization.ControlPlaneInitialized; initialized == nil || !*initialized {
+		cp.SetOwnerReferences([]metav1.OwnerReference{*metav1.NewControllerRef(lcp, v1alpha1.GroupVersion.WithKind("LodiaControlPlane"))})
+	}
 	if err := r.Apply(ctx, client.ApplyConfigurationFromUnstructured(cp), client.FieldOwner(FieldManager), client.ForceOwnership); err != nil {
 		return nil, err
 	}
