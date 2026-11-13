@@ -159,6 +159,9 @@ func TestACopyOfAnotherObjectGetsNeitherAControlPlaneNorSecretsNorARewrittenAnno
 					t.Error(err)
 				}
 				available(t, lcp, metav1.ConditionFalse, v1alpha1.CopyOfAnotherObjectReason)
+				if len(lcp.Finalizers) != 0 || condition(lcp, clusterv1.PausedCondition) != nil {
+					t.Errorf("the pass wrote more than the condition: finalizers %v, Paused %+v", lcp.Finalizers, condition(lcp, clusterv1.PausedCondition))
+				}
 				absent(t, secretOf(cluster, secret.Kubeconfig), secretOf(cluster, secret.ClusterCA))
 				got := controlPlaneOf(cluster)
 				if !leftover {

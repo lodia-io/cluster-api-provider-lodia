@@ -63,6 +63,8 @@ const (
 // +kubebuilder:rbac:groups=authentication.k8s.io,resources=tokenreviews,verbs=create
 // +kubebuilder:rbac:groups=authorization.k8s.io,resources=subjectaccessreviews,verbs=create
 
+var ownedConditions = patch.WithOwnedConditions{Conditions: []string{clusterv1.ReadyCondition, clusterv1.AvailableCondition}}
+
 type Reconciler struct {
 	client.Client
 
@@ -202,6 +204,12 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (_ ctrl.Re
 	if err := r.Get(ctx, req.NamespacedName, lcp); err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
+	// A copy that clusterctl's move or a restore left keeps its source's UID
+	// annotation, and is refused before the pass does anything else, block-move
+	// included; a deleting one is not, so that its finalizer can go.
+	if uid, ok := lcp.Annotations[v1alpha1.UIDAnnotation]; ok && uid != string(lcp.UID) && lcp.DeletionTimestamp.IsZero() {
+		return ctrl.Result{}, r.refuseCopy(ctx, lcp, uid)
+	}
 	cluster, err := util.GetOwnerCluster(ctx, r.Client, lcp.ObjectMeta)
 	if !lcp.DeletionTimestamp.IsZero() && (apierrors.IsNotFound(err) || err == nil && cluster == nil) {
 		if isPaused, requeue, err := paused.EnsurePausedCondition(ctx, r.Client, nil, lcp); err != nil || isPaused || requeue {
@@ -227,9 +235,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (_ ctrl.Re
 		return ctrl.Result{}, err
 	}
 	defer func() {
-		reterr = errors.Join(reterr, patchHelper.Patch(ctx, lcp, patch.WithOwnedConditions{Conditions: []string{
-			clusterv1.ReadyCondition, clusterv1.AvailableCondition,
-		}}))
+		reterr = errors.Join(reterr, patchHelper.Patch(ctx, lcp, ownedConditions))
 	}()
 
 	if !lcp.DeletionTimestamp.IsZero() {
@@ -239,14 +245,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (_ ctrl.Re
 }
 
 func (r *Reconciler) reconcileNormal(ctx context.Context, cluster *clusterv1.Cluster, lcp *v1alpha1.LodiaControlPlane) error {
-	// The UID is checked before block-move is: a move after block-move was
-	// removed by hand leaves a copy without it, and the UID is written only
-	// where absent, in the patch that precedes every apply.
-	uid, hasUID := lcp.Annotations[v1alpha1.UIDAnnotation]
-	if hasUID && uid != string(lcp.UID) {
-		reportCopy(lcp, uid)
-		return nil
-	}
+	_, hasUID := lcp.Annotations[v1alpha1.UIDAnnotation]
 	if _, hasBlockMove := lcp.Annotations[clusterctlv1.BlockMoveAnnotation]; !hasBlockMove || !hasUID {
 		written := map[string]string{}
 		if !hasBlockMove {
@@ -442,10 +441,15 @@ func report(lcp *v1alpha1.LodiaControlPlane, u *unstructured.Unstructured, secre
 	return conditions.SetMirrorConditionFromUnstructured(u, lcp, lodiav1alpha1.ConditionReady)
 }
 
-func reportCopy(lcp *v1alpha1.LodiaControlPlane, uid string) {
+func (r *Reconciler) refuseCopy(ctx context.Context, lcp *v1alpha1.LodiaControlPlane, uid string) error {
+	patchHelper, err := patch.NewHelper(lcp, r.Client)
+	if err != nil {
+		return err
+	}
 	setDown(lcp, v1alpha1.CopyOfAnotherObjectReason, fmt.Sprintf(
 		"this is a copy of another LodiaControlPlane: %s names the UID %q, not its own, and no ControlPlane is built for it; remove the annotation to build a new, empty one",
 		v1alpha1.UIDAnnotation, uid))
+	return patchHelper.Patch(ctx, lcp, ownedConditions)
 }
 
 // reportLost keeps the verdict of a ControlPlane deleted behind the provider's
