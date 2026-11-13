@@ -268,7 +268,7 @@ func TestUnpausingFailsUnlessBothControllersRanAfterIt(t *testing.T) {
 }
 
 func TestUnpausingFailsWithoutACluster(t *testing.T) {
-	err := requireUnpaused(t.Context(), fake.NewClientBuilder().WithScheme(controller.Scheme()).Build(), unpausedKey, 100*time.Millisecond, 10*time.Millisecond)
+	err := requireUnpaused(t.Context(), fake.NewClientBuilder().WithScheme(controller.Scheme()).Build(), unpausedKey, 100*time.Millisecond, 50*time.Millisecond)
 	if err == nil || !apierrors.IsNotFound(err) {
 		t.Fatalf("want a NotFound, got %v", err)
 	}
