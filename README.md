@@ -146,7 +146,7 @@ Keep the variables as [above](#variables) for either.
 ## `clusterctl move`
 
 The provider refuses `clusterctl move`.
-It writes the annotation `clusterctl.cluster.x-k8s.io/block-move` on every `LodiaControlPlane` in its first pass and never removes it, which makes a move wait for the annotation to go before it creates anything in the target ([contract](https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/docs/book/src/developer/providers/contracts/clusterctl.md?plain=1#L490-L543), [annotation](https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/docs/book/src/reference/api/labels-and-annotations.md?plain=1#L40-L41)).
+It writes the annotation `clusterctl.cluster.x-k8s.io/block-move` on every `LodiaControlPlane` before it creates Lodia's `ControlPlane`, in the pass after the finalizer and the `Paused` condition, and never removes it, which makes a move wait for the annotation to go before it creates anything in the target ([contract](https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/docs/book/src/developer/providers/contracts/clusterctl.md?plain=1#L490-L543), [annotation](https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/docs/book/src/reference/api/labels-and-annotations.md?plain=1#L40-L41)).
 A hosted control plane is Lodia's pods, Services, etcd and Secrets in the source management cluster, under Lodia's `ControlPlane`, which move would not carry: it finds the kinds whose CRDs carry the label `clusterctl.cluster.x-k8s.io` ([discovery](https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/cmd/clusterctl/client/cluster/objectgraph.go#L344-L430)), and Lodia's CRDs carry none ([CRD](https://github.com/lodia-io/lodia/blob/57375832e7fe8b3a06374613797eb4c544fe7612/api/crds/lodia.io_controlplanes.yaml#L1-L8)).
 
 What the refusal costs:
@@ -170,14 +170,12 @@ An object created from a manifest carries no such annotation, so a Cluster recre
 
 ## Manager flags
 
-The manager takes the flags of [Cluster API's kubeadm control plane provider](https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/controlplane/kubeadm/main.go#L128-L217) that apply to it, under their names and with their defaults; `--help` lists them.
+The manager takes the flags of [Cluster API's kubeadm control plane provider](https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/controlplane/kubeadm/main.go#L128-L217) that apply to it, under their names and with their defaults, but for the concurrency: `--lodiacontrolplane-concurrency` defaults to 10, where that provider's `--kubeadmcontrolplane-concurrency` defaults to [100](https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/controlplane/kubeadm/main.go#L160-L161); `--help` lists them.
 It logs through klog: `--v` sets the verbosity, `--logging-format` the format, and, unless `--insecure-diagnostics` is set, `/debug/flags/v` on the diagnostics address changes the level while it runs.
 `--namespace` limits the manager to one namespace.
 `--watch-filter` limits it to the events of objects that carry the label `cluster.x-k8s.io/watch-filter` with that value.
-Put the label on a Cluster and on its `LodiaControlPlane`.
-The events of a Cluster and of a `LodiaControlPlane` count by their own labels, and those of Lodia's `ControlPlane` and Secrets by the Cluster's.
-A `LodiaControlPlane` without the label is not reconciled on its own events: only its Cluster's events reach it, which are a change of the Cluster's spec, each start of the manager (it lists every Cluster again, and each gives one pass) and the Cluster's creation when the `LodiaControlPlane` is already in the cache.
-A labelled `LodiaControlPlane` whose Cluster has none misses the events of Lodia's objects, and waits for its own next change or for the resync.
+Put the label, with the same value, on a Cluster and on its `LodiaControlPlane`: the filter is honoured only for such a pair, and a pair that carries another value, or none, is left alone.
+A pair that disagrees, with the label on one of its objects only or with a different value on each, is not supported: its `LodiaControlPlane` may be reconciled by any event that reaches it, and nothing says which do.
 `--lodiacontrolplane-concurrency` (default 10) sets how many `LodiaControlPlane`s are reconciled at once.
 The manifest passes `--leader-elect`, `--diagnostics-address` and `--insecure-diagnostics`; the last two take the clusterctl variables `CAPI_DIAGNOSTICS_ADDRESS` (default `:8443`) and `CAPI_INSECURE_DIAGNOSTICS` (default `false`), which [Cluster API documents for every provider](https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/docs/book/src/user/guide/providers/observability.md?plain=1#L7-L37).
 

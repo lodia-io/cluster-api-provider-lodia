@@ -34,6 +34,7 @@ var withoutTheUID = map[string]map[string]string{
 var ofAnotherUID = map[string]map[string]string{
 	"a copy that kept block-move": {v1alpha1.UIDAnnotation: sourceUID, clusterctlv1.BlockMoveAnnotation: "true"},
 	"a copy that lost block-move, as a move after it was removed by hand leaves one": {v1alpha1.UIDAnnotation: sourceUID},
+	"an object whose UID annotation was emptied rather than removed":                 {v1alpha1.UIDAnnotation: "", clusterctlv1.BlockMoveAnnotation: "true"},
 }
 
 func annotated(annotations map[string]string) func(*clusterv1.Cluster, *v1alpha1.LodiaControlPlane) {

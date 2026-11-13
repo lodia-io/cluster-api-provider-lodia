@@ -248,7 +248,7 @@ func TestALeaseUnderAFreeNameCanBeCreatedButAnotherControllersCannotBeReadChange
 func TestTheManagerIsLeaderElectedSecuredAndBuiltOnTheCacheOptions(t *testing.T) {
 	for _, c := range []controller.Config{
 		{Diagnostics: flags.ManagerOptions{DiagnosticsAddress: ":9443"}, HealthAddr: ":9081"},
-		{Diagnostics: flags.ManagerOptions{DiagnosticsAddress: "127.0.0.1:9444"}, HealthAddr: "127.0.0.1:9082", LeaderElect: true},
+		{Diagnostics: flags.ManagerOptions{DiagnosticsAddress: "127.0.0.1:9444"}, HealthAddr: "127.0.0.1:9082", LeaderElect: true, Namespace: "tenants"},
 	} {
 		options, err := controller.ManagerOptions(c)
 		if err != nil {

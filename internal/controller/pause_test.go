@@ -166,6 +166,7 @@ func TestPauseStopsTheProvider(t *testing.T) {
 	if err := k8s.Patch(t.Context(), lcp, client.MergeFrom(before)); err != nil {
 		t.Fatal(err)
 	}
+	eventually(t, paused("Cluster spec.paused is set to true, LodiaControlPlane has the cluster.x-k8s.io/paused annotation"))
 	unpaused := cluster.DeepCopy()
 	unpaused.Spec.Paused = new(false)
 	if err := k8s.Patch(t.Context(), unpaused, client.MergeFrom(cluster)); err != nil {

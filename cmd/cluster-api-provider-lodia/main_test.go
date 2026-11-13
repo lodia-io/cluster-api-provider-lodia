@@ -243,6 +243,7 @@ func TestTheFlagsDefaultToClusterAPIsValues(t *testing.T) {
 		{"PprofBindAddress", r.manager.PprofBindAddress, ""},
 		{"the metrics server's BindAddress", r.manager.Metrics.BindAddress, ":8443"},
 		{"the metrics server's SecureServing", r.manager.Metrics.SecureServing, true},
+		{"the diagnostics endpoint's handlers", slices.Sorted(maps.Keys(r.manager.Metrics.ExtraHandlers)), []string{"/debug/flags/v", "/debug/pprof/", "/debug/pprof/cmdline", "/debug/pprof/profile", "/debug/pprof/symbol", "/debug/pprof/trace"}},
 		{"the metrics server's minimum TLS version", r.tls().MinVersion, uint16(tls.VersionTLS12)},
 		{"the controller's MaxConcurrentReconciles", r.workers, 10},
 		{"the watch filter's value", r.filter, ""},

@@ -29,8 +29,11 @@ var (
 )
 
 // InitFlags registers the flags of Cluster API's kubeadm control plane
-// provider that apply here, under its names and with its defaults:
+// provider that apply here, under its names and with its defaults, but for the
+// concurrency: --lodiacontrolplane-concurrency defaults to 10, where its
+// --kubeadmcontrolplane-concurrency defaults to 100:
 // https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/controlplane/kubeadm/main.go#L128-L217
+// https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/controlplane/kubeadm/main.go#L160-L161
 func InitFlags(fs *pflag.FlagSet) {
 	logsv1.AddFlags(logOptions, fs)
 

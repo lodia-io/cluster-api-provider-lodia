@@ -132,7 +132,7 @@ The `cluster.x-k8s.io/paused` annotation on the `LodiaControlPlane` holds this r
 
 ### The manager
 
-The binary takes the flags of Cluster API's kubeadm control plane provider that apply here, under their names and with their defaults ([InitFlags][kcp-flags]); the [README](../README.md#manager-flags) lists them and sorts the fields of cluster-api-operator's `spec.manager` by what they do to the manager.
+The binary takes the flags of Cluster API's kubeadm control plane provider that apply here, under their names and with their defaults, but for the concurrency: `--lodiacontrolplane-concurrency` defaults to 10, where that provider's `--kubeadmcontrolplane-concurrency` defaults to [100][kcp-concurrency] ([InitFlags][kcp-flags]); the [README](../README.md#manager-flags) lists them and sorts the fields of cluster-api-operator's `spec.manager` by what they do to the manager.
 It does not define `--feature-gates`, `--webhook-port` or `--webhook-cert-dir`, which that provider defines because it has gates and webhooks, and a flag it does not define makes it exit at start.
 
 - Logging goes through klog, as in that provider.
@@ -145,6 +145,7 @@ It does not define `--feature-gates`, `--webhook-port` or `--webhook-cert-dir`, 
 - `--watch-filter` puts [`ResourceHasFilterLabel`][capi-filter] on the watches of the `LodiaControlPlane` and the `Cluster`.
   Lodia's `ControlPlane` and the Secrets carry no such label, so their map functions read the `Cluster` and enqueue only when it has the label ([`HasWatchLabel`][capi-haslabel]).
   The filter is not on the cache, which would hide Lodia's objects, and the label is not copied onto Lodia's `ControlPlane`.
+  It holds for a Cluster and a `LodiaControlPlane` that carry the same label; a pair that disagrees is not supported, and the README says so ([manager flags](../README.md#manager-flags)).
 - `--lodiacontrolplane-concurrency` is the controller's `MaxConcurrentReconciles`, and a pass has one minute, hard-coded: Cluster API's kubeadm control plane provider gives its passes [three minutes][kcp-timeout] because they connect to every etcd member.
 - Several instances of the provider from the released YAML are not supported, for the reasons the README gives; `--namespace` and `--watch-filter` are there for the contract and for the operator.
 
@@ -328,6 +329,7 @@ Lodia's availability is a failure tolerance (`highAvailability`) with replica co
 [cc-ns]: https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/cmd/clusterctl/client/repository/components.go#L242-L257
 [cc-subjects]: https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/cmd/clusterctl/client/repository/components.go#L349-L361
 [kcp-flags]: https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/controlplane/kubeadm/main.go#L128-L217
+[kcp-concurrency]: https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/controlplane/kubeadm/main.go#L160-L161
 [kcp-timeout]: https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/controlplane/kubeadm/main.go#L446-L447
 [capi-flags]: https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/util/flags/manager.go#L95-L157
 [capi-filter]: https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/util/predicates/generic_predicates.go#L161-L177

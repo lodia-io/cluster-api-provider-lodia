@@ -8,6 +8,9 @@ import (
 	"fmt"
 	"testing"
 
+	lodiav1alpha1 "go.lodia.io/lodia/api/v1alpha1"
+	"k8s.io/apimachinery/pkg/api/meta"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	clusterctlv1 "sigs.k8s.io/cluster-api/cmd/clusterctl/api/v1alpha3"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -83,6 +86,23 @@ func TestTheWatchFilterReconcilesOnlyTheObjectsCarryingItsValue(t *testing.T) {
 		}
 		return nil
 	})
+	settled(t, lcp)
+
+	get(t, cp)
+	meta.SetStatusCondition(&cp.Status.Conditions, metav1.Condition{
+		Type: lodiav1alpha1.ConditionReachable, Status: metav1.ConditionFalse, Reason: lodiav1alpha1.ReasonExternalProbeFailed,
+		Message: "the public endpoint does not answer", ObservedGeneration: cp.Generation,
+	})
+	if err := k8s.Status().Update(t.Context(), cp); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, func() error {
+		get(t, lcp)
+		if a := condition(lcp, clusterv1.AvailableCondition); a == nil || a.Status != metav1.ConditionFalse {
+			return fmt.Errorf("the event of the ControlPlane did not reach the manager: Available is %+v", a)
+		}
+		return nil
+	})
 
 	consistently(t, func() error {
 		for _, stranger := range strangers {
@@ -94,44 +114,33 @@ func TestTheWatchFilterReconcilesOnlyTheObjectsCarryingItsValue(t *testing.T) {
 	})
 }
 
-func TestTheWatchFilterLeavesAnUnlabelledLodiaControlPlaneToItsClustersEvents(t *testing.T) {
+func TestAPairThatDisagreesOnTheWatchLabelIsReconciledAtLeastOnce(t *testing.T) {
 	const mine = "mine"
-	ns := namespace(t)
-	cluster, lcp := create(t, ns, "unlabelled", func(cluster *clusterv1.Cluster, _ *v1alpha1.LodiaControlPlane) {
-		cluster.Labels = map[string]string{clusterv1.WatchLabel: mine}
-	})
-	startManagerWith(t, controller.Config{Namespace: ns, WatchFilterValue: mine, Concurrency: 10})
+	label := func(value string) map[string]string { return map[string]string{clusterv1.WatchLabel: value} }
+	for name, mutate := range map[string]func(*clusterv1.Cluster, *v1alpha1.LodiaControlPlane){
+		"only the Cluster carries the label": func(cluster *clusterv1.Cluster, _ *v1alpha1.LodiaControlPlane) {
+			cluster.Labels = label(mine)
+		},
+		"only the LodiaControlPlane carries the label": func(_ *clusterv1.Cluster, lcp *v1alpha1.LodiaControlPlane) {
+			lcp.Labels[clusterv1.WatchLabel] = mine
+		},
+		"each carries another value": func(cluster *clusterv1.Cluster, lcp *v1alpha1.LodiaControlPlane) {
+			cluster.Labels = label(mine)
+			lcp.Labels[clusterv1.WatchLabel] = "other"
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			ns := namespace(t)
+			_, lcp := create(t, ns, "disagreeing", mutate)
+			startManagerWith(t, controller.Config{Namespace: ns, WatchFilterValue: mine, Concurrency: 10})
 
-	eventually(t, func() error {
-		get(t, lcp)
-		if len(lcp.Finalizers) == 0 {
-			return errors.New("the start of the manager did not reach it through its Cluster")
-		}
-		return nil
-	})
-	touched := cluster.DeepCopy()
-	touched.Annotations = map[string]string{"touched": "true"}
-	if err := k8s.Patch(t.Context(), touched, client.MergeFrom(cluster)); err != nil {
-		t.Fatal(err)
+			eventually(t, func() error {
+				get(t, lcp)
+				if len(lcp.Finalizers) == 0 {
+					return errors.New("it was not reconciled")
+				}
+				return nil
+			})
+		})
 	}
-	consistently(t, func() error {
-		get(t, lcp)
-		if condition(lcp, clusterv1.PausedCondition) != nil {
-			return errors.New("its own events or a change of its Cluster's metadata reached it")
-		}
-		return nil
-	})
-
-	unpaused := cluster.DeepCopy()
-	unpaused.Spec.Paused = new(false)
-	if err := k8s.Patch(t.Context(), unpaused, client.MergeFrom(cluster)); err != nil {
-		t.Fatal(err)
-	}
-	eventually(t, func() error {
-		get(t, lcp)
-		if condition(lcp, clusterv1.PausedCondition) == nil {
-			return errors.New("a change of its Cluster's spec did not reach it")
-		}
-		return nil
-	})
 }
