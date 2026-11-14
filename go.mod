@@ -10,6 +10,7 @@ require (
 	github.com/google/go-cmp v0.7.0
 	github.com/google/go-github/v92 v92.0.0
 	github.com/spf13/pflag v1.0.10
+	go.lodia.io/cluster-api-provider-lodia/api v0.0.0-00010101000000-000000000000
 	go.lodia.io/lodia/api v0.0.0-20261109145222-57375832e7fe
 	golang.org/x/mod v0.41.0
 	k8s.io/api v0.37.2
@@ -147,3 +148,5 @@ tool (
 	sigs.k8s.io/controller-tools/cmd/controller-gen
 	sigs.k8s.io/kind
 )
+
+replace go.lodia.io/cluster-api-provider-lodia/api => ./api
