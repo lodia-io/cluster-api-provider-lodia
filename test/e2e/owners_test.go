@@ -121,8 +121,9 @@ func requireOwners(ctx context.Context, c client.Reader, key client.ObjectKey) e
 // and the bootstrap data's Secret, which the kubeadm bootstrap provider puts its
 // KubeadmConfig back on as the Secret's controller. Lodia's ControlPlane, the
 // Etcd and every other Secret and ConfigMap are left alone: the provider never
-// adopts a ControlPlane or a Secret that it does not control (docs/design.md,
-// held by foreign_test.go and races_test.go), so it would not put an owner
+// adopts a ControlPlane or a Secret that it does not control
+// (docs/decisions/objects-of-another-controller-are-left-alone.md, held by
+// foreign_test.go and races_test.go), so it would not put an owner
 // reference back, and Lodia and etcd-druid do not follow the Cluster's pause.
 // https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/bootstrap/kubeadm/reconcilers/kubeadmconfig/kubeadmconfig_controller.go#L289
 // https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/bootstrap/kubeadm/reconcilers/kubeadmconfig/kubeadmconfig_controller.go#L1494-L1529

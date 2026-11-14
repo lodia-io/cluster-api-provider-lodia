@@ -371,8 +371,8 @@ func TestTheManifestsVariablesReachTheMetricsServer(t *testing.T) {
 	}
 }
 
-func TestTheReadmeListsTheFieldsInTheGroupsOfTheTable(t *testing.T) {
-	raw, err := os.ReadFile("../../README.md")
+func TestTheDocsListTheFieldsInTheGroupsOfTheTable(t *testing.T) {
+	raw, err := os.ReadFile("../../docs/README.md")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -386,7 +386,7 @@ func TestTheReadmeListsTheFieldsInTheGroupsOfTheTable(t *testing.T) {
 		case strings.HasPrefix(line, "- `"):
 			field, _, ok := strings.Cut(line[len("- `"):], "`")
 			if !ok {
-				t.Fatalf("the README's item %q has no field in backquotes", line)
+				t.Fatalf("docs/README.md's item %q has no field in backquotes", line)
 			}
 			listed[heading] = append(listed[heading], field)
 		}
@@ -401,11 +401,11 @@ func TestTheReadmeListsTheFieldsInTheGroupsOfTheTable(t *testing.T) {
 		slices.Sort(want)
 		got := slices.Sorted(slices.Values(listed[heading]))
 		if diff := cmp.Diff(slices.Compact(want), slices.Compact(got)); diff != "" {
-			t.Errorf("the README's fields under %q differ from the table's, which says the group %q (-table +README):\n%s", heading, g, diff)
+			t.Errorf("docs/README.md's fields under %q differ from the table's, which says the group %q (-table +docs):\n%s", heading, g, diff)
 		}
 	}
 	if !strings.Contains(string(raw), "\n"+severalInstances+"\n") {
-		t.Errorf("the README does not say %q", severalInstances)
+		t.Errorf("docs/README.md does not say %q", severalInstances)
 	}
 }
 
