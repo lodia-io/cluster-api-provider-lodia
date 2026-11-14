@@ -11,6 +11,9 @@ Signing is not built.
 - `control-plane-components.yaml` is `config/default` rendered by kustomize, and there is no Helm chart.
 - Tags are cut by hand, signed and annotated, from a commit of `main` whose runs of `ci.yml` are green, after `make release-check`.
   `release.yml` runs on the push of a tag and checks it again before it builds anything ([the steps](../../CONTRIBUTING.md#release-a-version)).
+- Every release tags the API module at the same commit and with the same version, `api/vX.Y.Z` beside `vX.Y.Z`, the form Go reads for a module in a subdirectory ([version tags](https://go.dev/ref/mod#vcs-version)), as Lodia's ([releases-and-support](https://github.com/lodia-io/lodia/blob/57375832e7fe8b3a06374613797eb4c544fe7612/docs/decisions/releases-and-support.md#decision)).
+  `make release-check` refuses a local `api/vX.Y.Z` that is missing or at another commit, and both tags go in one atomic push.
+- A pushed tag is never moved: a cause in the commit is answered by the next pre-release.
 - `metadata.yaml` is committed and append-only: a minor's series is added in a pull request before its first tag, with the contract that the CRDs carry, and a series is never dropped.
 - The releases are pre-releases, `v0.1.0-alpha.1` and on, until Cluster API v1.15.0 is out and the provider's pin has moved to it, and then `v0.1.0`.
 - The pre-releases are unsigned.
@@ -26,6 +29,10 @@ Signing is not built.
 - The repository is public for anonymous installs, the Go proxy and, later, a place in clusterctl's built-in list ([`todo.md`](../../todo.md)).
 - Signatures are keyless, from the release workflow's OIDC identity, as Lodia's ([releases-and-support](https://github.com/lodia-io/lodia/blob/57375832e7fe8b3a06374613797eb4c544fe7612/docs/decisions/releases-and-support.md)).
 - The provider builds on Cluster API v1.15.0-beta.0 until v1.15.0 is released, and on a Lodia that has no release.
+- The types change only with the provider, so one version answers which release serves which API.
+- The Go proxy keeps the first content it served for a version ([the proxy's FAQ](https://proxy.golang.org/)) and the checksum database its hash, so a moved `api/` tag fails every fetch that is not cached ([checksum database](https://go.dev/ref/mod#checksum-database)).
+- An `api/` tag starts no run, since `release.yml` runs on tags `v*`, and `release-check` skips it, as it skips any tag that `version.ParseSemantic` refuses, so the API's tags need no series in `metadata.yaml`.
+  clusterctl lists the provider's versions from the Go proxy, which for the provider's own module lists no `api/` tag ([list](https://github.com/golang/go/blob/go1.26.10/src/cmd/go/internal/modfetch/coderepo.go#L163-L197), [clusterctl](https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/internal/goproxy/goproxy.go#L123-L131)).
 
 ## Rejected
 
@@ -41,7 +48,7 @@ Signing is not built.
 
 - `Makefile` — `release-components`, `release-image`, `release-login`, `release-check` and `metadata`; `make verify` runs the release's render without a push, `release-image` and `metadata`.
 - `.github/workflows/release.yml` — the release and the cleanup job; `.ko.yaml` — the base image.
-- `metadata.yaml` — the series; `hack/releasecheck` — the tag check and the metadata check.
+- `metadata.yaml` — the series; `hack/releasecheck` — the tag check, which includes the API's tag, and the metadata check.
 - `hack/releasecheck/check_test.go` — `TestTheTagCheckRefuses` and `TestTheMetadataCheck`; `hack/releasecheck/release_test.go` — `TestTheReleaseWorkflowStartsOnEveryTagAndCleansUpUnlessTheReleaseSucceeds` and `TestVerifyChecksTheImageItRenders`.
 
 <!-- Cluster API v1.15.0-beta.0 -->

@@ -48,7 +48,7 @@ kind is a `go tool`; ko and kustomize run through `go run` at pinned versions, w
 
 To move a pin, change the version, the sum and the digests together, the sum of `metadata.yaml` with them for Cluster API, and the version in the table above.
 Read a digest with `go run github.com/google/go-containerregistry/cmd/crane@v0.22.1 digest <image>` and a sum from the release asset.
-Lodia's commit is in two places, the pseudo-version of `go.lodia.io/lodia/api` in `go.mod` and `LODIA_COMMIT` in the `Makefile`; `TestLodiaCommitIsThePinnedAPI` fails when they differ.
+Lodia's commit is in three places, the pseudo-version of `go.lodia.io/lodia/api` in `go.mod` and in `api/go.mod`, and `LODIA_COMMIT` in the `Makefile`; `TestLodiaCommitIsThePinnedAPI` fails when `go.mod` and the `Makefile` differ, and `TestTheAPIModulePinsWhatTheMainModuleDoes` when the two `go.mod` files differ on that module or on `sigs.k8s.io/cluster-api/api`.
 From Lodia [81ce021](https://github.com/lodia-io/lodia/blob/81ce021f823c6708ba5eacbc5ffe244c80a3ddaf/.ko.yaml) on, its `.ko.yaml` takes the operator's version from `VERSION` in ko's environment, and ko v0.19.1 stops with `map has no entry for key "VERSION"` without it; the suite sets `VERSION` to the first 12 characters of the commit it cloned for the three builds of Lodia.
 
 ## The test

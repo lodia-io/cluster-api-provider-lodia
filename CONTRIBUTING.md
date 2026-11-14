@@ -10,12 +10,15 @@ Every other tool runs through `go tool` or `go run`; `make e2e` also needs what 
 
 | command | does |
 |---|---|
-| `make generate` | deepcopy functions, the CRDs in `config/crd/bases` and the controller's ClusterRole in `config/rbac/role.yaml`; commit the result |
-| `make verify` | the check that says a change is done: generated files current, modules tidy, `config/default` rendered and checked for a non-empty default on every variable, one Namespace holding every namespaced object, the provider label on every object and a `manager` container as rendered, and for the roles that reach the manager's ServiceAccount on what clusterctl installs with the defaults and with explicit values, `metadata.yaml` against the CRDs' contract label and the merge base with `origin/main` (fetch it first), the release's render with no push, lint, unit and envtest tests; the render has ko build both platforms and pull the base image from gcr.io, which takes minutes when the Go caches are cold |
+| `make generate` | deepcopy functions, the CRDs in `api/crds` with their copy in `config/crd/bases`, and the controller's ClusterRole in `config/rbac/role.yaml`; commit the result |
+| `make verify` | the check that says a change is done: generated files current, both modules tidy, `config/default` rendered and checked for a non-empty default on every variable, one Namespace holding every namespaced object, the provider label on every object and a `manager` container as rendered, and for the roles that reach the manager's ServiceAccount on what clusterctl installs with the defaults and with explicit values, `metadata.yaml` against the CRDs' contract label and the merge base with `origin/main` (fetch it first), the release's render with no push, lint and unit and envtest tests of both modules; the render has ko build both platforms and pull the base image from gcr.io, which takes minutes when the Go caches are cold |
 | `make e2e` | the [end-to-end suite](test/e2e/README.md) on a kind cluster of its own |
 | `make release-components` | `config/default` with the manager's image built by ko for `PLATFORMS`, pushed to `IMAGE_REPOSITORY` unless `KO_PUSH=false` and named by digest, written to `out/control-plane-components.yaml`; the release and the e2e use it |
 | `make release-image` | prints the image that `out/control-plane-components.yaml` names, after requiring it to be the only one and to read `IMAGE_REPOSITORY:IMAGE_TAG@sha256:<digest>` |
 | `make release-check TAG=vX.Y.Z` | refuses a tag before it is pushed, as [the release steps](#release-a-version) say |
+
+The repository holds two Go modules, the manager at the root and the API in `api/` ([project-home](docs/decisions/project-home.md)).
+`make lint`, `make test` and `make verify` run both; `go test ./...` from the root does not reach `api/`, so run it there too.
 
 CI runs `make verify` and `make e2e` on every pull request and every push to `main`.
 
@@ -38,21 +41,25 @@ The envtest suite starts its own API server and etcd; nothing in it reads a kube
 
 A tag `vMAJOR.MINOR.PATCH[-PRERELEASE]` is a release: pushing it runs [`release.yml`](.github/workflows/release.yml), which checks the tag, pushes the image, renders `control-plane-components.yaml` and publishes the GitHub release with it and `metadata.yaml`.
 A tag with a pre-release part makes a pre-release.
+The API module is tagged at the same commit with the same version, `api/vMAJOR.MINOR.PATCH[-PRERELEASE]`, which starts no run.
 What a release holds and why it is cut this way: [releases-through-clusterctl](docs/decisions/releases-through-clusterctl.md).
 
 1. A tag that starts a new minor needs the minor's series in `metadata.yaml`, added in a pull request before the tag, with the contract that the CRDs carry.
    `make metadata`, which `make verify` runs, refuses a series that the merge base with `origin/main` has and the file lacks, a series whose contract changed, and a newest series whose contract is not the CRDs' contract label.
 2. Wait for the CI of `main` to finish on the commit: a tag pushed before it ends is refused.
-3. `make release-check TAG=vX.Y.Z` (and `COMMIT=<sha>` for a commit other than `HEAD`) fetches `origin/main` and the tags, and refuses:
+3. Tag the commit with both tags, signed and annotated: `git tag -s -m vX.Y.Z vX.Y.Z <sha>` and `git tag -s -m api/vX.Y.Z api/vX.Y.Z <sha>`.
+4. `make release-check TAG=vX.Y.Z` (and `COMMIT=<sha>` for a commit other than `HEAD`) fetches `origin/main` and the tags, and refuses:
    - a tag that is not written `vMAJOR.MINOR.PATCH[-PRERELEASE]`;
    - a tag whose minor has no series in `metadata.yaml` at the commit, and any tag of the repository whose minor has none there;
    - a commit that is not on `origin/main`;
+   - a local tag `api/vX.Y.Z` that is missing or is not at the commit;
    - a commit whose runs of `ci.yml` for the push to `main` are missing, unfinished or not green.
    It reads GitHub with `GITHUB_TOKEN`, or with `gh auth token`.
-4. Tag the commit and push the one tag by name: `git tag -s -m vX.Y.Z vX.Y.Z <sha>`, then `git push origin vX.Y.Z`.
+   A refusal leaves both tags local: delete them, fix the cause and tag again.
+5. Push both tags by name in one atomic push: `git push --atomic origin vX.Y.Z api/vX.Y.Z`.
    GitHub starts no workflow when more than three tags are pushed at once ([GitHub](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#push)), and such a tag gets no run, no release and no failed job.
-   The workflow runs the same check again before it builds anything.
-5. The workflow pushes the image for both platforms, renders `control-plane-components.yaml` with it, pulls the image by its digest without credentials, and then creates the release with `gh release create --verify-tag`, with generated notes and, for a pre-release tag, the pre-release flag.
+   The workflow runs the same check again before it builds anything, and its checkout fetches every tag, so it finds `api/vX.Y.Z`.
+6. The workflow pushes the image for both platforms, renders `control-plane-components.yaml` with it, pulls the image by its digest without credentials, and then creates the release with `gh release create --verify-tag`, with generated notes and, for a pre-release tag, the pre-release flag.
    If the release job does not succeed, the `cleanup` job deletes the draft releases of the tag.
 
 Between the push of a tag and the publication of its release, `clusterctl upgrade plan` fails for every management cluster that has the provider: clusterctl takes the versions from proxy.golang.org, which lists a tag whether or not it has a release, and then asks for the files of the newest one ([versions](https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/cmd/clusterctl/client/repository/repository_github.go#L104-L146), [proxy](https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/internal/goproxy/goproxy.go#L59-L143), [upgrade info](https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/cmd/clusterctl/client/cluster/upgrader_info.go#L51-L123)).
@@ -64,8 +71,8 @@ A re-run on the same tag keeps the window open until it publishes the release.
 - A cause outside the commit, such as the registry or a permission, is answered by re-running the failed job on the same tag.
   A re-run replays the tag's own commit, so it runs that commit's `release.yml`, `Makefile` and check.
 - A cause inside the commit, in `release.yml`, the `Makefile` or the check, is fixed on `main`.
-  Then delete the tag and tag the fixed commit again, or tag the next pre-release.
-  Let the first run end before deleting its tag: `gh release create` names the tag, so a run still building publishes the assets of its own commit under a tag pushed again, and stays green.
+  Then tag the next pre-release with both tags.
+  A pushed tag is never moved to another commit ([why](docs/decisions/releases-through-clusterctl.md#why)).
 - A tag that the workflow refuses or fails on anyway is answered at once by tagging the next pre-release of the same line, `v0.1.0-alpha.2` after `v0.1.0-alpha.1`, and never a stable release before `v0.1.0` is due.
   Delete the bad tag too, but nothing relies on that, since whether the proxy stops listing a deleted tag is not known.
 

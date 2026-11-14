@@ -6,7 +6,7 @@ A `LodiaControlPlane` owns exactly one Lodia `ControlPlane`, passes its spec thr
 **Status: pre-releases, `v0.1.0-alpha.N`, until Cluster API v1.15.0 is out and the provider's pin has moved to it, and then `v0.1.0`.**
 
 - [`docs/README.md`](docs/README.md) — what the provider is and does: the objects, how each rule of the contract is met, a pass, the manager, [installation](docs/README.md#installation), upgrading and `clusterctl move`.
-- [`docs/decisions/`](docs/decisions/) — why it is built this way, one decision per file; [project-home](docs/decisions/project-home.md) has the module, the API group and the license.
+- [`docs/decisions/`](docs/decisions/) — why it is built this way, one decision per file; [project-home](docs/decisions/project-home.md) has the modules, the API group and the license.
 - [`test/e2e/README.md`](test/e2e/README.md) — the end-to-end suite: what it installs, its steps and what each checks.
 - [`CONTRIBUTING.md`](CONTRIBUTING.md) — building and testing, what CI runs, commits and cutting a release.
 - [`CLAUDE.md`](CLAUDE.md) — how to work on the repository.

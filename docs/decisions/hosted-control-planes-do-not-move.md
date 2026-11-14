@@ -43,7 +43,7 @@ Decided 2026-10-26.
 - `internal/controller/lodiacontrolplane.go` — `reconcileNormal` and `annotate` write the two annotations; `refuseCopy` refuses a copy.
 - `internal/controller/guard_test.go` — `TestTheUIDIsRecordedBeforeTheControlPlaneIsApplied`, `TestAPassWhoseAnnotationPatchFailsAppliesNothing`, `TestAPassThatReadAStaleCopyDoesNotWriteItsUIDOverAnotherObjects`, `TestACopyOfAnotherObjectGetsNeitherAControlPlaneNorSecretsNorARewrittenAnnotation`, `TestRemovingTheUIDAnnotationOfACopyBuildsAControlPlaneForIt` and `TestARefusedCopyCanBeDeletedAndLeavesTheControlPlaneOfItsNameAlone`.
 - `internal/controller/move_test.go` — `TestClusterctlMoveWaitsForTheBlockOnTheLodiaControlPlane`; `api/v1alpha1/crd_test.go` — `TestTheCRDsCarryTheContractLabel`.
-- `api/v1alpha1/names_test.go` — `TestTheDocsNameTheAnnotationAndTheReasonUsersActOn`.
+- `test/docs/names_test.go` — `TestTheDocsNameTheAnnotationAndTheReasonUsersActOn`.
 - `test/e2e/README.md` — step 10, where `clusterctl move` ends at its wait for the annotation.
 
 <!-- Cluster API v1.15.0-beta.0 -->
