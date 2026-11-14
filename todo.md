@@ -7,9 +7,9 @@
   Then merge the signing pull request of the item below and tag `v0.1.0`, which ends the pre-releases `v0.1.0-alpha.N`.
   After `v0.1.0`, restate the pre-releases where they are stated:
   - the status line of `README.md`;
-  - `docs/decisions/releases-through-clusterctl.md`;
+  - `docs/decisions/releases-through-clusterctl.md`, including its line on a pushed tag, which names the next pre-release;
   - `docs/README.md`: the index line for that decision, the line in "Installation" that the pre-releases are unsigned, the sentence on `latest` while every release is a pre-release, and `v0.1.0-alpha.1` as `spec.version` of the operator's provider;
-  - `CONTRIBUTING.md`'s "When a run fails", whose answer to a refused tag is the next pre-release of the same line, and never a stable release before `v0.1.0` is due.
+  - `CONTRIBUTING.md`'s "When a run fails": its bullet on a cause inside the commit, which names the next pre-release while the line has only pre-releases, and its bullet on a refused tag, whose answer is the next version of the same line, `v0.1.0-alpha.2` after `v0.1.0-alpha.1`, and never a stable release before `v0.1.0` is due.
 - Compare `.golangci.yml` with Lodia's copy at `LODIA_COMMIT` in `verify` and fail on any difference, once Lodia's file is the canonical one again.
   Lodia's copy still differs by an exclusion of gosec for `internal/testenv/`, which [Lodia's todo](https://github.com/lodia-io/lodia/blob/05c47ab109528a829134b4bc451a894c9aa6f60c/todo.md?plain=1#L228-L229) moves to `//nolint:gosec` at its sites, and by the first lines of its header, which the provider words for itself.
 - Ship the kubeadm bootstrap provider's access to `LodiaControlPlane`s (`config/rbac/kubeadm_bootstrap_role.yaml`, `config/rbac/kubeadm_bootstrap_role_binding.yaml` and their lines in `config/rbac/kustomization.yaml`) as a role that the kubeadm bootstrap provider aggregates, without a binding of the provider's own.

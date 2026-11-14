@@ -9,7 +9,7 @@ Decided 2026-10-26.
 - **Go modules:** `go.lodia.io/cluster-api-provider-lodia`, a path of Lodia's own domain, as Lodia's `go.lodia.io/lodia`, for the manager.
   It imports `sigs.k8s.io/cluster-api/api` (its own module since v1.14) and `go.lodia.io/lodia/api` ([go.mod][lo-api-gomod]).
   The API is a module of its own in `api/`, `go.lodia.io/cluster-api-provider-lodia/api`: the package `v1alpha1` and the package `crds` with the two CRDs as `crds.FS`, as Lodia's `go.lodia.io/lodia/api` ([project-home][lo-project-home], [crds.go][lo-crds]) and Cluster API's `sigs.k8s.io/cluster-api/api`.
-  A platform imports it without the manager's dependencies.
+  A platform that imports it takes neither controller-runtime nor `sigs.k8s.io/cluster-api`.
 - **How the manager requires the API:** `require go.lodia.io/cluster-api-provider-lodia/api v0.0.0-00010101000000-000000000000` with `replace go.lodia.io/cluster-api-provider-lodia/api => ./api`, the form of Lodia's `go.mod` ([require][lo-gomod-require], [replace][lo-gomod-replace]) and of Cluster API's ([replace][cp-gomod-replace], [require][cp-gomod-require]).
   A replace binds only the main module ([replace](https://go.dev/ref/mod#go-mod-file-replace)), so a build of the tree takes the API next to it and needs no tag.
 - **The pins agree:** `api/go.mod` and `go.mod` require the same `go.lodia.io/lodia/api` and the same `sigs.k8s.io/cluster-api/api`, and `TestTheAPIModulePinsWhatTheMainModuleDoes` fails when they differ.
@@ -22,8 +22,9 @@ Decided 2026-10-26.
 
 ## Why
 
-- The API module requires only what the types and their tests import, with no controller-runtime and no `sigs.k8s.io/cluster-api`, so a platform that imports the types takes none of the manager's other dependencies.
-  Its floor for `k8s.io/*` is v0.37.2 at Cluster API v1.15.0-beta.0, which the types hold through `v1beta2.StatusVersion` ([go.mod][cp-api-gomod]); Lodia's floor of v0.35.0 cannot be kept in it.
+- The API module requires only what the types and their tests import, with no controller-runtime and no `sigs.k8s.io/cluster-api`, so a platform that imports the types takes neither.
+  It does take `k8s.io/client-go`, through `k8s.io/apiextensions-apiserver` ([go.mod][ae-gomod]), which the API module requires itself ([`api/go.mod`](../../api/go.mod)) and Cluster API's API module requires too ([go.mod][cp-api-gomod]).
+  Its floor for `k8s.io/*` is v0.37.2, Cluster API's API module's at v1.15.0-beta.0, which the types hold through `v1beta2.StatusVersion`; Lodia's floor of v0.35.0 cannot be kept in it.
 - The pins agree because `api/v1alpha1/crd_test.go` compares the provider's CRDs with Lodia's at the API module's pin, while the e2e runs Lodia at the manager's.
 - The subgroup `controlplane.lodia.io` keeps the provider's kinds apart from Lodia's `lodia.io`, and the contract names a control plane CRD `<plural>.<group>` ([definition][cp-crd], [CalculateCRDName][crd-name]) with `<env>ControlPlane` as the kind's convention.
 - clusterctl labels the manifests of a provider with `cluster.x-k8s.io/provider: control-plane-<name>` for the name it is configured under ([label][cc-label]), and the contract's rules for the built-in list prefix the organization's name and drop the prefix where it would stutter, which gives `lodia` ([names][cc-names]).
@@ -68,6 +69,9 @@ Decided 2026-10-26.
 [lo-crds]: https://github.com/lodia-io/lodia/blob/57375832e7fe8b3a06374613797eb4c544fe7612/api/crds/crds.go#L10-L13
 [lo-gomod-require]: https://github.com/lodia-io/lodia/blob/57375832e7fe8b3a06374613797eb4c544fe7612/go.mod#L19
 [lo-gomod-replace]: https://github.com/lodia-io/lodia/blob/57375832e7fe8b3a06374613797eb4c544fe7612/go.mod#L167
+
+<!-- Kubernetes v0.37.2 -->
+[ae-gomod]: https://github.com/kubernetes/apiextensions-apiserver/blob/v0.37.2/go.mod#L31
 
 <!-- Go 1.26.10 -->
 [go-replace]: https://github.com/golang/go/blob/go1.26.10/src/cmd/go/internal/load/pkg.go#L3428-L3433

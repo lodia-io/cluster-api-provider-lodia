@@ -95,6 +95,11 @@ func (r *repository) commit(metadata string) string {
 	return r.git("rev-parse", "HEAD")
 }
 
+func (r *repository) tagRelease(tag, sha string) {
+	r.t.Helper()
+	r.git("tag", "--annotate", "--message", tag, tag, sha)
+}
+
 func (r *repository) tagAPI(tag, sha string) {
 	r.t.Helper()
 	r.git("tag", "--annotate", "--message", "api/"+tag, "api/"+tag, sha)
@@ -128,6 +133,7 @@ func TestTheTagCheckRefuses(t *testing.T) {
 		metadata string
 		tags     []string
 		offMain  bool
+		noRelTag bool
 		noAPITag bool
 		runs     []Run
 		ciErr    error
@@ -140,7 +146,7 @@ func TestTheTagCheckRefuses(t *testing.T) {
 		{name: "a tag that is not a version", tag: "latest", metadata: series("0.1.v1beta2"), runs: greenRuns(), want: "not a semantic version"},
 		{name: "a tag with two components", tag: "v0.1", metadata: series("0.1.v1beta2"), runs: greenRuns(), want: "not a semantic version"},
 		{name: "a tag without the v", tag: "0.1.0", metadata: series("0.1.v1beta2"), runs: greenRuns(), want: "not written vMAJOR.MINOR.PATCH"},
-		{name: "a tag with a space", tag: " v0.1.0", metadata: series("0.1.v1beta2"), noAPITag: true, runs: greenRuns(), want: "not written vMAJOR.MINOR.PATCH"},
+		{name: "a tag with a space", tag: " v0.1.0", metadata: series("0.1.v1beta2"), noRelTag: true, noAPITag: true, runs: greenRuns(), want: "not written vMAJOR.MINOR.PATCH"},
 		{name: "a tag with build metadata", tag: "v0.1.0+build.1", metadata: series("0.1.v1beta2"), runs: greenRuns(), want: "build metadata"},
 		{name: "a tag whose series is missing", tag: "v0.2.0", metadata: series("0.1.v1beta2"), runs: greenRuns(), want: "no release series 0.2"},
 		{name: "a tag whose major has no series", tag: "v1.1.0", metadata: series("0.1.v1beta2"), runs: greenRuns(), want: "no release series 1.1"},
@@ -149,6 +155,9 @@ func TestTheTagCheckRefuses(t *testing.T) {
 		{name: "a metadata.yaml without series", tag: "v0.1.0", metadata: apiVersion + "releaseSeries: []\n", runs: greenRuns(), want: "releaseSeries is empty"},
 		{name: "a metadata.yaml of another kind", tag: "v0.1.0", metadata: "apiVersion: clusterctl.cluster.x-k8s.io/v1alpha3\nkind: Other\nreleaseSeries:\n- {major: 0, minor: 1, contract: v1beta2}\n", runs: greenRuns(), want: `no kind "Other"`},
 		{name: "a metadata.yaml without an apiVersion", tag: "v0.1.0", metadata: "kind: Metadata\nreleaseSeries:\n- {major: 0, minor: 1, contract: v1beta2}\n", runs: greenRuns(), want: "unexpected apiVersion"},
+		{name: "no tag of the release", tag: "v0.1.0", metadata: series("0.1.v1beta2"), noRelTag: true, runs: greenRuns(), want: "the tag v0.1.0 does not exist here"},
+		{name: "a tag of the release for another version", tag: "v0.1.0", metadata: series("0.1.v1beta2"), tags: []string{"v0.1.1"}, noRelTag: true, runs: greenRuns(), want: "the tag v0.1.0 does not exist here"},
+		{name: "a tag of the release at another commit", tag: "v0.1.0", metadata: series("0.1.v1beta2"), tags: []string{"v0.1.0"}, noRelTag: true, runs: greenRuns(), want: "the tag v0.1.0 is at"},
 		{name: "no tag of the API module", tag: "v0.1.0", metadata: series("0.1.v1beta2"), noAPITag: true, runs: greenRuns(), want: "the tag api/v0.1.0 does not exist here"},
 		{name: "a tag of the API module for another version", tag: "v0.1.0", metadata: series("0.1.v1beta2"), tags: []string{"api/v0.1.1"}, noAPITag: true, runs: greenRuns(), want: "the tag api/v0.1.0 does not exist here"},
 		{name: "a tag of the API module at another commit", tag: "v0.1.0", metadata: series("0.1.v1beta2"), tags: []string{"api/v0.1.0"}, noAPITag: true, runs: greenRuns(), want: "the tag api/v0.1.0 is at"},
@@ -178,6 +187,9 @@ func TestTheTagCheckRefuses(t *testing.T) {
 			for _, tag := range tt.tags {
 				r.git("tag", tag, base)
 			}
+			if !tt.noRelTag {
+				r.tagRelease(tt.tag, sha)
+			}
 			if !tt.noAPITag {
 				r.tagAPI(tt.tag, sha)
 			}
@@ -206,6 +218,7 @@ func TestTheTagCheckReadsMetadataAtTheCommit(t *testing.T) {
 	older := r.commit(series("0.1.v1beta2"))
 	newer := r.commit(series("0.1.v1beta2", "0.2.v1beta2"))
 	r.originMain(newer)
+	r.tagRelease("v0.2.0", newer)
 	r.tagAPI("v0.2.0", newer)
 
 	if _, err := checkTag(t.Context(), r.dir, &fakeCI{runs: greenRuns()}, "v0.2.0", older); err == nil || !strings.Contains(err.Error(), "no release series 0.2") {
@@ -221,6 +234,7 @@ func TestTheTagCheckAsksForTheCommitsFullSHAEvenWhenGivenATag(t *testing.T) {
 	sha := r.commit(series("0.1.v1beta2"))
 	r.originMain(sha)
 	r.git("tag", "--annotate", "--message", "v0.1.0-alpha.0", "v0.1.0-alpha.0", sha)
+	r.tagRelease("v0.1.0-alpha.1", sha)
 	r.tagAPI("v0.1.0-alpha.1", sha)
 	tagObject := r.git("rev-parse", "v0.1.0-alpha.0")
 	if tagObject == sha {
@@ -248,6 +262,27 @@ func TestTheTagCheckDoesNotAskCIAboutACommitOffMain(t *testing.T) {
 
 	if _, err := checkTag(t.Context(), r.dir, ci, "v0.1.0", "HEAD"); err == nil {
 		t.Fatal("want a refusal")
+	}
+	if len(ci.asked) != 0 {
+		t.Errorf("asked CI about %v", ci.asked)
+	}
+}
+
+func TestTheTagCheckNamesEveryTagThatIsNotAtTheCommit(t *testing.T) {
+	r := newRepository(t)
+	older := r.commit(series("0.1.v1beta2"))
+	newer := r.commit(series("0.1.v1beta2"))
+	r.originMain(newer)
+	r.tagRelease("v0.1.0", older)
+	r.tagAPI("v0.1.0", older)
+	ci := &fakeCI{runs: greenRuns()}
+
+	_, err := checkTag(t.Context(), r.dir, ci, "v0.1.0", newer)
+
+	for _, want := range []string{"the tag v0.1.0 is at " + older, "the tag api/v0.1.0 is at " + older} {
+		if err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("want %q among the problems, got %v", want, err)
+		}
 	}
 	if len(ci.asked) != 0 {
 		t.Errorf("asked CI about %v", ci.asked)

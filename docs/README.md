@@ -60,6 +60,7 @@ The types are the Go module `go.lodia.io/cluster-api-provider-lodia/api` ([proje
 `make generate` writes the CRDs from the types' markers into `api/crds` and copies them into `config/crd/bases`, which `config/default` reads: kustomize loads no file outside the kustomization's root by default ([load restrictor][ks-restrictor]).
 `make verify` fails when either is stale.
 A platform that imports the types requires `go.lodia.io/cluster-api-provider-lodia/api` alone, and gets no controller-runtime and no `sigs.k8s.io/cluster-api`.
+It does get `k8s.io/client-go` through `k8s.io/apiextensions-apiserver`, and `k8s.io/*` at v0.37.2 or later, the floor of Cluster API v1.15.0-beta.0's API module ([why](decisions/project-home.md#why)).
 It never requires `go.lodia.io/cluster-api-provider-lodia`: `v0.1.0-alpha.1` of that module holds the same package, and a build that requires both fails with an ambiguous import ([ambiguous imports](https://go.dev/ref/mod#resolve-pkg-mod)).
 
 ### LodiaControlPlane

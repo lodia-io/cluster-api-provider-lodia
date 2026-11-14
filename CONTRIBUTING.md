@@ -52,7 +52,7 @@ What a release holds and why it is cut this way: [releases-through-clusterctl](d
    - a tag that is not written `vMAJOR.MINOR.PATCH[-PRERELEASE]`;
    - a tag whose minor has no series in `metadata.yaml` at the commit, and any tag of the repository whose minor has none there;
    - a commit that is not on `origin/main`;
-   - a local tag `api/vX.Y.Z` that is missing or is not at the commit;
+   - a local tag `vX.Y.Z` or `api/vX.Y.Z` that is missing or is not at the commit;
    - a commit whose runs of `ci.yml` for the push to `main` are missing, unfinished or not green.
    It reads GitHub with `GITHUB_TOKEN`, or with `gh auth token`.
    A refusal leaves both tags local: delete them, fix the cause and tag again.
@@ -71,10 +71,9 @@ A re-run on the same tag keeps the window open until it publishes the release.
 - A cause outside the commit, such as the registry or a permission, is answered by re-running the failed job on the same tag.
   A re-run replays the tag's own commit, so it runs that commit's `release.yml`, `Makefile` and check.
 - A cause inside the commit, in `release.yml`, the `Makefile` or the check, is fixed on `main`.
-  Then tag the next pre-release with both tags.
-  A pushed tag is never moved to another commit ([why](docs/decisions/releases-through-clusterctl.md#why)).
-- A tag that the workflow refuses or fails on anyway is answered at once by tagging the next pre-release of the same line, `v0.1.0-alpha.2` after `v0.1.0-alpha.1`, and never a stable release before `v0.1.0` is due.
-  Delete the bad tag too, but nothing relies on that, since whether the proxy stops listing a deleted tag is not known.
+  Then tag the next version of the line with both tags: the next pre-release while the line has only pre-releases, the next patch once it has a stable release.
+- A tag that the workflow refuses or fails on anyway is answered at once the same way, `v0.1.0-alpha.2` after `v0.1.0-alpha.1`, and never a stable release before `v0.1.0` is due.
+- No pushed tag is deleted or moved, the release's or the API's ([why](docs/decisions/releases-through-clusterctl.md#why)).
 
 ### Signing
 

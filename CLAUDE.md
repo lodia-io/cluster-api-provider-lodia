@@ -28,7 +28,7 @@ Read **Authority** first; **Out of scope** is binding, findings outside it go to
 - `make verify` — the one check whose exit code says a change is done: generated files current, both modules tidy, `config/default` rendered and checked, `metadata.yaml`, the release's render with no push, lint and unit and envtest tests of both modules.
   It needs `origin/main` fetched, and CI runs it on every pull request.
 - `make e2e` — the suite in `test/e2e` on a kind cluster of its own; it refuses any other cluster (`docs/decisions/e2e-on-a-named-cluster.md`), and CI runs it.
-- `make release-check TAG=vX.Y.Z` — refuses a tag before it is pushed, and a local `api/vX.Y.Z` that is missing or at another commit.
+- `make release-check TAG=vX.Y.Z` — refuses a tag before it is pushed, and a local `vX.Y.Z` or `api/vX.Y.Z` that is missing or at another commit.
 - Cluster API moves in both `go.mod` files: `go get sigs.k8s.io/cluster-api/api@vX` in `api/`, `go get sigs.k8s.io/cluster-api/api@vX sigs.k8s.io/cluster-api@vX` in the root, then `go mod tidy` in each.
   `sigs.k8s.io/cluster-api@vX` alone leaves `sigs.k8s.io/cluster-api/api` at the old version.
   Lodia's `go.lodia.io/lodia/api` moves the same way, with `LODIA_COMMIT` in the `Makefile`; `TestTheAPIModulePinsWhatTheMainModuleDoes` fails when the two `go.mod` files differ on either module.

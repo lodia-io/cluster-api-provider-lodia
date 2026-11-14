@@ -53,7 +53,7 @@ release-login: ## log in to the registry of $(IMAGE_REPOSITORY) as $$GITHUB_ACTO
 	@printf '%s' "$$GITHUB_TOKEN" | go run $(KO) login $(firstword $(subst /, ,$(IMAGE_REPOSITORY))) --username "$$GITHUB_ACTOR" --password-stdin
 
 .PHONY: release-check
-release-check: ## refuse TAG before it is pushed: a semver tag with a series in metadata.yaml at COMMIT, a series for every tag there is, COMMIT on origin/main with every run of ci.yml green, the local tag api/TAG at COMMIT; reads GitHub with $$GITHUB_TOKEN, or with gh's
+release-check: ## refuse TAG before it is pushed: a semver tag with a series in metadata.yaml at COMMIT, a series for every tag there is, COMMIT on origin/main with every run of ci.yml green, the local tags TAG and api/TAG at COMMIT; reads GitHub with $$GITHUB_TOKEN, or with gh's
 	@[ -n "$(TAG)" ] || { echo "usage: make release-check TAG=vX.Y.Z [COMMIT=<sha>]"; exit 1; }
 	git fetch --quiet --tags origin main
 	GITHUB_TOKEN="$${GITHUB_TOKEN:-$$(gh auth token)}" go run ./hack/releasecheck tag --commit="$(COMMIT)" "$(TAG)"
@@ -64,7 +64,7 @@ metadata: ## check metadata.yaml: the newest series' contract is the CRDs' contr
 
 .PHONY: verify
 verify: ## the check that says a change is done
-	@before="$$(cat $(GENERATED) | cksum)"; $(MAKE) --no-print-directory generate; \
+	@before="$$(cat $(GENERATED) | cksum)"; $(MAKE) --no-print-directory generate || exit 1; \
 	[ "$$before" = "$$(cat $(GENERATED) | cksum)" ] || { echo "make generate changed the generated files: review and commit them"; exit 1; }
 	go mod tidy -diff
 	cd api && go mod tidy -diff
