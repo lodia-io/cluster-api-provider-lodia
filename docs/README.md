@@ -492,7 +492,7 @@ To give the copy a new, empty control plane, remove its annotation `controlplane
   CAPI's kubeconfig "MUST not be shared with other users or applications" ([kubeconfig][cp-kubeconfig]); Lodia's admin kubeconfig is also the platform's automation credential ([short-lived-kubeconfigs][lo-shortlived]), so revoking one revokes both.
 - *A change of the class reaches every tenant of it.*
   The topology controller builds each `LodiaControlPlane` from the template at its pass over the Cluster ([from the template][topo-cp-template]).
-  A ClusterClass change enqueues every Cluster of the class at once ([class to Clusters][topo-class-clusters]), and an edit of a template in place waits for each Cluster's next pass, since the controller watches the ClusterClass and each Cluster's own control plane, not the templates ([watches][topo-watches]).
+  A ClusterClass change enqueues every Cluster of the class at once ([class to Clusters][topo-class-clusters]), and an edit of a template in place waits for each Cluster's next pass, since the controller watches the ClusterClass and each Cluster's own control plane, not the templates ([watches][topo-watches], [the control plane's][topo-cp-watch]).
   Lodia rolls an owner's edit of `spec` at once, outside the tenant's window, with the pending operator revision ([when][lo-upgrade-when]), and an owner's change takes no slot of the fleet ([the fleet][lo-upgrade-fleet]), so the tenants of the class whose spec the change touches roll together.
 - *Stricter skew for CAPI workers.*
   The kubeadm preflight creates workers only on the control plane's minor ([kubeadm skew][ms-kubeadm]), while Lodia lets nodes lag three minors; existing workers keep running.
@@ -616,6 +616,7 @@ To give the copy a new, empty control plane, remove its annotation `controlplane
 [topo-plan-one]: https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/exp/topology/desiredstate/upgrade_plan.go#L332-L356
 [topo-plan-versions]: https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/exp/topology/desiredstate/upgrade_plan.go#L358-L361
 [topo-watches]: https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/core/reconcilers/topology/cluster/cluster_controller.go#L124-L139
+[topo-cp-watch]: https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/core/reconcilers/topology/cluster/cluster_controller.go#L434-L443
 [topo-class-clusters]: https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/core/reconcilers/topology/cluster/cluster_controller.go#L492-L516
 [wh-ceiling-when]: https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/core/webhooks/admission/cluster.go#L447-L457
 [wh-ceiling]: https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/core/webhooks/admission/cluster.go#L482-L496
