@@ -75,6 +75,9 @@ func checkTag(ctx context.Context, dir string, ci CI, tag, commit string) (strin
 	if err := requireOnMain(ctx, dir, sha); err != nil {
 		return "", err
 	}
+	if err := requireAPITag(ctx, dir, tag, sha); err != nil {
+		return "", err
+	}
 	runs, err := ci.Runs(ctx, sha)
 	if err != nil {
 		return "", err
@@ -129,6 +132,23 @@ func requireOnMain(ctx context.Context, dir, sha string) error {
 		return fmt.Errorf("%s is not on origin/main", sha)
 	}
 	return err
+}
+
+// The API module is tagged at the release's commit, under api/ as Go reads the
+// tag of a module in a subdirectory: https://go.dev/ref/mod#vcs-version
+func requireAPITag(ctx context.Context, dir, tag, sha string) error {
+	apiTag := "api/" + tag
+	out, err := git(ctx, dir, "rev-parse", "--verify", "--quiet", "--end-of-options", "refs/tags/"+apiTag+"^{commit}")
+	if exit, ok := errors.AsType[*exec.ExitError](err); ok && exit.ExitCode() == 1 {
+		return fmt.Errorf("the tag %s does not exist here: tag the API module at %s first", apiTag, sha)
+	}
+	if err != nil {
+		return err
+	}
+	if got := strings.TrimSpace(string(out)); got != sha {
+		return fmt.Errorf("the tag %s is at %s, not at %s: both tags of a release name one commit", apiTag, got, sha)
+	}
+	return nil
 }
 
 // ci.yml's run is the one that counts: on the commit of a tag, release.yml's
