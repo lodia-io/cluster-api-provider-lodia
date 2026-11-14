@@ -9,6 +9,7 @@ A `LodiaControlPlane` owns exactly one Lodia `ControlPlane`, passes its spec thr
 - [`docs/decisions/`](docs/decisions/) — why it is built this way, one decision per file; [project-home](docs/decisions/project-home.md) has the module, the API group and the license.
 - [`test/e2e/README.md`](test/e2e/README.md) — the end-to-end suite: what it installs, its steps and what each checks.
 - [`CONTRIBUTING.md`](CONTRIBUTING.md) — building and testing, what CI runs, commits and cutting a release.
+- [`CLAUDE.md`](CLAUDE.md) — how to work on the repository.
 - [`SECURITY.md`](SECURITY.md) — how to report a vulnerability.
 - [`todo.md`](todo.md) — findings and work waiting for triage.
 
