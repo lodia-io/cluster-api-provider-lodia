@@ -492,7 +492,8 @@ func (r *Reconciler) refuseCopy(ctx context.Context, lcp *v1alpha1.LodiaControlP
 }
 
 // reportLost keeps the verdict of a ControlPlane deleted behind the provider's
-// back; docs/design.md, step 4 of a pass, says why it is not recreated.
+// back; docs/decisions/objects-of-another-controller-are-left-alone.md says why
+// it is not recreated.
 func reportLost(lcp *v1alpha1.LodiaControlPlane, name string) {
 	setDown(lcp, v1alpha1.ControlPlaneNotFoundReason, fmt.Sprintf("ControlPlane %s is gone and is not recreated: delete the Cluster to start over", name))
 }

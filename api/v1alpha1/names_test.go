@@ -5,6 +5,7 @@ package v1alpha1_test
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -15,7 +16,10 @@ import (
 )
 
 func TestTheDocsNameTheAnnotationAndTheReasonUsersActOn(t *testing.T) {
-	for _, doc := range []string{"README.md", filepath.Join("docs", "design.md")} {
+	for _, doc := range []string{
+		filepath.Join("docs", "README.md"),
+		filepath.Join("docs", "decisions", "hosted-control-planes-do-not-move.md"),
+	} {
 		raw, err := os.ReadFile(filepath.Join("..", "..", doc))
 		if err != nil {
 			t.Fatal(err)
@@ -31,8 +35,27 @@ func TestTheDocsNameTheAnnotationAndTheReasonUsersActOn(t *testing.T) {
 func TestTheDocsNameNoOtherNameOfTheGroupThanTheAPIDefines(t *testing.T) {
 	defined := []string{v1alpha1.UIDAnnotation, v1alpha1.Finalizer, v1alpha1.GroupVersion.String()}
 	names := regexp.MustCompile("`(" + regexp.QuoteMeta(v1alpha1.GroupVersion.Group) + "/[^`]*)`")
-	for _, doc := range []string{"README.md", filepath.Join("docs", "design.md")} {
-		raw, err := os.ReadFile(filepath.Join("..", "..", doc))
+	root := filepath.Join("..", "..")
+	listed := exec.CommandContext(t.Context(), "git", "ls-files", "-z", "*.md")
+	listed.Dir = root
+	out, err := listed.Output()
+	if err != nil {
+		t.Fatalf("git ls-files: %v", err)
+	}
+	docs := strings.FieldsFunc(string(out), func(r rune) bool { return r == 0 })
+	for _, required := range []string{
+		"CLAUDE.md",
+		"docs/README.md",
+		"docs/decisions/hosted-control-planes-do-not-move.md",
+		"test/e2e/README.md",
+		".claude/rules/e2e.md",
+	} {
+		if !slices.Contains(docs, required) {
+			t.Fatalf("git ls-files lists %d Markdown files, and not %s: want every tracked one, nested and hidden directories included", len(docs), required)
+		}
+	}
+	for _, doc := range docs {
+		raw, err := os.ReadFile(filepath.Join(root, doc))
 		if err != nil {
 			t.Fatal(err)
 		}
