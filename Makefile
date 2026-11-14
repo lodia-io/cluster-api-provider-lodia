@@ -12,22 +12,25 @@ KO_PUSH ?= true
 IMAGE_TAG ?= latest
 COMMIT ?= HEAD
 RELEASE_DIR ?= out
-GENERATED = api/v1alpha1/zz_generated.deepcopy.go config/crd/bases/*.yaml config/rbac/role.yaml
+GENERATED = api/v1alpha1/zz_generated.deepcopy.go api/crds/*.yaml config/crd/bases/*.yaml config/rbac/role.yaml
 
 .PHONY: generate
-generate: ## regenerate deepcopy functions, the CRDs and the controller's ClusterRole
+generate: ## regenerate deepcopy functions, the CRDs in api/crds with the copy kustomize reads in config/crd/bases, and the controller's ClusterRole
 	go tool controller-gen object:headerFile=hack/boilerplate.go.txt paths=./api/...
-	go tool controller-gen crd paths=./api/... output:crd:artifacts:config=config/crd/bases
+	go tool controller-gen crd paths=./api/... output:crd:artifacts:config=api/crds
+	rm -f config/crd/bases/*.yaml && cp api/crds/*.yaml config/crd/bases/
 	go tool controller-gen rbac:roleName=manager-role paths=./internal/... output:rbac:artifacts:config=config/rbac
 
 .PHONY: lint
 lint:
 	golangci-lint run ./...
 	golangci-lint run --build-tags e2e ./test/e2e/...
+	cd api && golangci-lint run ./...
 
 .PHONY: test
 test: ## unit and envtest tests; envtest runs a real API server and etcd
 	KUBEBUILDER_ASSETS="$$(go tool setup-envtest use $(ENVTEST_K8S_VERSION) -p path)" go test ./...
+	cd api && go test ./...
 
 .PHONY: components
 components: ## render config/default and check that every variable has a non-empty default, its Namespace, labels and manager container as rendered, and, on what clusterctl installs with the defaults and with explicit values, the roles that reach the manager's ServiceAccount, the kubeadm bootstrap provider's grant and the subjects of every binding
@@ -50,7 +53,7 @@ release-login: ## log in to the registry of $(IMAGE_REPOSITORY) as $$GITHUB_ACTO
 	@printf '%s' "$$GITHUB_TOKEN" | go run $(KO) login $(firstword $(subst /, ,$(IMAGE_REPOSITORY))) --username "$$GITHUB_ACTOR" --password-stdin
 
 .PHONY: release-check
-release-check: ## refuse TAG before it is pushed: a semver tag with a series in metadata.yaml at COMMIT, a series for every tag there is, COMMIT on origin/main with every run of ci.yml green; reads GitHub with $$GITHUB_TOKEN, or with gh's
+release-check: ## refuse TAG before it is pushed: a semver tag with a series in metadata.yaml at COMMIT, a series for every tag there is, COMMIT on origin/main with every run of ci.yml green, the local tags TAG and api/TAG at COMMIT; reads GitHub with $$GITHUB_TOKEN, or with gh's
 	@[ -n "$(TAG)" ] || { echo "usage: make release-check TAG=vX.Y.Z [COMMIT=<sha>]"; exit 1; }
 	git fetch --quiet --tags origin main
 	GITHUB_TOKEN="$${GITHUB_TOKEN:-$$(gh auth token)}" go run ./hack/releasecheck tag --commit="$(COMMIT)" "$(TAG)"
@@ -61,9 +64,10 @@ metadata: ## check metadata.yaml: the newest series' contract is the CRDs' contr
 
 .PHONY: verify
 verify: ## the check that says a change is done
-	@before="$$(cat $(GENERATED) | cksum)"; $(MAKE) --no-print-directory generate; \
+	@before="$$(cat $(GENERATED) | cksum)"; $(MAKE) --no-print-directory generate || exit 1; \
 	[ "$$before" = "$$(cat $(GENERATED) | cksum)" ] || { echo "make generate changed the generated files: review and commit them"; exit 1; }
 	go mod tidy -diff
+	cd api && go mod tidy -diff
 	$(MAKE) --no-print-directory components metadata lint test
 	$(MAKE) --no-print-directory release-components release-image KO_PUSH=false IMAGE_TAG=v0.0.0-verify
 

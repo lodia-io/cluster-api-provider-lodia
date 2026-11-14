@@ -5,20 +5,20 @@ package v1alpha1_test
 
 import (
 	"io/fs"
-	"os"
-	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
-	"go.lodia.io/lodia/api/crds"
+	lodiacrds "go.lodia.io/lodia/api/crds"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	"sigs.k8s.io/yaml"
+
+	"go.lodia.io/cluster-api-provider-lodia/api/crds"
 )
 
-var bases = os.DirFS(filepath.Join("..", "..", "config", "crd", "bases"))
+var bases = crds.FS
 
 func crd(t *testing.T, fsys fs.FS, name string) *apiextensionsv1.CustomResourceDefinition {
 	t.Helper()
@@ -49,7 +49,7 @@ var ignore = []cmp.Option{
 
 func TestTheSpecPassesLodiasSchemaThrough(t *testing.T) {
 	ours := specOf(crd(t, bases, "controlplane.lodia.io_lodiacontrolplanes.yaml"))
-	lodias := specOf(crd(t, crds.FS, "lodia.io_controlplanes.yaml"))
+	lodias := specOf(crd(t, lodiacrds.FS, "lodia.io_controlplanes.yaml"))
 
 	for name, want := range lodias.Properties {
 		if name == "network" || name == "paused" {

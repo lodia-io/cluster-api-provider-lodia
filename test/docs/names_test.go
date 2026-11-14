@@ -1,7 +1,7 @@
 // Copyright 2026 The Lodia Authors.
 // SPDX-License-Identifier: Apache-2.0
 
-package v1alpha1_test
+package docs_test
 
 import (
 	"os"

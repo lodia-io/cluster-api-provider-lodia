@@ -21,7 +21,7 @@ Decided 2026-10-26.
 
 ## Code
 
-- `api/v1alpha1/lodiacontrolplane_types.go` and `lodiacontrolplanetemplate_types.go` — the markers that make the CRDs; `config/crd/bases` is generated from them.
+- `api/v1alpha1/lodiacontrolplane_types.go` and `lodiacontrolplanetemplate_types.go` — the markers that make the CRDs; `api/crds` is generated from them, and `config/crd/bases` is its copy ([where the CRDs come from](../README.md#the-api-module)).
 - `api/v1alpha1/crd_test.go` — `TestTheSpecPassesLodiasSchemaThrough` compares the two schemas but for `network`, `paused` and the rules that name `self.network`; `TestTheTemplateIsTheSpecWithoutWhatTheClusterSets`.
 - `internal/controller/report_test.go` — `TestANameLodiaRefusesIsReportedAndNothingIsCreated`; `internal/controller/template_test.go` — `TestATemplateWithCompactAndHighAvailabilityIsRefused`.
 

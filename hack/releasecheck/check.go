@@ -75,6 +75,9 @@ func checkTag(ctx context.Context, dir string, ci CI, tag, commit string) (strin
 	if err := requireOnMain(ctx, dir, sha); err != nil {
 		return "", err
 	}
+	if err := requireTags(ctx, dir, tag, sha); err != nil {
+		return "", err
+	}
 	runs, err := ci.Runs(ctx, sha)
 	if err != nil {
 		return "", err
@@ -129,6 +132,27 @@ func requireOnMain(ctx context.Context, dir, sha string) error {
 		return fmt.Errorf("%s is not on origin/main", sha)
 	}
 	return err
+}
+
+// A release has two tags at its commit: the release's, and the API module's
+// under api/, as Go reads the tag of a module in a subdirectory:
+// https://go.dev/ref/mod#vcs-version
+func requireTags(ctx context.Context, dir, tag, sha string) error {
+	var problems []error
+	for _, of := range []struct{ name, what string }{{tag, "the release"}, {"api/" + tag, "the API module"}} {
+		out, err := git(ctx, dir, "rev-parse", "--verify", "--quiet", "--end-of-options", "refs/tags/"+of.name+"^{commit}")
+		if exit, ok := errors.AsType[*exec.ExitError](err); ok && exit.ExitCode() == 1 {
+			problems = append(problems, fmt.Errorf("the tag %s does not exist here: tag %s at %s first", of.name, of.what, sha))
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		if got := strings.TrimSpace(string(out)); got != sha {
+			problems = append(problems, fmt.Errorf("the tag %s is at %s, not at %s: both tags of a release name one commit", of.name, got, sha))
+		}
+	}
+	return errors.Join(problems...)
 }
 
 // ci.yml's run is the one that counts: on the commit of a tag, release.yml's

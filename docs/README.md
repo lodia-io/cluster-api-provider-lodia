@@ -54,6 +54,15 @@ No admission webhooks: [no-admission-webhooks](decisions/no-admission-webhooks.m
 
 ## The objects
 
+### The API module
+
+The types are the Go module `go.lodia.io/cluster-api-provider-lodia/api` ([project-home](decisions/project-home.md)): the package `v1alpha1`, and the package `crds`, which holds the two CRDs as `crds.FS`.
+`make generate` writes the CRDs from the types' markers into `api/crds` and copies them into `config/crd/bases`, which `config/default` reads: kustomize loads no file outside the kustomization's root by default ([load restrictor][ks-restrictor]).
+`make verify` fails when either is stale.
+A platform that imports the types requires `go.lodia.io/cluster-api-provider-lodia/api` alone, and gets no controller-runtime and no `sigs.k8s.io/cluster-api`.
+It does get `k8s.io/client-go` through `k8s.io/apiextensions-apiserver`, and `k8s.io/*` at v0.37.2 or later, the floor of Cluster API v1.15.0-beta.0's API module ([why](decisions/project-home.md#why)).
+It never requires `go.lodia.io/cluster-api-provider-lodia`: `v0.1.0-alpha.1` of that module holds the same package, and a build that requires both fails with an ambiguous import ([ambiguous imports](https://go.dev/ref/mod#resolve-pkg-mod)).
+
 ### LodiaControlPlane
 
 Validation is CEL in the CRD ([no-admission-webhooks](decisions/no-admission-webhooks.md)).
@@ -283,7 +292,7 @@ It never copies the key ([decision](decisions/the-ca-secret-holds-no-key.md)).
 
 What a release holds, how releases are numbered and that the pre-releases are unsigned: [releases-through-clusterctl](decisions/releases-through-clusterctl.md).
 The provider's watches need Lodia's CRDs, so install Lodia before the provider.
-A release of the provider is built and tested against [Lodia at 57375832e7fe](https://github.com/lodia-io/lodia/tree/57375832e7fe8b3a06374613797eb4c544fe7612), the `LODIA_COMMIT` of the [`Makefile`](../Makefile) and the pseudo-version of `go.lodia.io/lodia/api` in [`go.mod`](../go.mod).
+A release of the provider is built and tested against [Lodia at 57375832e7fe](https://github.com/lodia-io/lodia/tree/57375832e7fe8b3a06374613797eb4c544fe7612), the `LODIA_COMMIT` of the [`Makefile`](../Makefile) and the pseudo-version of `go.lodia.io/lodia/api` in [`go.mod`](../go.mod) and in [`api/go.mod`](../api/go.mod).
 Lodia has no release yet, so that commit is the requirement of every release.
 
 ### The Cluster API version
@@ -446,7 +455,7 @@ To give the copy a new, empty control plane, remove its annotation `controlplane
 
 ## Decisions
 
-- [project-home](decisions/project-home.md) — Apache-2.0, `go.lodia.io/cluster-api-provider-lodia`, API group `controlplane.lodia.io`, clusterctl name `lodia`.
+- [project-home](decisions/project-home.md) — Apache-2.0, the modules `go.lodia.io/cluster-api-provider-lodia` and `go.lodia.io/cluster-api-provider-lodia/api`, API group `controlplane.lodia.io`, clusterctl name `lodia`.
 - [one-lodia-controlplane-per-cluster](decisions/one-lodia-controlplane-per-cluster.md) — a `LodiaControlPlane` owns one `ControlPlane` named after the `Cluster`, no Machines, Lodia's pause never written.
 - [status-mirrors-lodia](decisions/status-mirrors-lodia.md) — `Available` follows `Reachable`, `Ready` follows `Ready` at the current generation, initialization once, the version from Lodia, no replica counts.
 - [the-ca-secret-holds-no-key](decisions/the-ca-secret-holds-no-key.md) — `<cluster>-ca` has `tls.crt` and never the key, so a release needs Cluster API v1.15.0-beta.0.
@@ -456,7 +465,7 @@ To give the copy a new, empty control plane, remove its annotation `controlplane
 - [manager-flags-of-kubeadm-control-plane](decisions/manager-flags-of-kubeadm-control-plane.md) — the flags of Cluster API's kubeadm control plane provider, concurrency 10, klog, diagnostics, a pass of one minute.
 - [no-admission-webhooks](decisions/no-admission-webhooks.md) — CEL only, Lodia's spec rules repeated and held by a test, the network's rules left to Lodia.
 - [least-privilege-rbac](decisions/least-privilege-rbac.md) — RBAC from markers, leader election in the manager's namespace on its own Lease.
-- [releases-through-clusterctl](decisions/releases-through-clusterctl.md) — a GitHub release with the two files clusterctl reads, the image on ghcr.io by digest, signed tags by hand, pre-releases until Cluster API v1.15.0.
+- [releases-through-clusterctl](decisions/releases-through-clusterctl.md) — a GitHub release with the two files clusterctl reads, the image on ghcr.io by digest, signed tags by hand with the API module's beside them, pre-releases until Cluster API v1.15.0.
 - [e2e-on-a-named-cluster](decisions/e2e-on-a-named-cluster.md) — the suite's own kind cluster, installed through clusterctl, a worker that joins, every wait bounded.
 
 ## Contracts this provider implements
@@ -532,6 +541,9 @@ To give the copy a new, empty control plane, remove its annotation `controlplane
 [patch]: https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/util/patch/patch.go#L82-L83
 [rbac-agg]: https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/core/config/rbac/aggregated_role.yaml#L8
 [contract]: https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/docs/book/src/developer/providers/contracts/control-plane.md
+
+<!-- kustomize v5.7.0 -->
+[ks-restrictor]: https://github.com/kubernetes-sigs/kustomize/blob/kustomize/v5.7.0/kustomize/commands/build/flagloadrestrictor.go#L16-L25
 
 <!-- controller-runtime, kubeadm, Kubernetes -->
 [kubeadm-discovery]: https://github.com/kubernetes/kubernetes/blob/v1.35.0/cmd/kubeadm/app/discovery/token/token.go#L59-L152

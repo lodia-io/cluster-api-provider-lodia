@@ -8,7 +8,8 @@
 //	releasecheck metadata
 //	releasecheck image --repository=REPOSITORY --tag=TAG components.yaml
 //
-// tag reads GitHub with $GITHUB_TOKEN, as the repository of origin.
+// tag reads GitHub with $GITHUB_TOKEN, as the repository of origin, and
+// requires the local tags vX.Y.Z and api/vX.Y.Z at the commit.
 // image prints the one image the components YAML names.
 package main
 
