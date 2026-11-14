@@ -8,7 +8,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -129,9 +131,10 @@ func TestTheReleaseWorkflowPullsTheImageThatTheMakefileChecks(t *testing.T) {
 	const (
 		checkout, setupGo, cosign, attest = "actions/checkout", "actions/setup-go", "sigstore/cosign-installer", "actions/attest-build-provenance"
 		tagCheck, login, render, pull     = "Check the tag", "Log in to the registry", "Push the image and render the components YAML", "Check the image and pull it without credentials"
-		sign, nameImage, verify, publish  = "Sign the image and the release files", "Name the image by its digest", "Verify the signatures and the attestations as a user does", "Publish the release"
+		sign, verifySigned, nameImage     = "Sign the image and the release files", "Verify the signatures as a user does", "Name the image by its digest"
+		verifyAttested, publish           = "Verify the attestations as a user does", "Publish the release"
 	)
-	want := []string{checkout, setupGo, cosign, tagCheck, login, render, pull, sign, nameImage, attest, attest, verify, publish}
+	want := []string{checkout, setupGo, cosign, tagCheck, login, render, pull, sign, verifySigned, nameImage, attest, attest, verifyAttested, publish}
 	if diff := cmp.Diff(want, order); diff != "" {
 		t.Errorf("the steps of the release job (-want +got):\n%s", diff)
 	}
@@ -148,14 +151,15 @@ func TestTheReleaseWorkflowPullsTheImageThatTheMakefileChecks(t *testing.T) {
 		t.Errorf("the ids of the named steps, which the attestation's inputs name (-want +got):\n%s", diff)
 	}
 	if diff := cmp.Diff(map[string]map[string]string{
-		tagCheck:  {"GITHUB_TOKEN": "${{ github.token }}"},
-		login:     {"GITHUB_TOKEN": "${{ github.token }}"},
-		render:    nil,
-		pull:      nil,
-		sign:      nil,
-		nameImage: nil,
-		verify:    {"GH_TOKEN": "${{ github.token }}"},
-		publish:   {"GH_TOKEN": "${{ github.token }}"},
+		tagCheck:       {"GITHUB_TOKEN": "${{ github.token }}"},
+		login:          {"GITHUB_TOKEN": "${{ github.token }}"},
+		render:         nil,
+		pull:           nil,
+		sign:           nil,
+		verifySigned:   nil,
+		nameImage:      nil,
+		verifyAttested: {"GH_TOKEN": "${{ github.token }}"},
+		publish:        {"GH_TOKEN": "${{ github.token }}"},
 	}, envs); diff != "" {
 		t.Errorf("the environments of the named steps (-want +got):\n%s", diff)
 	}
@@ -165,11 +169,12 @@ func TestTheReleaseWorkflowPullsTheImageThatTheMakefileChecks(t *testing.T) {
 		render:   `make release-components IMAGE_TAG="$GITHUB_REF_NAME"`,
 		pull: `image="$(make --no-print-directory release-image IMAGE_TAG="$GITHUB_REF_NAME")"` + "\n" +
 			`DOCKER_CONFIG="$(mktemp -d)" docker pull "$image"` + "\n",
-		sign: `make release-sign IMAGE_TAG="$GITHUB_REF_NAME"`,
+		sign:         `make release-sign IMAGE_TAG="$GITHUB_REF_NAME"`,
+		verifySigned: `make release-verify-signatures IMAGE_TAG="$GITHUB_REF_NAME"`,
 		nameImage: `image="$(make --no-print-directory release-image IMAGE_TAG="$GITHUB_REF_NAME")"` + "\n" +
 			`echo "name=${image%:*@*}" >> "$GITHUB_OUTPUT"` + "\n" +
 			`echo "digest=${image##*@}" >> "$GITHUB_OUTPUT"` + "\n",
-		verify: `make release-verify IMAGE_TAG="$GITHUB_REF_NAME"`,
+		verifyAttested: `make release-verify-attestations IMAGE_TAG="$GITHUB_REF_NAME"`,
 		publish: "flags=()\n" +
 			`if [[ "$GITHUB_REF_NAME" == *-* ]]; then flags+=(--prerelease); fi` + "\n" +
 			`gh release create "$GITHUB_REF_NAME" --verify-tag --title "$GITHUB_REF_NAME" --generate-notes "${flags[@]}" out/control-plane-components.yaml metadata.yaml out/control-plane-components.yaml.sigstore.json out/metadata.yaml.sigstore.json` + "\n",
@@ -294,16 +299,23 @@ func TestTheMakefileChecksTheImageOfTheRelease(t *testing.T) {
 
 func TestTheMakefileSignsAndVerifiesTheImageAndTheFilesOfTheRelease(t *testing.T) {
 	const (
-		tag    = "v0.2.0-rc.1"
-		signer = "--certificate-identity https://github.com/lodia-io/cluster-api-provider-lodia/.github/workflows/release.yml@refs/tags/" + tag + " --certificate-oidc-issuer https://token.actions.githubusercontent.com"
-		image  = imageRepository + "@" + digest
-		repo   = "-R lodia-io/cluster-api-provider-lodia --signer-workflow lodia-io/cluster-api-provider-lodia/.github/workflows/release.yml"
+		tag      = "v0.2.0-rc.1"
+		signer   = "--certificate-identity https://github.com/lodia-io/cluster-api-provider-lodia/.github/workflows/release.yml@refs/tags/" + tag + " --certificate-oidc-issuer https://token.actions.githubusercontent.com"
+		image    = imageRepository + "@" + digest
+		attested = "-R lodia-io/cluster-api-provider-lodia --signer-workflow lodia-io/cluster-api-provider-lodia/.github/workflows/release.yml --source-ref refs/tags/" + tag
 	)
+	platformA, platformB := "sha256:"+strings.Repeat("a", 64), "sha256:"+strings.Repeat("b", 64)
+	index := `{"schemaVersion":2,"manifests":[{"digest":"` + platformA + `"},{"digest":"` + platformB + `"}]}`
+	tagged := imageRepository + ":" + tag + "@" + digest
 	dir := t.TempDir()
 	bin := t.TempDir()
 	calls := filepath.Join(dir, "calls")
-	script := "#!/bin/sh\n" + `{ printf '%s' "${0##*/}"; printf ' %s' "$@"; echo; } >> "$CALLS"` + "\n"
-	for _, tool := range []string{"cosign", "gh"} {
+	script := "#!/bin/sh\n" +
+		`{ printf '%s' "${0##*/}"; printf ' %s' "$@"; echo; } >> "$CALLS"` + "\n" +
+		`[ "$(wc -l < "$CALLS" | tr -d ' ')" = "$FAIL_AT" ] && exit 1` + "\n" +
+		`[ "${0##*/}" = crane ] && printf '%s' "$INDEX"` + "\n" +
+		"exit 0\n"
+	for _, tool := range []string{"cosign", "gh", "crane"} {
 		if err := os.WriteFile(filepath.Join(bin, tool), []byte(script), 0o755); err != nil {
 			t.Fatal(err)
 		}
@@ -312,45 +324,104 @@ func TestTheMakefileSignsAndVerifiesTheImageAndTheFilesOfTheRelease(t *testing.T
 	t.Setenv("CALLS", calls)
 	components := filepath.Join(dir, "control-plane-components.yaml")
 	bundle := func(file string) string { return filepath.Join(dir, file+".sigstore.json") }
+	lines := func(calls ...string) string {
+		if len(calls) == 0 {
+			return ""
+		}
+		return strings.Join(calls, "\n") + "\n"
+	}
+	run := func(t *testing.T, target, named, listed string, refuseCall int) (string, string, error) {
+		t.Helper()
+		if err := os.WriteFile(components, []byte(deployment([]string{named}, nil)), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.RemoveAll(calls); err != nil {
+			t.Fatal(err)
+		}
+		refuse := ""
+		if refuseCall > 0 {
+			refuse = strconv.Itoa(refuseCall)
+		}
+		t.Setenv("FAIL_AT", refuse)
+		t.Setenv("INDEX", listed)
+		_, stderr, err := runMake(t, target, "RELEASE_DIR="+dir, "IMAGE_TAG="+tag, "CRANE="+filepath.Join(bin, "crane"))
+		got, readErr := os.ReadFile(calls)
+		if readErr != nil && !os.IsNotExist(readErr) {
+			t.Fatal(readErr)
+		}
+		return string(got), stderr, err
+	}
 
-	for _, tt := range []struct {
-		name, target, image, wantCalls, wantErr string
+	recipes := []struct {
+		target string
+		calls  []string
 	}{
-		{
-			name: "release-sign signs the digest of the image, then each file with a bundle", target: "release-sign", image: imageRepository + ":" + tag + "@" + digest,
-			wantCalls: "cosign sign --yes --recursive " + image + "\n" +
-				"cosign sign-blob --yes --bundle " + bundle("control-plane-components.yaml") + " " + components + "\n" +
-				"cosign sign-blob --yes --bundle " + bundle("metadata.yaml") + " metadata.yaml\n",
-		},
-		{
-			name: "release-verify checks the image, then each file, as a user does", target: "release-verify", image: imageRepository + ":" + tag + "@" + digest,
-			wantCalls: "cosign verify " + signer + " " + image + "\n" +
-				"gh attestation verify oci://" + image + " " + repo + "\n" +
-				"cosign verify-blob --bundle " + bundle("control-plane-components.yaml") + " " + signer + " " + components + "\n" +
-				"cosign verify-blob --bundle " + bundle("metadata.yaml") + " " + signer + " metadata.yaml\n" +
-				"gh attestation verify " + components + " " + repo + "\n" +
-				"gh attestation verify metadata.yaml " + repo + "\n",
-		},
-		{name: "release-sign signs nothing for an image without a digest", target: "release-sign", image: imageRepository + ":" + tag, wantErr: "names no digest"},
-		{name: "release-verify checks nothing for an image without a digest", target: "release-verify", image: imageRepository + ":" + tag, wantErr: "names no digest"},
-	} {
-		t.Run(tt.name, func(t *testing.T) {
-			if err := os.WriteFile(components, []byte(deployment([]string{tt.image}, nil)), 0o644); err != nil {
-				t.Fatal(err)
+		{"release-sign", []string{
+			"cosign sign --yes --recursive " + image,
+			"cosign sign-blob --yes --bundle " + bundle("control-plane-components.yaml") + " " + components,
+			"cosign sign-blob --yes --bundle " + bundle("metadata.yaml") + " metadata.yaml",
+		}},
+		{"release-verify-signatures", []string{
+			"cosign verify " + signer + " " + image,
+			"crane manifest " + image,
+			"cosign verify " + signer + " " + imageRepository + "@" + platformA,
+			"cosign verify " + signer + " " + imageRepository + "@" + platformB,
+			"cosign verify-blob --bundle " + bundle("control-plane-components.yaml") + " " + signer + " " + components,
+			"cosign verify-blob --bundle " + bundle("metadata.yaml") + " " + signer + " metadata.yaml",
+		}},
+		{"release-verify-attestations", []string{
+			"gh attestation verify oci://" + image + " " + attested,
+			"gh attestation verify " + components + " " + attested,
+			"gh attestation verify metadata.yaml " + attested,
+		}},
+	}
+	for _, tt := range recipes {
+		t.Run(tt.target, func(t *testing.T) {
+			got, stderr, err := run(t, tt.target, tagged, index, 0)
+			if got != lines(tt.calls...) || err != nil {
+				t.Errorf("ran %q and failed with %v and %q, want %q", got, err, stderr, lines(tt.calls...))
 			}
-			if err := os.RemoveAll(calls); err != nil {
-				t.Fatal(err)
+			for refused := 1; refused <= len(tt.calls); refused++ {
+				got, _, err := run(t, tt.target, tagged, index, refused)
+				if got != lines(tt.calls[:refused]...) || err == nil {
+					t.Errorf("with %q refused, ran %q and failed with %v, want the first %d calls and a failure", tt.calls[refused-1], got, err, refused)
+				}
 			}
-
-			_, stderr, err := runMake(t, tt.target, "RELEASE_DIR="+dir, "IMAGE_TAG="+tag)
-
-			got, readErr := os.ReadFile(calls)
-			if readErr != nil && !os.IsNotExist(readErr) {
-				t.Fatal(readErr)
-			}
-			if string(got) != tt.wantCalls || (err != nil) != (tt.wantErr != "") || !strings.Contains(stderr, tt.wantErr) {
-				t.Errorf("ran %q and failed with %v and %q, want %q and %q", got, err, stderr, tt.wantCalls, tt.wantErr)
+			got, stderr, err = run(t, tt.target, imageRepository+":"+tag, index, 0)
+			if got != "" || err == nil || !strings.Contains(stderr, "names no digest") {
+				t.Errorf("for an image without a digest ran %q and failed with %v and %q, want no call and \"names no digest\"", got, err, stderr)
 			}
 		})
+	}
+
+	for _, listed := range []string{`{"manifests":[]}`, `{}`, ``} {
+		t.Run("release-verify-signatures with the index "+listed, func(t *testing.T) {
+			got, _, err := run(t, "release-verify-signatures", tagged, listed, 0)
+			if want := lines(recipes[1].calls[:2]...); got != want || err == nil {
+				t.Errorf("ran %q and failed with %v, want %q and a failure", got, err, want)
+			}
+		})
+	}
+}
+
+func TestTheReleaseWorkflowPinsEveryActionToACommitWithItsVersion(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join(root, ".github", "workflows", "release.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	pinned := regexp.MustCompile(`^\s*- uses: [A-Za-z0-9_.-]+/[A-Za-z0-9_./-]+@[0-9a-f]{40} # v[0-9]+\.[0-9]+\.[0-9]+$`)
+
+	actions := 0
+	for number, line := range strings.Split(string(raw), "\n") {
+		if !strings.Contains(line, "uses:") {
+			continue
+		}
+		actions++
+		if !pinned.MatchString(line) {
+			t.Errorf("line %d, %q, does not pin an action to a full commit SHA with its version in a comment", number+1, strings.TrimSpace(line))
+		}
+	}
+	if actions == 0 {
+		t.Error("the release workflow uses no action, so the check found nothing to pin")
 	}
 }

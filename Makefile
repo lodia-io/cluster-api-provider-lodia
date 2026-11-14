@@ -6,6 +6,7 @@ LODIA_COMMIT = 57375832e7fe8b3a06374613797eb4c544fe7612
 REMOVE_WORKERS = docker ps --all --quiet --filter label=io.x-k8s.kind.cluster=$(E2E_CLUSTER)-w | xargs -r docker rm --force --volumes
 KUSTOMIZE = sigs.k8s.io/kustomize/kustomize/v5@v5.7.0
 KO = github.com/google/ko@v0.19.1
+CRANE = go run github.com/google/go-containerregistry/cmd/crane@v0.22.1
 IMAGE_REPOSITORY ?= ghcr.io/lodia-io/cluster-api-provider-lodia
 PLATFORMS ?= linux/amd64,linux/arm64
 KO_PUSH ?= true
@@ -16,7 +17,7 @@ GITHUB_REPO = lodia-io/cluster-api-provider-lodia
 RELEASE_IMAGE = go run ./hack/releasecheck image --repository=$(IMAGE_REPOSITORY) --tag=$(IMAGE_TAG) $(RELEASE_DIR)/control-plane-components.yaml
 RELEASE_WORKFLOW = $(GITHUB_REPO)/.github/workflows/release.yml
 VERIFY_IDENTITY = --certificate-identity https://github.com/$(RELEASE_WORKFLOW)@refs/tags/$(IMAGE_TAG) --certificate-oidc-issuer https://token.actions.githubusercontent.com
-VERIFY_ATTESTATION = -R $(GITHUB_REPO) --signer-workflow $(RELEASE_WORKFLOW)
+VERIFY_ATTESTATION = -R $(GITHUB_REPO) --signer-workflow $(RELEASE_WORKFLOW) --source-ref refs/tags/$(IMAGE_TAG)
 GENERATED = api/v1alpha1/zz_generated.deepcopy.go api/crds/*.yaml config/crd/bases/*.yaml config/rbac/role.yaml
 
 .PHONY: generate
@@ -63,11 +64,21 @@ release-sign: ## sign keyless, with the workflow's OIDC token, the image that re
 	cosign sign-blob --yes --bundle $(RELEASE_DIR)/control-plane-components.yaml.sigstore.json $(RELEASE_DIR)/control-plane-components.yaml
 	cosign sign-blob --yes --bundle $(RELEASE_DIR)/metadata.yaml.sigstore.json metadata.yaml
 
-.PHONY: release-verify
-release-verify: ## run what a user runs for the tag IMAGE_TAG: the signature and the attestation of the image by its digest, then of $(RELEASE_DIR)/control-plane-components.yaml and metadata.yaml; the signer is release.yml at refs/tags/$(IMAGE_TAG), and gh reads $$GH_TOKEN
-	image="$$($(RELEASE_IMAGE))" && cosign verify $(VERIFY_IDENTITY) $(IMAGE_REPOSITORY)@$${image##*@} && gh attestation verify oci://$(IMAGE_REPOSITORY)@$${image##*@} $(VERIFY_ATTESTATION)
+.PHONY: release-verify-signatures
+release-verify-signatures: ## run what a user runs for the tag IMAGE_TAG, with the signer pinned to release.yml at refs/tags/$(IMAGE_TAG): cosign verify of the image's index by its digest and of each image that the index lists, then cosign verify-blob of $(RELEASE_DIR)/control-plane-components.yaml and metadata.yaml
+	image="$$($(RELEASE_IMAGE))" && \
+	ref=$(IMAGE_REPOSITORY)@$${image##*@} && \
+	cosign verify $(VERIFY_IDENTITY) $$ref && \
+	manifest="$$($(CRANE) manifest $$ref)" && \
+	digests="$$(printf '%s\n' "$$manifest" | jq -r '.manifests[].digest')" && \
+	[ -n "$$digests" ] && \
+	for digest in $$digests; do cosign verify $(VERIFY_IDENTITY) $(IMAGE_REPOSITORY)@$$digest || exit 1; done
 	cosign verify-blob --bundle $(RELEASE_DIR)/control-plane-components.yaml.sigstore.json $(VERIFY_IDENTITY) $(RELEASE_DIR)/control-plane-components.yaml
 	cosign verify-blob --bundle $(RELEASE_DIR)/metadata.yaml.sigstore.json $(VERIFY_IDENTITY) metadata.yaml
+
+.PHONY: release-verify-attestations
+release-verify-attestations: ## run what a user runs for the tag IMAGE_TAG, with the repository, release.yml and refs/tags/$(IMAGE_TAG) pinned: gh attestation verify of the image by its digest and of $(RELEASE_DIR)/control-plane-components.yaml and metadata.yaml; gh reads $$GH_TOKEN
+	image="$$($(RELEASE_IMAGE))" && gh attestation verify oci://$(IMAGE_REPOSITORY)@$${image##*@} $(VERIFY_ATTESTATION)
 	gh attestation verify $(RELEASE_DIR)/control-plane-components.yaml $(VERIFY_ATTESTATION)
 	gh attestation verify metadata.yaml $(VERIFY_ATTESTATION)
 

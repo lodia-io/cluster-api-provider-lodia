@@ -44,6 +44,8 @@ jobs:
           DOCKER_CONFIG="$(mktemp -d)" docker pull "$image"
       - name: Sign the image and the release files
         run: make release-sign IMAGE_TAG="$GITHUB_REF_NAME"
+      - name: Verify the signatures as a user does
+        run: make release-verify-signatures IMAGE_TAG="$GITHUB_REF_NAME"
       - name: Name the image by its digest
         id: image
         run: |
@@ -61,10 +63,10 @@ jobs:
           subject-path: |
             out/control-plane-components.yaml
             metadata.yaml
-      - name: Verify the signatures and the attestations as a user does
+      - name: Verify the attestations as a user does
         env:
           GH_TOKEN: ${{ github.token }}
-        run: make release-verify IMAGE_TAG="$GITHUB_REF_NAME"
+        run: make release-verify-attestations IMAGE_TAG="$GITHUB_REF_NAME"
       - name: Publish the release
         env:
           GH_TOKEN: ${{ github.token }}

@@ -48,6 +48,7 @@ What a release holds and why it is cut this way: [releases-through-clusterctl](d
    `make metadata`, which `make verify` runs, refuses a series that the merge base with `origin/main` has and the file lacks, a series whose contract changed, and a newest series whose contract is not the CRDs' contract label.
 2. Wait for the CI of `main` to finish on the commit: a tag pushed before it ends is refused.
 3. Tag the commit with both tags, signed and annotated: `git tag -s -m vX.Y.Z vX.Y.Z <sha>` and `git tag -s -m api/vX.Y.Z api/vX.Y.Z <sha>`.
+   Tag only a commit that has `make release-sign` and its steps in `release.yml`: a run is its tag's own commit's `release.yml` ([When a run fails](#when-a-run-fails)), so the release of an older commit has no signatures and no attestations.
 4. `make release-check TAG=vX.Y.Z` (and `COMMIT=<sha>` for a commit other than `HEAD`) fetches `origin/main` and the tags, and refuses:
    - a tag that is not written `vMAJOR.MINOR.PATCH[-PRERELEASE]`;
    - a tag whose minor has no series in `metadata.yaml` at the commit, and any tag of the repository whose minor has none there;
@@ -59,7 +60,7 @@ What a release holds and why it is cut this way: [releases-through-clusterctl](d
 5. Push both tags by name in one atomic push: `git push --atomic origin vX.Y.Z api/vX.Y.Z`.
    GitHub starts no workflow when more than three tags are pushed at once ([GitHub](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#push)), and such a tag gets no run, no release and no failed job.
    The workflow runs the same check again before it builds anything, and its checkout fetches every tag, so it finds `api/vX.Y.Z`.
-6. The workflow pushes the image for both platforms, renders `control-plane-components.yaml` with it, pulls the image by its digest without credentials, signs and attests the image and both files and verifies them as a user does ([Signing](#signing)), and then creates the release with `gh release create --verify-tag`, with generated notes, the two bundles and, for a pre-release tag, the pre-release flag.
+6. The workflow pushes the image for both platforms, renders `control-plane-components.yaml` with it, pulls the image by its digest without credentials, signs it and both files, verifies the signatures, attests the image and both files, verifies the attestations ([Signing](#signing)), and then creates the release with `gh release create --verify-tag`, with generated notes, the two bundles and, for a pre-release tag, the pre-release flag.
    If the release job does not succeed, the `cleanup` job deletes the draft releases of the tag.
 
 Between the push of a tag and the publication of its release, `clusterctl upgrade plan` fails for every management cluster that has the provider: clusterctl takes the versions from proxy.golang.org, which lists a tag whether or not it has a release, and then asks for the files of the newest one ([versions](https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/cmd/clusterctl/client/repository/repository_github.go#L104-L146), [proxy](https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/internal/goproxy/goproxy.go#L59-L143), [upgrade info](https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/cmd/clusterctl/client/cluster/upgrader_info.go#L51-L123)).
@@ -82,5 +83,7 @@ A re-run on the same tag keeps the window open until it publishes the release.
 - the image by digest, the index and each platform's image, with `--recursive`;
 - `control-plane-components.yaml` and `metadata.yaml`, with a bundle `<file>.sigstore.json` each, which the release carries as assets.
 
-`actions/attest-build-provenance` attests the image, pushing the attestation to the registry, and both files.
-`make release-verify` then runs what a user runs ([verifying a release](docs/README.md#verifying-a-release)), with the identity of the run's tag, before the release is published: a signature or an attestation that a user's command would refuse fails the job and nothing is published.
+`make release-verify-signatures` then runs what a user runs ([verifying a release](docs/README.md#verifying-a-release)): `cosign verify` of the index and of each image it lists, and `cosign verify-blob` of both files, each pinned to the identity of `release.yml` at the run's tag.
+Only then `actions/attest-build-provenance` attests the image, pushing the attestation to the registry, and both files, because the attestation that the action pushes is a Sigstore bundle in the registry ([push](https://github.com/actions/attest/blob/v4.2.1/src/attest.ts#L45-L65)), and once the index has a bundle `cosign verify` of it takes the bundles as the signatures ([verify](https://github.com/sigstore/cosign/blob/v3.1.4/cmd/cosign/cli/verify/verify.go#L160-L166)), so a check made after the attestation would not show a missing signature.
+`make release-verify-attestations` runs `gh attestation verify` of the image and of both files, pinned to the repository, to `release.yml` and to the ref of the run's tag, which makes each attestation the tag's own.
+A signature or an attestation that a user's command would refuse fails the job and nothing is published.

@@ -395,9 +395,11 @@ Apply the output of `clusterctl generate yaml --from control-plane-components.ya
 
 ### Verifying a release
 
-Every release but `v0.1.0-alpha.1`, the one unsigned release, carries a keyless cosign signature of the image and of each of the two files, and a build provenance attestation of each ([releases-through-clusterctl](decisions/releases-through-clusterctl.md)).
+Every release but `v0.1.0-alpha.1`, the one unsigned release, carries a keyless cosign signature of the image's index, of each image the index lists and of each of the two files, and a build provenance attestation of the image and of each file ([releases-through-clusterctl](decisions/releases-through-clusterctl.md)).
+The cosign commands need cosign v3 or later: v3 made the Sigstore bundle format and the OCI 1.1 referrer storage the default ([v3.0.0](https://github.com/sigstore/cosign/blob/v3.1.4/CHANGELOG.md?plain=1#L108-L126)), and v2.6.5 still defaults `--new-bundle-format` to false ([verify.go](https://github.com/sigstore/cosign/blob/v2.6.5/cmd/cosign/cli/options/verify.go#L66)).
+The `gh` commands need gh v2.102.0 or later: before it, `--signer-workflow` matched only the start of the signing certificate's identity, so a workflow whose path begins with `release.yml` passed ([release notes](https://github.com/cli/cli/releases/tag/v2.102.0), [v2.101.0](https://github.com/cli/cli/blob/v2.101.0/pkg/cmd/attestation/verify/policy.go#L158-L167)).
 The image is the one `control-plane-components.yaml` names, and `<digest>` below is the `sha256:` value after the `@` in its reference.
-The signer is `release.yml` at the release's tag: the certificate's identity is `https://github.com/lodia-io/cluster-api-provider-lodia/.github/workflows/release.yml@refs/tags/<tag>`, issued by `https://token.actions.githubusercontent.com` ([the identity](https://github.com/sigstore/fulcio/blob/v1.10.0/pkg/identity/github/principal.go#L191-L232), [the workflow's ref](https://github.com/github/docs/blob/6d56af0c8b62bde11bb3d9df46244fab5f0a00f9/content/actions/concepts/security/openid-connect.md?plain=1#L67-L84), [the issuer](https://github.com/sigstore/fulcio/blob/v1.10.0/config/identity/config.yaml#L169-L175)).
+The signer is `release.yml` at the release's tag: the certificate's identity is `https://github.com/lodia-io/cluster-api-provider-lodia/.github/workflows/release.yml@refs/tags/<tag>`, issued by `https://token.actions.githubusercontent.com` ([the identity](https://github.com/sigstore/fulcio/blob/v1.10.0/config/identity/config.yaml#L213-L259), [the workflow's ref](https://github.com/github/docs/blob/6d56af0c8b62bde11bb3d9df46244fab5f0a00f9/content/actions/concepts/security/openid-connect.md?plain=1#L67-L84), [the issuer](https://github.com/sigstore/fulcio/blob/v1.10.0/config/identity/config.yaml#L169-L175)).
 The bundles `control-plane-components.yaml.sigstore.json` and `metadata.yaml.sigstore.json` are assets of the release beside the two files.
 For the tag `v0.1.0`:
 
@@ -413,6 +415,7 @@ cosign verify-blob metadata.yaml --bundle metadata.yaml.sigstore.json \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com
 ```
 
+`cosign sign --recursive` signs each image that the index lists with the same identity ([flag](https://github.com/sigstore/cosign/blob/v3.1.4/doc/cosign_sign.md?plain=1#L88)), so the first command also takes the digest of one of them.
 For any release tag, `--certificate-identity-regexp` takes the place of `--certificate-identity` in each of the three commands ([flags](https://github.com/sigstore/cosign/blob/v3.1.4/doc/cosign_verify.md?plain=1#L66-L74)):
 
 ```sh
@@ -423,16 +426,21 @@ The attestations verify with the GitHub CLI ([verifying](https://github.com/gith
 
 ```sh
 gh attestation verify oci://ghcr.io/lodia-io/cluster-api-provider-lodia@<digest> \
-  -R lodia-io/cluster-api-provider-lodia --signer-workflow lodia-io/cluster-api-provider-lodia/.github/workflows/release.yml
+  -R lodia-io/cluster-api-provider-lodia --signer-workflow lodia-io/cluster-api-provider-lodia/.github/workflows/release.yml \
+  --source-ref refs/tags/v0.1.0
 gh attestation verify control-plane-components.yaml \
-  -R lodia-io/cluster-api-provider-lodia --signer-workflow lodia-io/cluster-api-provider-lodia/.github/workflows/release.yml
+  -R lodia-io/cluster-api-provider-lodia --signer-workflow lodia-io/cluster-api-provider-lodia/.github/workflows/release.yml \
+  --source-ref refs/tags/v0.1.0
 gh attestation verify metadata.yaml \
-  -R lodia-io/cluster-api-provider-lodia --signer-workflow lodia-io/cluster-api-provider-lodia/.github/workflows/release.yml
+  -R lodia-io/cluster-api-provider-lodia --signer-workflow lodia-io/cluster-api-provider-lodia/.github/workflows/release.yml \
+  --source-ref refs/tags/v0.1.0
 ```
 
 `--signer-workflow` pins the workflow file that signed the attestation, as `--certificate-identity` pins the identity for cosign; given without a ref, as here, it accepts the workflow at any ref ([the flag](https://github.com/cli/cli/blob/v2.104.0/pkg/cmd/attestation/verify/verify.go#L263), [what it matches](https://github.com/cli/cli/blob/v2.104.0/pkg/cmd/attestation/verify/policy.go#L46-L52)).
+`--source-ref` pins the ref of the run ([the flag](https://github.com/cli/cli/blob/v2.104.0/pkg/cmd/attestation/verify/verify.go#L267), [the check](https://github.com/cli/cli/blob/v2.104.0/pkg/cmd/attestation/verify/policy.go#L141)), which makes the attestation the tag's own: `metadata.yaml` has the same digest in every release of a series, so without the flag an earlier release's attestation of it passes.
+For any release tag, drop `--source-ref`: the commands then accept `release.yml` run at any ref of the repository, a branch included, which the identity of the cosign commands refuses.
 
-`release.yml` runs these commands, with the identity of its own tag, before it publishes the release (`make release-verify`).
+`release.yml` runs the cosign commands, and the first of them for each image that the index lists too, right after it signs, and the `gh` commands right after it attests, each with the identity and the ref of its own tag and before it publishes the release (`make release-verify-signatures` and `make release-verify-attestations`).
 
 ## Upgrade
 
