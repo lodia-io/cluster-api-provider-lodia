@@ -32,5 +32,5 @@ Decided 2026-10-26.
 <!-- Cluster API v1.15.0-beta.0 -->
 [cabpk-cache]: https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/bootstrap/kubeadm/setup/setup.go#L48-L75
 
-<!-- Lodia at 5f212ed -->
-[lo-readme-secrets]: https://github.com/lodia-io/lodia/blob/5f212ed9acd71fe2a944e5fe63cad73e3d17812e/docs/README.md?plain=1#L151-L163
+<!-- Lodia at f91168b -->
+[lo-readme-secrets]: https://github.com/lodia-io/lodia/blob/f91168b1248dc18151a0c2d442fe2050593a0866/docs/README.md?plain=1#L116-L117

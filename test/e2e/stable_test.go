@@ -46,7 +46,7 @@ type snapshot map[string]stamp
 // of managedFields stands for it: an apply that changes something moves the
 // entry, and Lodia's writes do not.
 // https://github.com/gardener/etcd-druid/blob/v0.39.0/internal/controller/etcd/reconciler.go#L147
-// https://github.com/lodia-io/lodia/blob/57375832e7fe8b3a06374613797eb4c544fe7612/internal/controller/datastore/etcd.go#L397-L407
+// https://github.com/lodia-io/lodia/blob/f91168b1248dc18151a0c2d442fe2050593a0866/internal/controller/datastore/etcd.go#L452-L462
 func snapshotOf(ctx context.Context, c client.Reader, namespace string) (snapshot, error) {
 	graph, err := listGraph(ctx, c, namespace)
 	if err != nil {

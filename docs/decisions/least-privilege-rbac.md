@@ -35,5 +35,5 @@ Decided 2026-11-11.
 [k8s-sa-tokens]: https://github.com/kubernetes/kubernetes/blob/v1.37.2/pkg/controller/serviceaccount/tokens_controller.go#L310-L327
 [k8s-sa-auth]: https://github.com/kubernetes/kubernetes/blob/v1.37.2/pkg/serviceaccount/legacy.go#L87-L153
 
-<!-- Lodia at 5737583 -->
-[lo-leader-election]: https://github.com/lodia-io/lodia/blob/57375832e7fe8b3a06374613797eb4c544fe7612/charts/lodia/templates/rbac.yaml#L58-L75
+<!-- Lodia at f91168b -->
+[lo-leader-election]: https://github.com/lodia-io/lodia/blob/f91168b1248dc18151a0c2d442fe2050593a0866/charts/lodia/templates/rbac.yaml#L58-L75

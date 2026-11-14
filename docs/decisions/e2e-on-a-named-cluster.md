@@ -17,7 +17,7 @@ Decided 2026-11-09.
   A wait that takes its bound from the context it runs on runs on a context that `endAfter` cancels at the end of the wait's window, never on one with a deadline.
   A docker call, the dump, the unpause of `pauseCycle` and clusterctl's wait for the providers inside the install still end by a deadline ([`test/e2e/README.md`](../../test/e2e/README.md)).
 - CI runs `make e2e` as the job `e2e`, on every pull request and every push to `main`.
-- What the provider shares with Lodia's guard is Lodia's [decision of the same name](https://github.com/lodia-io/lodia/blob/57375832e7fe8b3a06374613797eb4c544fe7612/docs/decisions/e2e-on-a-named-cluster.md).
+- What the provider shares with Lodia's guard is Lodia's [decision of the same name](https://github.com/lodia-io/lodia/blob/f91168b1248dc18151a0c2d442fe2050593a0866/docs/decisions/e2e-on-a-named-cluster.md).
 
 ## Why
 
@@ -32,7 +32,7 @@ Decided 2026-11-09.
 
 ## Rejected
 
-- Cluster API's `test/framework` with Ginkgo — its top-level helpers assume a `KubeadmControlPlane`, it forces Ginkgo, and it costs 42 new modules against 8 for `sigs.k8s.io/e2e-framework`, which Lodia's suite uses too ([Lodia's decision](https://github.com/lodia-io/lodia/blob/57375832e7fe8b3a06374613797eb4c544fe7612/docs/decisions/e2e-on-a-named-cluster.md)).
+- Cluster API's `test/framework` with Ginkgo — its top-level helpers assume a `KubeadmControlPlane`, it forces Ginkgo, and it costs 42 new modules against 8 for `sigs.k8s.io/e2e-framework`, which Lodia's suite uses too ([Lodia's decision](https://github.com/lodia-io/lodia/blob/f91168b1248dc18151a0c2d442fe2050593a0866/docs/decisions/e2e-on-a-named-cluster.md)).
 
 ## Consequences
 

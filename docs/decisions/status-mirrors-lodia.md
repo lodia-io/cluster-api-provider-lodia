@@ -46,6 +46,6 @@ Decided 2026-10-26.
 [cs-replicas]: https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/core/reconcilers/cluster/cluster_controller_status.go#L121-L175
 [cs-available]: https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/core/reconcilers/cluster/cluster_controller_status.go#L450-L494
 
-<!-- Lodia at 5737583 -->
-[lo-ref-ready]: https://github.com/lodia-io/lodia/blob/57375832e7fe8b3a06374613797eb4c544fe7612/docs/api/controlplane.md?plain=1#L131
-[lo-ref-kubernetes]: https://github.com/lodia-io/lodia/blob/57375832e7fe8b3a06374613797eb4c544fe7612/docs/api/controlplane.md?plain=1#L77
+<!-- Lodia at f91168b -->
+[lo-ref-ready]: https://github.com/lodia-io/lodia/blob/f91168b1248dc18151a0c2d442fe2050593a0866/docs/api/controlplane.md?plain=1#L134
+[lo-ref-kubernetes]: https://github.com/lodia-io/lodia/blob/f91168b1248dc18151a0c2d442fe2050593a0866/docs/api/controlplane.md?plain=1#L78

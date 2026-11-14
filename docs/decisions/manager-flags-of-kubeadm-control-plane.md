@@ -27,7 +27,7 @@ Decided 2026-11-11.
 
 ## Rejected
 
-- A zap logger, as Lodia's operator has ([main.go](https://github.com/lodia-io/lodia/blob/57375832e7fe8b3a06374613797eb4c544fe7612/cmd/lodia/main.go#L32-L35)) — the operator writes `--v` for any verbosity but 1, and the diagnostics endpoint's `/debug/flags/v` sets klog's level, which a zap logger would not read, so zap would leave both broken ([util/flags][capi-flags]).
+- A zap logger, as Lodia's operator has ([main.go](https://github.com/lodia-io/lodia/blob/f91168b1248dc18151a0c2d442fe2050593a0866/cmd/lodia/main.go#L38-L41)) — the operator writes `--v` for any verbosity but 1, and the diagnostics endpoint's `/debug/flags/v` sets klog's level, which a zap logger would not read, so zap would leave both broken ([util/flags][capi-flags]).
 - The five `--zap-*` flags and `--metrics-bind-address` of the first binary, kept with a shim — there are no users.
 
 ## Consequences
@@ -55,5 +55,5 @@ Decided 2026-11-11.
 <!-- controller-runtime, kubeadm, Kubernetes -->
 [cr-timeout]: https://github.com/kubernetes-sigs/controller-runtime/blob/v0.25.2/pkg/config/controller.go#L96-L98
 
-<!-- Lodia at 5737583 -->
-[lo-workers]: https://github.com/lodia-io/lodia/blob/57375832e7fe8b3a06374613797eb4c544fe7612/internal/operator/operator.go#L40-L42
+<!-- Lodia at f91168b -->
+[lo-workers]: https://github.com/lodia-io/lodia/blob/f91168b1248dc18151a0c2d442fe2050593a0866/internal/operator/operator.go#L41-L43
