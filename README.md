@@ -16,8 +16,7 @@ The provider is released as pre-releases, `v0.1.0-alpha.1` and on, until Cluster
 A release is a [GitHub release](https://github.com/lodia-io/cluster-api-provider-lodia/releases) with the two files that clusterctl and cluster-api-operator read, `control-plane-components.yaml` and `metadata.yaml` ([the contract](https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/docs/book/src/developer/providers/contracts/clusterctl.md?plain=1#L84-L102)).
 The manager's image is `ghcr.io/lodia-io/cluster-api-provider-lodia`, for linux/amd64 and linux/arm64, in a public package: pulling it takes no credentials.
 `control-plane-components.yaml` names it as `<repository>:<tag>@sha256:<digest>`, which pulls by digest.
-The pre-releases are unsigned; keyless signatures of the image and of both files come once the repository is public ([`todo.md`](todo.md)).
-The repository is private for now, so clusterctl and cluster-api-operator need a token to read a release ([how](#reading-a-release-of-a-private-repository)).
+The pre-releases are unsigned; keyless signatures of the image and of both files come before the first stable release ([`todo.md`](todo.md)).
 
 ## Install
 
@@ -120,20 +119,13 @@ spec:
 The operator takes the version from `spec.version` ([FetchConfiguration](https://github.com/kubernetes-sigs/cluster-api-operator/blob/v0.30.0/api/v1alpha2/provider_types.go#L270-L298)).
 The `url` has to be in clusterctl's full form, `https://github.com/{owner}/{repo}/releases/{latest|version}/control-plane-components.yaml`.
 The `https://github.com/{owner}/{repo}/releases` that the operator's [docs](https://github.com/kubernetes-sigs/cluster-api-operator/blob/v0.30.0/docs/book/src/03_topics/02_configuration/05_provider-spec-configuration.md?plain=1#L15-L24) show is refused by clusterctl's library, both [at v1.14.0](https://github.com/kubernetes-sigs/cluster-api/blob/v1.14.0/cmd/clusterctl/client/repository/repository_github.go#L217-L225), which the operator [builds on](https://github.com/kubernetes-sigs/cluster-api-operator/blob/v0.30.0/go.mod#L28), and [at v1.15.0-beta.0](https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/cmd/clusterctl/client/repository/repository_github.go#L212-L225).
-The operator reads variables only from the Secret that `spec.configSecret` names, in the provider's namespace, and uses them when it creates and upgrades the provider's components ([ConfigSecret](https://github.com/kubernetes-sigs/cluster-api-operator/blob/v0.30.0/api/v1alpha2/provider_types.go#L54-L62), [reader](https://github.com/kubernetes-sigs/cluster-api-operator/blob/v0.30.0/internal/controller/phase_initialize.go#L125-L176)): put the `LODIA_*` variables in it, and `github-token` while the repository is private.
+The operator reads variables only from the Secret that `spec.configSecret` names, in the provider's namespace, and uses them when it creates and upgrades the provider's components ([ConfigSecret](https://github.com/kubernetes-sigs/cluster-api-operator/blob/v0.30.0/api/v1alpha2/provider_types.go#L54-L62), [reader](https://github.com/kubernetes-sigs/cluster-api-operator/blob/v0.30.0/internal/controller/phase_initialize.go#L125-L176)): put the `LODIA_*` variables in it.
 [Under cluster-api-operator](#under-cluster-api-operator), below, says which fields of `spec.manager` the provider takes.
 
 ### Without clusterctl
 
 `control-plane-components.yaml` holds clusterctl variables, which `kubectl apply` would leave as text.
 Apply the output of `clusterctl generate yaml --from control-plane-components.yaml` instead: it substitutes the variables and does no more, so it sets no namespace, label or image ([generate yaml](https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/cmd/clusterctl/client/config.go#L75-L111)).
-
-### Reading a release of a private repository
-
-Anyone with read access to a repository can view its releases ([GitHub](https://docs.github.com/en/repositories/releasing-projects-on-github/about-releases)), so while the repository is private clusterctl and the operator need a token that has it:
-- clusterctl takes the token from `GITHUB_TOKEN` in the environment or `github-token` in its configuration file ([variable](https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/cmd/clusterctl/client/config/reader_viper.go#L78-L88)); Cluster API's book asks for the `repo` scope ([book](https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/docs/book/src/reference/clusterctl/overview.md?plain=1#L28-L40)).
-  Every command that reads the repository needs it, `clusterctl upgrade` of any management cluster that has the provider included, whatever it upgrades ([upgrade info](https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/cmd/clusterctl/client/cluster/upgrader_info.go#L51-L123)).
-- The operator takes `github-token` from the Secret of `spec.configSecret`, and from nowhere else ([reader](https://github.com/kubernetes-sigs/cluster-api-operator/blob/v0.30.0/internal/controller/phase_initialize.go#L125-L176)).
 
 ## Upgrade
 
@@ -276,9 +268,8 @@ A tag with a pre-release part makes a pre-release.
 5. The workflow pushes the image for both platforms, renders `control-plane-components.yaml` with it, pulls the image by its digest without credentials, and then creates the release with `gh release create --verify-tag`, with generated notes and, for a pre-release tag, the pre-release flag.
    If the release job does not succeed, the `cleanup` job deletes the draft releases of the tag.
 
-Between the push of a tag and the publication of its release, once the repository is public, `clusterctl upgrade plan` fails for every management cluster that has the provider: clusterctl takes the versions from proxy.golang.org, which lists a tag whether or not it has a release, and then asks for the files of the newest one ([versions](https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/cmd/clusterctl/client/repository/repository_github.go#L104-L146), [proxy](https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/internal/goproxy/goproxy.go#L59-L143), [upgrade info](https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/cmd/clusterctl/client/cluster/upgrader_info.go#L51-L123)).
+Between the push of a tag and the publication of its release, `clusterctl upgrade plan` fails for every management cluster that has the provider: clusterctl takes the versions from proxy.golang.org, which lists a tag whether or not it has a release, and then asks for the files of the newest one ([versions](https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/cmd/clusterctl/client/repository/repository_github.go#L104-L146), [proxy](https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/internal/goproxy/goproxy.go#L59-L143), [upgrade info](https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/cmd/clusterctl/client/cluster/upgrader_info.go#L51-L123)).
 The window is the run of the release job, which builds and publishes nothing before the tag.
-While the repository is private, the proxy cannot list it and clusterctl lists releases, not tags, so there is no window.
 
 ### When a run fails
 
@@ -287,20 +278,13 @@ While the repository is private, the proxy cannot list it and clusterctl lists r
 - A cause inside the commit, in `release.yml`, the `Makefile` or the check, is fixed on `main`.
   Then delete the tag and tag the fixed commit again, or tag the next pre-release.
   Let the first run end before deleting its tag: `gh release create` names the tag, so a run still building publishes the assets of its own commit under a tag pushed again, and stays green.
-- Once the repository is public, a tag that the workflow refuses or fails on anyway is answered at once by tagging the next pre-release of the same line, `v0.1.0-alpha.2` after `v0.1.0-alpha.1`, and never a stable release before `v0.1.0` is due.
+- A tag that the workflow refuses or fails on anyway is answered at once by tagging the next pre-release of the same line, `v0.1.0-alpha.2` after `v0.1.0-alpha.1`, and never a stable release before `v0.1.0` is due.
   Delete the bad tag too, but nothing relies on that, since whether the proxy stops listing a deleted tag is not known.
-- Before the change that makes the repository public (it lives in lodia-io/terraform), every semver tag must have a release, or the proxy would list a newest tag without one from the first public day; [`todo.md`](todo.md) has the check and its place among the steps.
-
-### The first release
-
-The first push to ghcr.io creates the package private, so the run is expected to stop at the pull of the image without credentials, before it creates the release.
-Check first that the organization allows public packages: organization settings, Packages, "Package Creation" ([GitHub](https://docs.github.com/en/packages/learn-github-packages/configuring-a-packages-access-control-and-visibility#package-creation-visibility-for-organization-members)).
-Then make the package public once, in its settings under "Danger Zone", which cannot be undone ([GitHub](https://docs.github.com/en/packages/learn-github-packages/configuring-a-packages-access-control-and-visibility#configuring-visibility-of-packages-for-an-organization)), and re-run the failed job on the same tag.
 
 ### Signing
 
 The pre-releases are unsigned.
-Keyless signing needs `id-token: write` in `release.yml` ([GitHub](https://docs.github.com/en/actions/concepts/security/openid-connect)): a later pull request adds it, after the change that makes the repository public and before the first stable tag ([`todo.md`](todo.md)).
+Keyless signing needs `id-token: write` in `release.yml` ([GitHub](https://docs.github.com/en/actions/concepts/security/openid-connect)): a later pull request adds it before the first stable tag ([`todo.md`](todo.md)).
 
 ## Build and test
 
