@@ -19,6 +19,7 @@ import (
 const root = "../.."
 
 type step struct {
+	ID              string            `json:"id"`
 	Name            string            `json:"name"`
 	Uses            string            `json:"uses"`
 	With            map[string]any    `json:"with"`
@@ -77,7 +78,7 @@ func TestTheReleaseWorkflowGrantsOnlyWhatItUses(t *testing.T) {
 	}
 	want := map[string]map[string]string{
 		"workflow": {"contents": "read"},
-		"release":  {"contents": "write", "packages": "write", "actions": "read"},
+		"release":  {"contents": "write", "packages": "write", "actions": "read", "id-token": "write", "attestations": "write"},
 		"cleanup":  {"contents": "write"},
 	}
 	if diff := cmp.Diff(want, got); diff != "" {
@@ -99,48 +100,62 @@ func TestTheReleaseWorkflowSetsNoEnvironmentAboveItsSteps(t *testing.T) {
 }
 
 func TestTheReleaseWorkflowPullsTheImageThatTheMakefileChecks(t *testing.T) {
-	var names, uses []string
+	var order []string
+	var withs []map[string]any
 	runs := map[string]string{}
 	envs := map[string]map[string]string{}
-	withs := map[string]map[string]any{}
+	ids := map[string]string{}
 	for _, step := range readRelease(t).Jobs["release"].Steps {
 		if step.If != nil || step.ContinueOnError != nil {
 			t.Errorf("the step %q has an if or a continue-on-error, so a failed step may not stop the job", step.Name)
 		}
 		switch {
 		case step.Name != "":
-			names = append(names, step.Name)
+			order = append(order, step.Name)
 			runs[step.Name] = step.Run
 			envs[step.Name] = step.Env
+			if step.ID != "" {
+				ids[step.Name] = step.ID
+			}
 		case step.Uses != "":
 			action, _, _ := strings.Cut(step.Uses, "@")
-			uses = append(uses, action)
-			withs[action] = step.With
+			order = append(order, action)
+			withs = append(withs, step.With)
 		default:
 			t.Errorf("an unnamed step that runs %q", step.Run)
 		}
 	}
 
-	const tagCheck, login, render, pull, publish = "Check the tag", "Log in to the registry", "Push the image and render the components YAML", "Check the image and pull it without credentials", "Publish the release"
-	if want := []string{"actions/checkout", "actions/setup-go"}; !slices.Equal(uses, want) {
-		t.Errorf("the unnamed steps use %v, want %v", uses, want)
+	const (
+		checkout, setupGo, cosign, attest = "actions/checkout", "actions/setup-go", "sigstore/cosign-installer", "actions/attest-build-provenance"
+		tagCheck, login, render, pull     = "Check the tag", "Log in to the registry", "Push the image and render the components YAML", "Check the image and pull it without credentials"
+		sign, nameImage, verify, publish  = "Sign the image and the release files", "Name the image by its digest", "Verify the signatures and the attestations as a user does", "Publish the release"
+	)
+	want := []string{checkout, setupGo, cosign, tagCheck, login, render, pull, sign, nameImage, attest, attest, verify, publish}
+	if diff := cmp.Diff(want, order); diff != "" {
+		t.Errorf("the steps of the release job (-want +got):\n%s", diff)
 	}
-	if diff := cmp.Diff(map[string]map[string]any{
-		"actions/checkout": {"fetch-depth": float64(0), "persist-credentials": false},
-		"actions/setup-go": {"go-version-file": "go.mod"},
+	if diff := cmp.Diff([]map[string]any{
+		{"fetch-depth": float64(0), "persist-credentials": false},
+		{"go-version-file": "go.mod"},
+		{"cosign-release": "v3.1.4"},
+		{"subject-name": "${{ steps.image.outputs.name }}", "subject-digest": "${{ steps.image.outputs.digest }}", "push-to-registry": true},
+		{"subject-path": "out/control-plane-components.yaml\nmetadata.yaml\n"},
 	}, withs); diff != "" {
-		t.Errorf("the inputs of the unnamed steps (-want +got):\n%s", diff)
+		t.Errorf("the inputs of the unnamed steps, in order (-want +got):\n%s", diff)
 	}
-	want := []string{tagCheck, login, render, pull, publish}
-	if diff := cmp.Diff(want, names); diff != "" {
-		t.Errorf("the named steps of the release job (-want +got):\n%s", diff)
+	if diff := cmp.Diff(map[string]string{nameImage: "image"}, ids); diff != "" {
+		t.Errorf("the ids of the named steps, which the attestation's inputs name (-want +got):\n%s", diff)
 	}
 	if diff := cmp.Diff(map[string]map[string]string{
-		tagCheck: {"GITHUB_TOKEN": "${{ github.token }}"},
-		login:    {"GITHUB_TOKEN": "${{ github.token }}"},
-		render:   nil,
-		pull:     nil,
-		publish:  {"GH_TOKEN": "${{ github.token }}"},
+		tagCheck:  {"GITHUB_TOKEN": "${{ github.token }}"},
+		login:     {"GITHUB_TOKEN": "${{ github.token }}"},
+		render:    nil,
+		pull:      nil,
+		sign:      nil,
+		nameImage: nil,
+		verify:    {"GH_TOKEN": "${{ github.token }}"},
+		publish:   {"GH_TOKEN": "${{ github.token }}"},
 	}, envs); diff != "" {
 		t.Errorf("the environments of the named steps (-want +got):\n%s", diff)
 	}
@@ -150,9 +165,14 @@ func TestTheReleaseWorkflowPullsTheImageThatTheMakefileChecks(t *testing.T) {
 		render:   `make release-components IMAGE_TAG="$GITHUB_REF_NAME"`,
 		pull: `image="$(make --no-print-directory release-image IMAGE_TAG="$GITHUB_REF_NAME")"` + "\n" +
 			`DOCKER_CONFIG="$(mktemp -d)" docker pull "$image"` + "\n",
+		sign: `make release-sign IMAGE_TAG="$GITHUB_REF_NAME"`,
+		nameImage: `image="$(make --no-print-directory release-image IMAGE_TAG="$GITHUB_REF_NAME")"` + "\n" +
+			`echo "name=${image%:*@*}" >> "$GITHUB_OUTPUT"` + "\n" +
+			`echo "digest=${image##*@}" >> "$GITHUB_OUTPUT"` + "\n",
+		verify: `make release-verify IMAGE_TAG="$GITHUB_REF_NAME"`,
 		publish: "flags=()\n" +
 			`if [[ "$GITHUB_REF_NAME" == *-* ]]; then flags+=(--prerelease); fi` + "\n" +
-			`gh release create "$GITHUB_REF_NAME" --verify-tag --title "$GITHUB_REF_NAME" --generate-notes "${flags[@]}" out/control-plane-components.yaml metadata.yaml` + "\n",
+			`gh release create "$GITHUB_REF_NAME" --verify-tag --title "$GITHUB_REF_NAME" --generate-notes "${flags[@]}" out/control-plane-components.yaml metadata.yaml out/control-plane-components.yaml.sigstore.json out/metadata.yaml.sigstore.json` + "\n",
 	} {
 		if runs[name] != want {
 			t.Errorf("the step %q runs %q, want %q", name, runs[name], want)
@@ -267,6 +287,69 @@ func TestTheMakefileChecksTheImageOfTheRelease(t *testing.T) {
 
 			if out != tt.wantOut || (err != nil) != (tt.wantErr != "") || !strings.Contains(stderr, tt.wantErr) {
 				t.Errorf("printed %q and failed with %v and %q, want %q and %q", out, err, stderr, tt.wantOut, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestTheMakefileSignsAndVerifiesTheImageAndTheFilesOfTheRelease(t *testing.T) {
+	const (
+		tag    = "v0.2.0-rc.1"
+		signer = "--certificate-identity https://github.com/lodia-io/cluster-api-provider-lodia/.github/workflows/release.yml@refs/tags/" + tag + " --certificate-oidc-issuer https://token.actions.githubusercontent.com"
+		image  = imageRepository + "@" + digest
+		repo   = "-R lodia-io/cluster-api-provider-lodia"
+	)
+	dir := t.TempDir()
+	bin := t.TempDir()
+	calls := filepath.Join(dir, "calls")
+	script := "#!/bin/sh\n" + `{ printf '%s' "${0##*/}"; printf ' %s' "$@"; echo; } >> "$CALLS"` + "\n"
+	for _, tool := range []string{"cosign", "gh"} {
+		if err := os.WriteFile(filepath.Join(bin, tool), []byte(script), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("CALLS", calls)
+	components := filepath.Join(dir, "control-plane-components.yaml")
+	bundle := func(file string) string { return filepath.Join(dir, file+".sigstore.json") }
+
+	for _, tt := range []struct {
+		name, target, image, wantCalls, wantErr string
+	}{
+		{
+			name: "release-sign signs the digest of the image, then each file with a bundle", target: "release-sign", image: imageRepository + ":" + tag + "@" + digest,
+			wantCalls: "cosign sign --yes --recursive " + image + "\n" +
+				"cosign sign-blob --yes --bundle " + bundle("control-plane-components.yaml") + " " + components + "\n" +
+				"cosign sign-blob --yes --bundle " + bundle("metadata.yaml") + " metadata.yaml\n",
+		},
+		{
+			name: "release-verify checks the image, then each file, as a user does", target: "release-verify", image: imageRepository + ":" + tag + "@" + digest,
+			wantCalls: "cosign verify " + signer + " " + image + "\n" +
+				"gh attestation verify oci://" + image + " " + repo + "\n" +
+				"cosign verify-blob --bundle " + bundle("control-plane-components.yaml") + " " + signer + " " + components + "\n" +
+				"cosign verify-blob --bundle " + bundle("metadata.yaml") + " " + signer + " metadata.yaml\n" +
+				"gh attestation verify " + components + " " + repo + "\n" +
+				"gh attestation verify metadata.yaml " + repo + "\n",
+		},
+		{name: "release-sign signs nothing for an image without a digest", target: "release-sign", image: imageRepository + ":" + tag, wantErr: "names no digest"},
+		{name: "release-verify checks nothing for an image without a digest", target: "release-verify", image: imageRepository + ":" + tag, wantErr: "names no digest"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			if err := os.WriteFile(components, []byte(deployment([]string{tt.image}, nil)), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.RemoveAll(calls); err != nil {
+				t.Fatal(err)
+			}
+
+			_, stderr, err := runMake(t, tt.target, "RELEASE_DIR="+dir, "IMAGE_TAG="+tag)
+
+			got, readErr := os.ReadFile(calls)
+			if readErr != nil && !os.IsNotExist(readErr) {
+				t.Fatal(readErr)
+			}
+			if string(got) != tt.wantCalls || (err != nil) != (tt.wantErr != "") || !strings.Contains(stderr, tt.wantErr) {
+				t.Errorf("ran %q and failed with %v and %q, want %q and %q", got, err, stderr, tt.wantCalls, tt.wantErr)
 			}
 		})
 	}

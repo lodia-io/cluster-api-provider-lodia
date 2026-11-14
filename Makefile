@@ -12,6 +12,9 @@ KO_PUSH ?= true
 IMAGE_TAG ?= latest
 COMMIT ?= HEAD
 RELEASE_DIR ?= out
+GITHUB_REPO = lodia-io/cluster-api-provider-lodia
+RELEASE_IMAGE = go run ./hack/releasecheck image --repository=$(IMAGE_REPOSITORY) --tag=$(IMAGE_TAG) $(RELEASE_DIR)/control-plane-components.yaml
+VERIFY_IDENTITY = --certificate-identity https://github.com/$(GITHUB_REPO)/.github/workflows/release.yml@refs/tags/$(IMAGE_TAG) --certificate-oidc-issuer https://token.actions.githubusercontent.com
 GENERATED = api/v1alpha1/zz_generated.deepcopy.go api/crds/*.yaml config/crd/bases/*.yaml config/rbac/role.yaml
 
 .PHONY: generate
@@ -46,11 +49,25 @@ release-components: ## write $(RELEASE_DIR)/control-plane-components.yaml: confi
 
 .PHONY: release-image
 release-image: ## print the image that $(RELEASE_DIR)/control-plane-components.yaml names, after requiring it to be the only one, $(IMAGE_REPOSITORY):$(IMAGE_TAG) with a digest
-	@go run ./hack/releasecheck image --repository=$(IMAGE_REPOSITORY) --tag=$(IMAGE_TAG) $(RELEASE_DIR)/control-plane-components.yaml
+	@$(RELEASE_IMAGE)
 
 .PHONY: release-login
 release-login: ## log in to the registry of $(IMAGE_REPOSITORY) as $$GITHUB_ACTOR with $$GITHUB_TOKEN, which ko pushes with
 	@printf '%s' "$$GITHUB_TOKEN" | go run $(KO) login $(firstword $(subst /, ,$(IMAGE_REPOSITORY))) --username "$$GITHUB_ACTOR" --password-stdin
+
+.PHONY: release-sign
+release-sign: ## sign keyless, with the workflow's OIDC token, the image that release-image prints by its digest, the index and each platform's image, then $(RELEASE_DIR)/control-plane-components.yaml and metadata.yaml, each with a bundle in $(RELEASE_DIR)
+	image="$$($(RELEASE_IMAGE))" && cosign sign --yes --recursive $(IMAGE_REPOSITORY)@$${image##*@}
+	cosign sign-blob --yes --bundle $(RELEASE_DIR)/control-plane-components.yaml.sigstore.json $(RELEASE_DIR)/control-plane-components.yaml
+	cosign sign-blob --yes --bundle $(RELEASE_DIR)/metadata.yaml.sigstore.json metadata.yaml
+
+.PHONY: release-verify
+release-verify: ## run what a user runs for the tag IMAGE_TAG: the signature and the attestation of the image by its digest, then of $(RELEASE_DIR)/control-plane-components.yaml and metadata.yaml; the signer is release.yml at refs/tags/$(IMAGE_TAG), and gh reads $$GH_TOKEN
+	image="$$($(RELEASE_IMAGE))" && cosign verify $(VERIFY_IDENTITY) $(IMAGE_REPOSITORY)@$${image##*@} && gh attestation verify oci://$(IMAGE_REPOSITORY)@$${image##*@} -R $(GITHUB_REPO)
+	cosign verify-blob --bundle $(RELEASE_DIR)/control-plane-components.yaml.sigstore.json $(VERIFY_IDENTITY) $(RELEASE_DIR)/control-plane-components.yaml
+	cosign verify-blob --bundle $(RELEASE_DIR)/metadata.yaml.sigstore.json $(VERIFY_IDENTITY) metadata.yaml
+	gh attestation verify $(RELEASE_DIR)/control-plane-components.yaml -R $(GITHUB_REPO)
+	gh attestation verify metadata.yaml -R $(GITHUB_REPO)
 
 .PHONY: release-check
 release-check: ## refuse TAG before it is pushed: a semver tag with a series in metadata.yaml at COMMIT, a series for every tag there is, COMMIT on origin/main with every run of ci.yml green, the local tags TAG and api/TAG at COMMIT; reads GitHub with $$GITHUB_TOKEN, or with gh's
