@@ -22,7 +22,7 @@ Decided 2026-10-26.
 - A worker joins with such a Secret only since [kubernetes-sigs/cluster-api#14389](https://github.com/kubernetes-sigs/cluster-api/pull/14389), merged to `main` as [bccfd69](https://github.com/kubernetes-sigs/cluster-api/commit/bccfd69caf12e9703c2711d6d961ff99d6c0ebc3): `EnsureAllExist` asks for the key only of a certificate that has a key file, and a worker's CA certificate has none ([v1.15.0-beta.0](https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/util/secret/certificates.go#L273-L288), [worker certificates](https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/util/secret/certificates.go#L189-L200)).
 - v1.14.4, the newest stable release on 2026-11-13, asks for the key of every certificate that is not external, so the kubeadm bootstrap provider fails the join of every worker with `missing key data`, and no worker gets bootstrap data ([`EnsureAllExist`](https://github.com/kubernetes-sigs/cluster-api/blob/v1.14.4/util/secret/certificates.go#L272-L287), [the join](https://github.com/kubernetes-sigs/cluster-api/blob/v1.14.4/bootstrap/kubeadm/reconcilers/kubeadmconfig/kubeadmconfig_controller.go#L653-L679)).
   The change is on `main` and in v1.15.0-beta.0 only: no backport to the v1.14 line existed on 2026-11-13.
-- A release of the provider needs Cluster API v1.15.0-beta.0, for the core provider and for the kubeadm bootstrap provider, until the provider's pin moves to v1.15.0 ([`todo.md`](../../todo.md)).
+- A release of the provider therefore needs a Cluster API release with that change: [the requirement](../README.md#the-cluster-api-version).
 
 ## Code
 

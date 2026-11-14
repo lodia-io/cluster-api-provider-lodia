@@ -97,9 +97,8 @@ func parseTag(tag string) (*version.Version, error) {
 	return v, nil
 }
 
-// clusterctl lists the release tags that version.ParseSemantic accepts while the
-// repository is private, and the Go proxy's semver tags once it is public, each
-// of which ParseSemantic accepts:
+// clusterctl lists the release tags of a private repository and the Go proxy's
+// semver tags of a public one, each of which version.ParseSemantic accepts:
 // https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/cmd/clusterctl/client/repository/repository_github.go#L364
 // https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/cmd/clusterctl/client/repository/repository_github.go#L118-L133
 // https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/internal/goproxy/goproxy.go#L123-L131

@@ -28,7 +28,7 @@ Decided 2026-11-09.
 
 ## Code
 
-- `internal/controller/lodiacontrolplane.go` — `currentControlPlane`, `initialized`, `applyControlPlane`, `copySecrets` and `applySecret` read through `APIReader`; `reportLost` and `controlledElsewhereError` carry the two reasons.
+- `internal/controller/lodiacontrolplane.go` — `currentControlPlane`, `initialized`, `copySecrets`, `applySecret` and `reconcileDelete` read through `APIReader`; `applyControlPlane` applies with the UID that `currentControlPlane` read; `reportLost` and `controlledElsewhereError` carry the two reasons.
 - `internal/controller/foreign_test.go` — `TestALeftoverControlPlaneOfAnotherOwnerIsLeftAlone`, `TestAPredecessorsSecretsAreNotCopied`, `TestALeftoverSecretOutsideTheCacheIsLeftAlone` and `TestDeletionLeavesAForeignControlPlaneAlone`.
 - `internal/controller/races_test.go` — `TestAnInitializedControlPlaneIsNotRecreated`, `TestAControlPlaneVanishingBeforeTheApplyIsNotRecreated` and `TestAStaleCacheDoesNotHideALeftoverControlPlane`.
 

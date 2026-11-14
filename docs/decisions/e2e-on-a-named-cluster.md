@@ -5,15 +5,17 @@ Decided 2026-11-09.
 ## Decision
 
 - The suite runs only against a kind cluster whose kubeconfig is named in `E2E_KUBECONFIG`, and never reads the current kube context.
-  `guard.go` wants a single context whose name starts with `kind-capl-e2e` and whose server is a loopback address, and refuses to start while a `HELM_KUBE*` variable is set.
+  `guard.go` wants a single context whose name starts with `kind-capl-e2e` and whose server is a loopback address, and the suite refuses to start while a `HELM_KUBE*` variable is set (`refuseHelmKubeEnv`).
   `make e2e` creates the kind cluster `capl-e2e`, or the one `E2E_CLUSTER` names, and deletes it afterwards; `make e2e-cluster` refuses a name that the guard or Lodia would refuse, before anything is created.
 - The prefix is not Lodia's `lodia-e2e`, so this guard refuses Lodia's own e2e cluster, and Lodia's guard refuses this one.
 - Cluster API, its kubeadm bootstrap provider, Cluster API's Docker provider and this provider are installed through clusterctl's `Init`, on a local repository the suite lays out, with the provider's components YAML rendered by the target that renders the release's.
   Lodia and etcd-druid are installed from Lodia's chart at the `LODIA_COMMIT` of the `Makefile`.
 - A worker joins through Cluster API's kubeadm bootstrap provider with the bootstrap objects that Lodia's Tenant controller writes, and a pod runs on it, read through the `<cluster>-kubeconfig` that the provider wrote.
-- A test that drives clusterctl or loads a kubeconfig first points `KUBECONFIG` at a kubeconfig of a cluster that never answers, and fails if that cluster is asked anything.
+- A test outside the suite's tagged files that drives clusterctl, or loads the kubeconfig that `KUBECONFIG` names, first points `KUBECONFIG` at a kubeconfig of a cluster that never answers, and fails if that cluster is asked anything.
+  The suite's tagged files, `suite_test.go`, `install_test.go` and `join_test.go`, do not, and rely on the guard and on `E2E_KUBECONFIG`.
 - Every wait has a bound in the suite's model, the bounds add up to less than `go test`'s `-timeout`, and `-timeout` to less than the job's `timeout-minutes`.
-  A wait ends through the suite's own end of its window, by cancelling its context, never by a context deadline.
+  A wait that takes its bound from the context it runs on runs on a context that `endAfter` cancels at the end of the wait's window, never on one with a deadline.
+  A docker call, the dump, the unpause of `pauseCycle` and clusterctl's wait for the providers inside the install still end by a deadline ([`test/e2e/README.md`](../../test/e2e/README.md)).
 - CI runs `make e2e` as the job `e2e`, on every pull request and every push to `main`.
 - What the provider shares with Lodia's guard is Lodia's [decision of the same name](https://github.com/lodia-io/lodia/blob/57375832e7fe8b3a06374613797eb4c544fe7612/docs/decisions/e2e-on-a-named-cluster.md).
 
@@ -36,11 +38,12 @@ Decided 2026-11-09.
 
 - The suite needs Docker and helm, and runs where the Docker network `kind` is routable, as on GitHub's Linux runners.
   Docker Desktop does not route it, so the suite does not run on macOS.
-- A new bound joins the model in `TestTheBoundsFitUnderTheTimeouts`, and a new wait is checked by `TestEveryWaitOfTheJoinTestIsBoundedByAFieldOfTheBoundsThatNoOtherWaitTakes`.
+- A new bound joins the model in `TestTheBoundsFitUnderTheTimeouts`, and a new wait is checked by `TestEveryWaitOfTheJoinTestIsBoundedByAFieldOfTheBoundsThatNoOtherWaitTakes`, which also fails a wait on a context that `context.WithTimeout` made.
 
 ## Code
 
 - `test/e2e/guard.go` — `RequireNamedCluster`; `test/e2e/guard_test.go` — `TestRequireNamedCluster`, `TestMakeAndTheGuardAgreeOnTheClusterName` and `TestMakeAcceptsOnlyNamesWhoseClusterLodiaAccepts`.
+- `test/e2e/helm_test.go` — `refuseHelmKubeEnv` and `TestHelmKubeVariablesAreRefused`; `test/e2e/suite_test.go` calls it with the guard.
 - `Makefile` — `e2e`, `e2e-cluster` and `e2e-lodia`; `.github/workflows/ci.yml` — the job `e2e`.
 - `test/e2e/join_test.go` — `TestAWorkerJoinsAClusterOfLodiasControlPlane`; `test/e2e/install_test.go` and `test/e2e/clusterctl_test.go` — the install; `test/e2e/README.md` — the steps and the failure modes.
 - `test/clusterctlproxy/trap.go` — `TrapTheDefaultKubeconfig`; `test/clusterctlproxy/proxy_test.go` — `TestNoCallReadsAKubeconfigOrTheCurrentContext` and `TestEveryClusterctlClientIsBuiltThroughTheFactory`.

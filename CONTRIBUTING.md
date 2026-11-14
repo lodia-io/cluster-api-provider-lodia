@@ -57,10 +57,11 @@ What a release holds and why it is cut this way: [releases-through-clusterctl](d
 
 Between the push of a tag and the publication of its release, `clusterctl upgrade plan` fails for every management cluster that has the provider: clusterctl takes the versions from proxy.golang.org, which lists a tag whether or not it has a release, and then asks for the files of the newest one ([versions](https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/cmd/clusterctl/client/repository/repository_github.go#L104-L146), [proxy](https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/internal/goproxy/goproxy.go#L59-L143), [upgrade info](https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/cmd/clusterctl/client/cluster/upgrader_info.go#L51-L123)).
 The window is the run of the release job, which builds and publishes nothing before the tag.
+A re-run on the same tag keeps the window open until it publishes the release.
 
 ### When a run fails
 
-- A cause outside the commit, such as the package's visibility, the registry or a permission, is answered by re-running the failed job on the same tag.
+- A cause outside the commit, such as the registry or a permission, is answered by re-running the failed job on the same tag.
   A re-run replays the tag's own commit, so it runs that commit's `release.yml`, `Makefile` and check.
 - A cause inside the commit, in `release.yml`, the `Makefile` or the check, is fixed on `main`.
   Then delete the tag and tag the fixed commit again, or tag the next pre-release.

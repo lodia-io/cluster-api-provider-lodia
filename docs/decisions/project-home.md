@@ -17,12 +17,12 @@ Decided 2026-10-26.
 
 ## Why
 
-- A group other than `controlplane.cluster.x-k8s.io` keeps the provider's kinds apart from Lodia's `lodia.io`, and the contract names a control plane CRD `<plural>.<group>` ([definition][cp-crd], [CalculateCRDName][crd-name]) with `<env>ControlPlane` as the kind's convention.
+- The subgroup `controlplane.lodia.io` keeps the provider's kinds apart from Lodia's `lodia.io`, and the contract names a control plane CRD `<plural>.<group>` ([definition][cp-crd], [CalculateCRDName][crd-name]) with `<env>ControlPlane` as the kind's convention.
 - clusterctl labels the manifests of a provider with `cluster.x-k8s.io/provider: control-plane-<name>` for the name it is configured under ([label][cc-label]), and the contract's rules for the built-in list prefix the organization's name and drop the prefix where it would stutter, which gives `lodia` ([names][cc-names]).
 
 ## Rejected
 
-- The group `lodia.io` with the kind `ControlPlane` — the provider's kinds would sit among Lodia's, under the name of one of them.
+- The group `controlplane.cluster.x-k8s.io`, which control plane providers under the Kubernetes SIGS org generally use ([contract][cp-group]) — the domain is ours.
 
 ## Consequences
 

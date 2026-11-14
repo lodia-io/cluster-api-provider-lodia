@@ -1,6 +1,6 @@
 # The status mirrors Lodia's: Available follows Reachable, Ready follows Ready at the current generation, and there are no replica counts
 
-Decided 2026-11-09.
+Decided 2026-10-26.
 
 ## Decision
 
@@ -14,7 +14,7 @@ Decided 2026-11-09.
 ## Why
 
 - `Available` is mirrored into the `Cluster`'s `ControlPlaneAvailable`, and the contract asks that it hold through disruption ([conditions][cp-conditions], [mirror][cs-available]).
-- Lodia's rule is that a reader counts a condition only at the current generation ([Lodia's rule][lo-ref-ready]).
+- Lodia's `Ready` True at the object's generation means available with every change taken up ([Lodia's rule][lo-ref-ready]).
 - The initialization latch is kept as Cluster API keeps the `Cluster`'s ([Cluster controller][cl-cp]), and the contract reads it ([initialization][cp-init]).
 - Without a version no worker is ever created, since the MachineSet's preflight holds every new Machine while the control plane reports none ([what Cluster API needs](../README.md#a-version-in-status)).
   Lodia's `status.kubernetes.version` is the oldest version any part of the control plane runs ([field reference][lo-ref-kubernetes]).

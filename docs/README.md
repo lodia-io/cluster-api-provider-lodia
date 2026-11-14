@@ -19,7 +19,7 @@ Links marked 5f212ed point at that older commit of Lodia.
 | Lodia's `ControlPlane` of the `Cluster` | one, named after the `Cluster` and in its namespace, built from the spec and the `Cluster`'s network and deleted with its owner |
 | `<cluster>-kubeconfig` and `<cluster>-ca` | the copies of Lodia's admin kubeconfig and cluster CA that Cluster API reads |
 | the finalizer `controlplane.lodia.io/lodiacontrolplane` and two annotations | `clusterctl.cluster.x-k8s.io/block-move` and `controlplane.lodia.io/uid`, on the `LodiaControlPlane` |
-| the contract's status | the endpoint, initialization, versions, `Available`, `Ready` and `Paused` of the `LodiaControlPlane`, from Lodia's |
+| the contract's endpoint and status | `spec.controlPlaneEndpoint`, and the initialization, versions, `Available` and `Ready` of the `LodiaControlPlane`, from Lodia's; `Paused` is Cluster API's pause |
 
 And deliberately not: Machines, which the MachineSet controller creates; the `Cluster` and the InfraCluster, which the provider never writes; Lodia's own pause, which stays a break-glass switch on the `ControlPlane`.
 

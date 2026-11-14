@@ -1,6 +1,6 @@
 # A hosted control plane does not move: clusterctl move is refused for good, and a copy of a LodiaControlPlane is never rebuilt
 
-Decided 2026-11-13.
+Decided 2026-10-26.
 
 ## Decision
 
@@ -8,7 +8,7 @@ Decided 2026-11-13.
   Both CRDs carry the label `clusterctl.cluster.x-k8s.io`, which move finds CRDs by ([discovery][move-crds]), so the annotation is seen on an installation made by hand too.
 - The provider records the UID the object had when it first reconciled it in the annotation `controlplane.lodia.io/uid`.
   The annotation is written only when absent, together with `block-move` and before the first apply of the `ControlPlane`, in one patch locked on the resourceVersion that the pass read; a pass whose patch did not land applies nothing.
-- Before its first step, every pass compares the annotation with the object's UID, `block-move` included.
+- Every pass compares the annotation with the object's UID, and with nothing else, before every other step, the one that writes `block-move` included.
   A `LodiaControlPlane` that is not being deleted and whose annotation names another UID gets `Ready` and `Available` `False` with the reason `CopyOfAnotherObject`, and nothing else is written to it: neither a finalizer, a `Paused` condition, an annotation, a `ControlPlane` nor a Secret.
 - A copy that is being deleted skips the refusal, so that its finalizer can go.
   Its deletion removes only its own finalizer, and a `ControlPlane` of the same name stays.
