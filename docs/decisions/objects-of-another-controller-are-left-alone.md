@@ -1,6 +1,6 @@
 # The provider leaves alone every object another controller owns, and never rebuilds a ControlPlane that an initialized LodiaControlPlane has lost
 
-Decided 2026-11-09.
+Decided 2026-10-26.
 
 ## Decision
 

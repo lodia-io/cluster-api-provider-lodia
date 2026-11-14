@@ -429,7 +429,7 @@ To give the copy a new, empty control plane, remove its annotation `controlplane
 ## Conventions
 
 - Names: `<cluster>-kubeconfig` and `<cluster>-ca` for the Secrets in the Cluster's namespace, and the group's name as the prefix of the finalizer `controlplane.lodia.io/lodiacontrolplane` and of the annotation `controlplane.lodia.io/uid`.
-- Every write of the `ControlPlane` and of the Secrets is a server-side apply under the field manager `cluster-api-provider-lodia`.
+- The `ControlPlane` and the Secrets are applied server-side under the field manager `cluster-api-provider-lodia`.
 - The `ControlPlane`, Lodia's two source Secrets and the provider's own two are read from the API server, past the cache ([objects-of-another-controller-are-left-alone](decisions/objects-of-another-controller-are-left-alone.md)).
 
 ## Deliberately not offered — and owed

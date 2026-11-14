@@ -36,7 +36,7 @@ Read **Authority** first; **Out of scope** is binding, findings outside it go to
 - `config/crd/bases`, `config/rbac/role.yaml` and `api/v1alpha1/zz_generated.deepcopy.go` are generated and never edited; `make verify` fails when `make generate` changes them.
 - Only `suite_test.go`, `install_test.go` and `join_test.go` in `test/e2e` carry the build tag `e2e`.
   `go test ./...` runs the rest of `test/e2e` as unit tests, the bounds and the check of the waits among them.
-- Docs tests, so a change to the docs can fail a test: `api/v1alpha1/names_test.go` reads every tracked Markdown file for names of the API group that the API does not define, and holds that `docs/README.md` and `docs/decisions/hosted-control-planes-do-not-move.md` name the UID annotation and `CopyOfAnotherObject`; `cmd/cluster-api-provider-lodia/main_test.go` reads the operator's fields in `docs/README.md`.
+- Docs tests, so a change to the docs can fail a test: `api/v1alpha1/names_test.go` reads every tracked Markdown file for names of the API group that the API does not define, and holds that `docs/README.md` and `docs/decisions/hosted-control-planes-do-not-move.md` name the UID annotation and `CopyOfAnotherObject`; `cmd/cluster-api-provider-lodia/main_test.go` reads the operator's fields under their headings in `docs/README.md` and requires its sentence that several instances of the provider are not supported.
 
 ## Rules
 

@@ -43,9 +43,15 @@ func TestTheDocsNameNoOtherNameOfTheGroupThanTheAPIDefines(t *testing.T) {
 		t.Fatalf("git ls-files: %v", err)
 	}
 	docs := strings.FieldsFunc(string(out), func(r rune) bool { return r == 0 })
-	for _, nested := range []string{"docs/README.md", "docs/decisions/hosted-control-planes-do-not-move.md"} {
-		if !slices.Contains(docs, nested) {
-			t.Fatalf("git ls-files lists %d Markdown files, and not %s: want every tracked one, nested directories included", len(docs), nested)
+	for _, required := range []string{
+		"CLAUDE.md",
+		"docs/README.md",
+		"docs/decisions/hosted-control-planes-do-not-move.md",
+		"test/e2e/README.md",
+		".claude/rules/e2e.md",
+	} {
+		if !slices.Contains(docs, required) {
+			t.Fatalf("git ls-files lists %d Markdown files, and not %s: want every tracked one, nested and hidden directories included", len(docs), required)
 		}
 	}
 	for _, doc := range docs {

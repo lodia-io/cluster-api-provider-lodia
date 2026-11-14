@@ -1,6 +1,6 @@
 # The manager takes the flags of Cluster API's kubeadm control plane provider, under their names and with their defaults
 
-Decided 2026-11-13.
+Decided 2026-11-11.
 
 ## Decision
 

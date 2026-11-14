@@ -1,6 +1,6 @@
 # The kubeadm bootstrap provider may get a LodiaControlPlane, through a binding to its user that names it with two clusterctl variables
 
-Decided 2026-11-10.
+Decided 2026-11-09.
 The binding is a workaround, and [`todo.md`](../../todo.md) holds what undoes it.
 
 ## Decision

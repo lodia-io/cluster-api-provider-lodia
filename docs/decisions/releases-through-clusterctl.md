@@ -1,6 +1,6 @@
 # A release is a GitHub release that clusterctl and cluster-api-operator read, with an image on ghcr.io named by digest, cut from a signed tag by hand
 
-Decided 2026-11-13.
+Decided 2026-11-11.
 Signing is not built.
 
 ## Decision
