@@ -17,7 +17,7 @@ Decided 2026-10-26.
 
 ## Why
 
-- `clusterctl move` re-creates the objects elsewhere and deletes the source ones ([deleteSourceObject][move-delete]), and a hosted control plane is Lodia's pods, Services, etcd and Secrets in the source management cluster, under Lodia's `ControlPlane`, which move would not carry: it finds the kinds whose CRDs carry the label `clusterctl.cluster.x-k8s.io` ([discovery](https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/cmd/clusterctl/client/cluster/objectgraph.go#L344-L430)), and Lodia's CRDs carry none ([CRD](https://github.com/lodia-io/lodia/blob/57375832e7fe8b3a06374613797eb4c544fe7612/api/crds/lodia.io_controlplanes.yaml#L1-L8)).
+- `clusterctl move` re-creates the objects elsewhere and deletes the source ones ([deleteSourceObject][move-delete]), and a hosted control plane is Lodia's pods, Services, etcd and Secrets in the source management cluster, under Lodia's `ControlPlane`, which move would not carry: it finds the kinds whose CRDs carry the label `clusterctl.cluster.x-k8s.io` ([discovery](https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/cmd/clusterctl/client/cluster/objectgraph.go#L344-L430)), and Lodia's CRDs carry none ([CRD](https://github.com/lodia-io/lodia/blob/f91168b1248dc18151a0c2d442fe2050593a0866/api/crds/lodia.io_controlplanes.yaml#L1-L8)).
   The `ControlPlane` would follow its owner into garbage collection.
 - The annotation is permanent because a paused `LodiaControlPlane` is not reconciled, so the provider could not put it back during a move.
   With it removed by hand, a live move deletes the source `LodiaControlPlane` ([delete](https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/cmd/clusterctl/client/cluster/mover.go#L1253-L1314)), the garbage collector deletes Lodia's `ControlPlane`, and its `lodia.io/datastore` finalizer ends with the etcd deleted ([finalizer][lo-finalizer]).
@@ -50,6 +50,6 @@ Decided 2026-10-26.
 [move-crds]: https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/cmd/clusterctl/client/cluster/objectgraph.go#L420-L431
 [move-delete]: https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/cmd/clusterctl/client/cluster/mover.go#L1260-L1312
 
-<!-- Lodia at 5737583 -->
-[lo-finalizer]: https://github.com/lodia-io/lodia/blob/57375832e7fe8b3a06374613797eb4c544fe7612/api/v1alpha1/labels.go#L79-L81
-[lo-sealed]: https://github.com/lodia-io/lodia/blob/57375832e7fe8b3a06374613797eb4c544fe7612/api/v1alpha1/labels.go#L83-L88
+<!-- Lodia at f91168b -->
+[lo-finalizer]: https://github.com/lodia-io/lodia/blob/f91168b1248dc18151a0c2d442fe2050593a0866/api/v1alpha1/labels.go#L92-L94
+[lo-sealed]: https://github.com/lodia-io/lodia/blob/f91168b1248dc18151a0c2d442fe2050593a0866/api/v1alpha1/labels.go#L96-L101

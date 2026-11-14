@@ -18,7 +18,7 @@ Decided 2026-10-26.
 - **clusterctl:** the provider is named `lodia`, so every manifest carries the label `cluster.x-k8s.io/provider: control-plane-lodia`, and the variables it defines start with `LODIA_`.
 - **License:** Apache License 2.0, and contributions under the Developer Certificate of Origin (DCO sign-off), as Lodia's.
   Every Go file starts with Lodia's short Apache-2.0 header.
-- What the provider shares with Lodia, the license, the DCO and the domain of the Go module, is Lodia's [project-home](https://github.com/lodia-io/lodia/blob/57375832e7fe8b3a06374613797eb4c544fe7612/docs/decisions/project-home.md).
+- What the provider shares with Lodia, the license, the DCO and the domain of the Go module, is Lodia's [project-home](https://github.com/lodia-io/lodia/blob/f91168b1248dc18151a0c2d442fe2050593a0866/docs/decisions/project-home.md).
 
 ## Why
 
@@ -63,12 +63,12 @@ Decided 2026-10-26.
 [cc-label]: https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/cmd/clusterctl/client/repository/components.go#L543-L564
 [cc-names]: https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/docs/book/src/developer/providers/contracts/clusterctl.md?plain=1#L34-L82
 
-<!-- Lodia at 5737583 -->
-[lo-api-gomod]: https://github.com/lodia-io/lodia/blob/57375832e7fe8b3a06374613797eb4c544fe7612/api/go.mod#L1-L10
-[lo-project-home]: https://github.com/lodia-io/lodia/blob/57375832e7fe8b3a06374613797eb4c544fe7612/docs/decisions/project-home.md#decision
-[lo-crds]: https://github.com/lodia-io/lodia/blob/57375832e7fe8b3a06374613797eb4c544fe7612/api/crds/crds.go#L10-L13
-[lo-gomod-require]: https://github.com/lodia-io/lodia/blob/57375832e7fe8b3a06374613797eb4c544fe7612/go.mod#L19
-[lo-gomod-replace]: https://github.com/lodia-io/lodia/blob/57375832e7fe8b3a06374613797eb4c544fe7612/go.mod#L167
+<!-- Lodia at f91168b -->
+[lo-api-gomod]: https://github.com/lodia-io/lodia/blob/f91168b1248dc18151a0c2d442fe2050593a0866/api/go.mod#L1-L10
+[lo-project-home]: https://github.com/lodia-io/lodia/blob/f91168b1248dc18151a0c2d442fe2050593a0866/docs/decisions/project-home.md#decision
+[lo-crds]: https://github.com/lodia-io/lodia/blob/f91168b1248dc18151a0c2d442fe2050593a0866/api/crds/crds.go#L10-L13
+[lo-gomod-require]: https://github.com/lodia-io/lodia/blob/f91168b1248dc18151a0c2d442fe2050593a0866/go.mod#L20
+[lo-gomod-replace]: https://github.com/lodia-io/lodia/blob/f91168b1248dc18151a0c2d442fe2050593a0866/go.mod#L167
 
 <!-- Kubernetes v0.37.2 -->
 [ae-gomod]: https://github.com/kubernetes/apiextensions-apiserver/blob/v0.37.2/go.mod#L31

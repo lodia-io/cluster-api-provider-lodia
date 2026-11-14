@@ -194,18 +194,18 @@ func TestLodiaCommitIsThePinnedAPI(t *testing.T) {
 }
 
 func TestAWrongLodiaPinIsRefused(t *testing.T) {
-	const pinned = "require go.lodia.io/lodia/api v0.0.0-20261109145222-57375832e7fe\n"
+	const pinned = "require go.lodia.io/lodia/api v0.0.0-20261114202616-f91168b1248d\n"
 	cases := []struct {
 		name, gomod, makefile, want string
 	}{
-		{"no requirement", "module m\n", "LODIA_COMMIT = 57375832e7fe8b3a06374613797eb4c544fe7612\n", "requires no"},
-		{"not a pseudo-version", "module m\nrequire go.lodia.io/lodia/api v1.0.0\n", "LODIA_COMMIT = 57375832e7fe8b3a06374613797eb4c544fe7612\n", "pseudo-version"},
+		{"no requirement", "module m\n", "LODIA_COMMIT = f91168b1248dc18151a0c2d442fe2050593a0866\n", "requires no"},
+		{"not a pseudo-version", "module m\nrequire go.lodia.io/lodia/api v1.0.0\n", "LODIA_COMMIT = f91168b1248dc18151a0c2d442fe2050593a0866\n", "pseudo-version"},
 		{"no commit", "module m\n" + pinned, "E2E_DIR = x\n", "sets no LODIA_COMMIT"},
-		{"another commit", "module m\n" + pinned, "LODIA_COMMIT = 5737583aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n", "not the full commit"},
-		{"a short commit", "module m\n" + pinned, "LODIA_COMMIT = 57375832e7fe\n", "not the full commit"},
-		{"a replace of Lodia", "module m\n" + pinned + "replace go.lodia.io/lodia/api => go.lodia.io/lodia/api v0.0.0-20261112004109-bf2882642645\n", "LODIA_COMMIT = 57375832e7fe8b3a06374613797eb4c544fe7612\n", "go.mod replaces go.lodia.io/lodia/api"},
-		{"a replace of the API module", "module m\n" + pinned + "replace go.lodia.io/cluster-api-provider-lodia/api => ./api\n", "LODIA_COMMIT = 57375832e7fe8b3a06374613797eb4c544fe7612\n", ""},
-		{"the pinned commit", "module m\n" + pinned, "LODIA_COMMIT = 57375832e7fe8b3a06374613797eb4c544fe7612\n", ""},
+		{"another commit", "module m\n" + pinned, "LODIA_COMMIT = f91168baaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n", "not the full commit"},
+		{"a short commit", "module m\n" + pinned, "LODIA_COMMIT = f91168b1248d\n", "not the full commit"},
+		{"a replace of Lodia", "module m\n" + pinned + "replace go.lodia.io/lodia/api => go.lodia.io/lodia/api v0.0.0-20261112004109-bf2882642645\n", "LODIA_COMMIT = f91168b1248dc18151a0c2d442fe2050593a0866\n", "go.mod replaces go.lodia.io/lodia/api"},
+		{"a replace of the API module", "module m\n" + pinned + "replace go.lodia.io/cluster-api-provider-lodia/api => ./api\n", "LODIA_COMMIT = f91168b1248dc18151a0c2d442fe2050593a0866\n", ""},
+		{"the pinned commit", "module m\n" + pinned, "LODIA_COMMIT = f91168b1248dc18151a0c2d442fe2050593a0866\n", ""},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -236,7 +236,7 @@ func TestTheAPIModulePinsWhatTheMainModuleDoes(t *testing.T) {
 
 func TestPinsThatDifferBetweenTheModulesAreRefused(t *testing.T) {
 	const (
-		lodia     = "go.lodia.io/lodia/api v0.0.0-20261109145222-57375832e7fe\n"
+		lodia     = "go.lodia.io/lodia/api v0.0.0-20261114202616-f91168b1248d\n"
 		lodiaNew  = "go.lodia.io/lodia/api v0.0.0-20261112004109-bf2882642645\n"
 		cluster   = "sigs.k8s.io/cluster-api/api v1.15.0-beta.0\n"
 		clusterGA = "sigs.k8s.io/cluster-api/api v1.15.0\n"
@@ -251,9 +251,9 @@ func TestPinsThatDifferBetweenTheModulesAreRefused(t *testing.T) {
 		name, root, api, want string
 	}{
 		{"the same pins", gomod(lodia, cluster), gomod(cluster, lodia), ""},
-		{"another Lodia", gomod(lodia, cluster), gomod(lodiaNew, cluster), "go.lodia.io/lodia/api is v0.0.0-20261112004109-bf2882642645 in api/go.mod and v0.0.0-20261109145222-57375832e7fe in go.mod"},
+		{"another Lodia", gomod(lodia, cluster), gomod(lodiaNew, cluster), "go.lodia.io/lodia/api is v0.0.0-20261112004109-bf2882642645 in api/go.mod and v0.0.0-20261114202616-f91168b1248d in go.mod"},
 		{"another Cluster API", gomod(lodia, cluster), gomod(lodia, clusterGA), "sigs.k8s.io/cluster-api/api is v1.15.0 in api/go.mod and v1.15.0-beta.0 in go.mod"},
-		{"both another", gomod(lodia, cluster), gomod(lodiaNew, clusterGA), "go.lodia.io/lodia/api is v0.0.0-20261112004109-bf2882642645 in api/go.mod and v0.0.0-20261109145222-57375832e7fe in go.mod; sigs.k8s.io/cluster-api/api is v1.15.0"},
+		{"both another", gomod(lodia, cluster), gomod(lodiaNew, clusterGA), "go.lodia.io/lodia/api is v0.0.0-20261112004109-bf2882642645 in api/go.mod and v0.0.0-20261114202616-f91168b1248d in go.mod; sigs.k8s.io/cluster-api/api is v1.15.0"},
 		{"no Lodia in the API module", gomod(lodia, cluster), gomod(cluster), "api/go.mod requires no go.lodia.io/lodia/api"},
 		{"no Cluster API in the API module", gomod(lodia, cluster), gomod(lodia), "api/go.mod requires no sigs.k8s.io/cluster-api/api"},
 		{"no Lodia in the main module", gomod(cluster), gomod(lodia, cluster), "go.mod requires no go.lodia.io/lodia/api"},
@@ -261,7 +261,7 @@ func TestPinsThatDifferBetweenTheModulesAreRefused(t *testing.T) {
 		{"a replace of Lodia by a version in the API module", gomod(lodia, cluster), replacing(gomod(lodia, cluster), "go.lodia.io/lodia/api => go.lodia.io/lodia/api v0.0.0-20261112004109-bf2882642645"), "api/go.mod replaces go.lodia.io/lodia/api"},
 		{"a replace of Lodia by a version in the main module", replacing(gomod(lodia, cluster), "go.lodia.io/lodia/api => go.lodia.io/lodia/api v0.0.0-20261112004109-bf2882642645"), gomod(lodia, cluster), "go.mod replaces go.lodia.io/lodia/api"},
 		{"a replace of Lodia by a directory in the main module", replacing(gomod(lodia, cluster), "go.lodia.io/lodia/api => ../lodia/api"), gomod(lodia, cluster), "go.mod replaces go.lodia.io/lodia/api"},
-		{"a replace of Lodia at a version in the API module", gomod(lodia, cluster), replacing(gomod(lodia, cluster), "go.lodia.io/lodia/api v0.0.0-20261109145222-57375832e7fe => ../lodia/api"), "api/go.mod replaces go.lodia.io/lodia/api"},
+		{"a replace of Lodia at a version in the API module", gomod(lodia, cluster), replacing(gomod(lodia, cluster), "go.lodia.io/lodia/api v0.0.0-20261114202616-f91168b1248d => ../lodia/api"), "api/go.mod replaces go.lodia.io/lodia/api"},
 		{"a replace of Cluster API's API in the API module", gomod(lodia, cluster), replacing(gomod(lodia, cluster), "sigs.k8s.io/cluster-api/api => sigs.k8s.io/cluster-api/api v1.15.0"), "api/go.mod replaces sigs.k8s.io/cluster-api/api"},
 		{"a replace of Cluster API's API in the main module", replacing(gomod(lodia, cluster), "sigs.k8s.io/cluster-api/api => sigs.k8s.io/cluster-api/api v1.15.0"), gomod(lodia, cluster), "go.mod replaces sigs.k8s.io/cluster-api/api"},
 		{"a replace of Cluster API in the main module", replacing(gomod(lodia, cluster), "sigs.k8s.io/cluster-api => sigs.k8s.io/cluster-api v1.15.0"), gomod(lodia, cluster), "go.mod replaces sigs.k8s.io/cluster-api, which"},

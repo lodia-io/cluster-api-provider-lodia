@@ -52,5 +52,5 @@ Decided 2026-10-26.
 [kp-gate]: https://github.com/clastix/cluster-api-control-plane-provider-kamaji/blob/v0.21.0/controllers/kamajicontrolplane_controller.go#L231-L233
 [k0-infra]: https://github.com/k0sproject/k0smotron/blob/v2.3.0/internal/controller/controlplane/k0smotron_controlplane_controller.go#L888-L959
 
-<!-- Lodia at 5737583 -->
-[lo-paused]: https://github.com/lodia-io/lodia/blob/57375832e7fe8b3a06374613797eb4c544fe7612/api/v1alpha1/controlplane_types.go#L124-L132
+<!-- Lodia at f91168b -->
+[lo-paused]: https://github.com/lodia-io/lodia/blob/f91168b1248dc18151a0c2d442fe2050593a0866/api/v1alpha1/controlplane_types.go#L125-L133

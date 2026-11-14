@@ -69,8 +69,8 @@ func pidIn(path string) (int, bool) {
 
 func TestKoRunsOnTheClusterWithTheVersionAndWithoutGOARCH(t *testing.T) {
 	environ := []string{"PATH=/bin", "GOARCH=arm64", "VERSION=inherited"}
-	got := koEnv(environ, "capl-e2e", "VERSION=57375832e7fe")
-	want := []string{"PATH=/bin", "VERSION=inherited", "KO_DOCKER_REPO=kind.local", "KIND_CLUSTER_NAME=capl-e2e", "VERSION=57375832e7fe"}
+	got := koEnv(environ, "capl-e2e", "VERSION=f91168b1248d")
+	want := []string{"PATH=/bin", "VERSION=inherited", "KO_DOCKER_REPO=kind.local", "KIND_CLUSTER_NAME=capl-e2e", "VERSION=f91168b1248d"}
 	if !slices.Equal(got, want) {
 		t.Fatalf("got %q, want %q", got, want)
 	}

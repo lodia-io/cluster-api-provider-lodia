@@ -2,7 +2,7 @@ ENVTEST_K8S_VERSION ?= 1.35.0
 E2E_CLUSTER ?= capl-e2e
 E2E_DIR = $(CURDIR)/work/e2e/$(E2E_CLUSTER)
 LODIA_DIR = $(CURDIR)/work/lodia
-LODIA_COMMIT = 57375832e7fe8b3a06374613797eb4c544fe7612
+LODIA_COMMIT = f91168b1248dc18151a0c2d442fe2050593a0866
 REMOVE_WORKERS = docker ps --all --quiet --filter label=io.x-k8s.kind.cluster=$(E2E_CLUSTER)-w | xargs -r docker rm --force --volumes
 KUSTOMIZE = sigs.k8s.io/kustomize/kustomize/v5@v5.7.0
 KO = github.com/google/ko@v0.19.1

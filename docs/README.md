@@ -8,8 +8,7 @@ Workers join through Cluster API's kubeadm bootstrap provider (CABPK) with the b
 `LodiaControlPlaneTemplate` holds the same spec, but the version, `controlPlaneEndpoint` and `restoreFrom`, for ClusterClasses.
 
 Go, controller-runtime; the manager runs as a Deployment of one replica (`cluster-api-provider-lodia-system`, leader election) on a management cluster that runs Lodia and Cluster API.
-Pinned sources: Cluster API [v1.15.0-beta.0] (a3b7b6f); kubeadm and Kubernetes v1.35.0; and Lodia's API module at [lodia-io/lodia@5737583][lo].
-Links marked 5f212ed point at that older commit of Lodia.
+Pinned sources: Cluster API [v1.15.0-beta.0] (a3b7b6f); kubeadm and Kubernetes v1.35.0; and Lodia's API module at [lodia-io/lodia@f91168b][lo].
 
 ## What it owns
 
@@ -72,7 +71,7 @@ Validation is CEL in the CRD ([no-admission-webhooks](decisions/no-admission-web
 | `version` | `spec.version` | required; Lodia's pattern `^v1\.(0\|[1-9][0-9]*)\.(0\|[1-9][0-9]*)$` and minor-never-decreases rule ([types][lo-version]); the topology controller writes it from `Cluster.spec.topology.version`, which CAPI only requires to start with `v` and be semver ([webhook][wh-topology-version]), so a pre-release or build suffix is refused here |
 | `controlPlaneEndpoint` | ← `status.endpoint.apiServer.{host,port}` | written by the provider alone; the topology controller leaves it alone while empty ([IgnorePaths][ct-ignore]) |
 | `layout`, `highAvailability`, `datastore`, `endpoint`, `apiServer`, `controllerManager`, `scheduler`, `addons`, `placement`, `maintenance`, `health`, `serviceAccount`, `restoreFrom` | same field | Lodia's types and rules |
-| — | `network.serviceCIDRs` ← `Cluster.spec.clusterNetwork.services.cidrBlocks` | optional on the Cluster ([ClusterNetwork][api-network]); Lodia requires one or two and never changes them ([types][lo-network]), so a Cluster without them, or a change to them, is refused by Lodia's API server and reported as `Refused` |
+| — | `network.serviceCIDRs` ← `Cluster.spec.clusterNetwork.services.cidrBlocks` | optional on the Cluster ([ClusterNetwork][api-network]); Lodia requires one or two ([types][lo-network]) and never changes them ([rule][lo-network-immutable]), so a Cluster without them, or a change to them, is refused by Lodia's API server and reported as `Refused` |
 | — | `network.podCIDRs` ← `…pods.cidrBlocks` | the same |
 | — | `network.clusterDomain` ← `…serviceDomain` | Lodia's default `cluster.local` when unset |
 | — | `paused` | never written ([decision](decisions/one-lodia-controlplane-per-cluster.md)) |
@@ -249,7 +248,7 @@ sequenceDiagram
   B->>T: bootstrap token Secret, through <cluster>-kubeconfig
 ```
 
-1. Lodia builds the `ControlPlane`: Workloads publishes `status.endpoint`, PKI writes the admin kubeconfig against it ([pki/secrets.go][lo-admin]) and the CA bundle, Tenant writes `cluster-info`, `kubeadm-config`, `kubelet-config` and the RBAC for the group `system:bootstrappers:kubeadm:default-node-token` ([bootstrap.yaml][lo-bootstrap-rbac]), Lifecycle sets `Ready` ([README][lo-readme-lifecycle]).
+1. Lodia builds the `ControlPlane`: Workloads publishes `status.endpoint`, PKI writes the admin kubeconfig against it ([pki/secrets.go][lo-admin]) and the CA bundle, Tenant writes `cluster-info`, `kubeadm-config`, `kubelet-config` and the RBAC for the group `system:bootstrappers:kubeadm:default-node-token` ([bootstrap.yaml][lo-bootstrap-rbac]), Lifecycle sets `Ready` ([field reference][lo-ref-ready]).
 2. The provider does not wait for `Cluster.spec.controlPlaneEndpoint`: CAPI copies the control plane's endpoint only once the control plane reports initialized, and only while the Cluster's is empty ([cluster_controller_phases.go][cl-cp-endpoint]).
    A Cluster without `infrastructureRef` counts as provisioned ([no infra][cl-noinfra]); with an InfraCluster, that one must leave the endpoint empty.
 3. CAPI sets `ControlPlaneInitialized` on the Cluster ([status][cs-init]); its ClusterCache connects with `<cluster>-kubeconfig` once the infrastructure is provisioned, and refuses exec or auth-provider credentials ([cluster_cache.go][cache-infra], [REST config][cache-rest]); Lodia's admin kubeconfig carries client certificates.
@@ -257,8 +256,16 @@ sequenceDiagram
 5. CABPK waits for `ControlPlaneInitialized` ([gate][cabpk-gate]), reads `<cluster>-ca`, pins every certificate in `tls.crt`, takes `apiServerEndpoint` from the Cluster, and creates a bootstrap token in the tenant through the ClusterCache ([joinWorker][cabpk-worker], [reconcileDiscovery][cabpk-discovery], [token.go][cabpk-token]); kubeadm join reads `cluster-info`, waits for its JWS signature from Lodia's bootstrap signer, checks any CA against the pins and bootstraps against the server `cluster-info` names ([discovery][kubeadm-discovery], [pins][kubeadm-pins], [JWS wait][kubeadm-jws]).
 
 **Upgrade.**
-A new `spec.version` within a minor reaches Lodia, and `status.version` moves when Lodia's version does, so CAPI holds new workers as "upgrading" until then and then lets the MachineDeployment follow.
-Lodia at the pin moves its target within a minor only ([target][lo-target]): a `spec.version` of another minor leaves the target where it is, `Progressing` `False`, `Unsupported`, so `status.kubernetes.version` stays behind and CAPI holds new workers ([contract state][ct-state]) until Lodia builds minor upgrades.
+Lodia rolls its target towards `spec.version` one minor at a time, through the newest patch of each minor between ([target][lo-upgrade-target]).
+A minor step passes a preflight and waits for a `Backup`, which a class without a backup store does not hold up; a patch step has neither ([the steps][lo-upgrade-steps]).
+What writes `spec.version` decides how far ahead of Lodia it is.
+Under a ClusterClass the topology controller writes one step of its upgrade plan at a time, and only once the control plane is no longer upgrading ([stable][topo-cp-stable], [the step][topo-cp-next]).
+A plan skips no minor ([plan][topo-plan-minors]): without `kubernetesVersions` in the ClusterClass or an upgrade-plan extension it is the next minor alone ([one minor][topo-plan-one]), and the Cluster webhook refuses a `topology.version` two minors ahead ([when][wh-ceiling-when], [the refusal][wh-ceiling]); with `kubernetesVersions` the control plane goes through the newest listed version of each minor ([versions][topo-plan-versions]).
+So under a ClusterClass every write is at most one minor ahead of the control plane, and the minors Lodia steps through are Cluster API's.
+A Cluster without a topology takes the `spec.version` a person writes, several minors ahead included, and Lodia steps through them on its own.
+Lodia's `status.kubernetes.version` is the oldest version that its API server, controller manager, scheduler and addons run, and becomes a step's version once every part runs it ([target][lo-upgrade-target], [the steps][lo-upgrade-steps]), so `status.version` stays behind `spec.version` until the last step is done, and CAPI holds new workers as "upgrading" until then ([contract state][ct-state]).
+The MachineDeployments follow under a ClusterClass, where the topology controller moves them once the control plane is stable ([MachineDeployment version][topo-md-version]); without one a person moves them, and until then the kubeadm skew preflight holds the new Machines of a MachineDeployment that is not on the control plane's minor ([kubeadm skew][ms-kubeadm]).
+Why a step waits is in the `Progressing` of Lodia's `ControlPlane`, which the provider does not mirror ([Progressing][lo-upgrade-progressing]).
 
 ## What Cluster API needs from Lodia
 
@@ -278,6 +285,10 @@ With no `status.versions` and no `status.version`, the contract reads the contro
 Either holds every new Machine in the MachineSet preflight `ControlPlaneIsStable`, which runs by default ([preflight][ms-preflight], [feature.go][feature]), and the topology controller uses the same checks for ClusterClass upgrades.
 Without a version, no worker is ever created.
 Lodia's `status.kubernetes.version` is what the provider copies: the oldest version any part of the control plane runs ([field reference][lo-ref-kubernetes]).
+With `maintenance.autoUpdate.kubernetesPatch`, which the provider passes through, that version can be above `spec.version`: a new `ControlPlane` starts at the newer of `spec.version` and the table's latest patch of its minor, and the target only moves up while the field is on ([field reference][lo-ref-patch], [patch updates][lo-upgrade-patch]).
+The provider copies it as Lodia reports it.
+Cluster API reads a control plane as upgrading only when `spec.version` is above the reported version ([contract state][ct-state]), so a reported version above `spec.version` refuses nothing there.
+Its MachineSet preflight and its topology controller take the control plane's version from `spec.version` ([preflight][ms-cp-version], [topology][topo-cp-version]), and the kubeadm skew check compares minors alone ([kubeadm skew][ms-kubeadm]), so a worker on `spec.version`'s patch joins an API server of a newer patch of the same minor.
 
 ### The CA Secret
 
@@ -292,7 +303,7 @@ It never copies the key ([decision](decisions/the-ca-secret-holds-no-key.md)).
 
 What a release holds and how releases are numbered: [releases-through-clusterctl](decisions/releases-through-clusterctl.md); how to verify one: [Verifying a release](#verifying-a-release).
 The provider's watches need Lodia's CRDs, so install Lodia before the provider.
-A release of the provider is built and tested against [Lodia at 57375832e7fe](https://github.com/lodia-io/lodia/tree/57375832e7fe8b3a06374613797eb4c544fe7612), the `LODIA_COMMIT` of the [`Makefile`](../Makefile) and the pseudo-version of `go.lodia.io/lodia/api` in [`go.mod`](../go.mod) and in [`api/go.mod`](../api/go.mod).
+A release of the provider is built and tested against [Lodia at f91168b1248d](https://github.com/lodia-io/lodia/tree/f91168b1248dc18151a0c2d442fe2050593a0866), the `LODIA_COMMIT` of the [`Makefile`](../Makefile) and the pseudo-version of `go.lodia.io/lodia/api` in [`go.mod`](../go.mod) and in [`api/go.mod`](../api/go.mod).
 Lodia has no release yet, so that commit is the requirement of every release.
 
 ### The Cluster API version
@@ -476,9 +487,13 @@ To give the copy a new, empty control plane, remove its annotation `controlplane
   Recommend `remediation.triggerIf.unhealthyLessThanOrEqualTo` below Lodia's hold fraction, 0.6 ([MHC][mhc], [configuration][lo-readme-config]).
 - *Hibernation (Lodia's phase 3).*
   The API is down by design: the ClusterCache probe fails, the Cluster reports unavailable, and an MHC replaces every node.
-- *The management cluster reaches the tenant through the public endpoint*, the address in `<cluster>-kubeconfig`: gateway mode needs in-cluster DNS and a hairpin through the Gateway, and a NetworkPolicy on the API server has to admit CAPI's controllers from inside the management cluster ([README][lo-readme-netpol]).
+- *The management cluster reaches the tenant through the public endpoint*, the address in `<cluster>-kubeconfig`: gateway mode needs in-cluster DNS and a hairpin through the Gateway, and a NetworkPolicy on the API server has to admit CAPI's controllers from inside the management cluster ([today's][lo-readme-netpol], [the later default-deny][lo-readme-default-deny]).
 - *One credential for two uses.*
   CAPI's kubeconfig "MUST not be shared with other users or applications" ([kubeconfig][cp-kubeconfig]); Lodia's admin kubeconfig is also the platform's automation credential ([short-lived-kubeconfigs][lo-shortlived]), so revoking one revokes both.
+- *A change of the class reaches every tenant of it.*
+  The topology controller builds each `LodiaControlPlane` from the template at its pass over the Cluster ([from the template][topo-cp-template]).
+  A ClusterClass change enqueues every Cluster of the class at once ([class to Clusters][topo-class-clusters]), and an edit of a template in place waits for each Cluster's next pass, since the controller watches the ClusterClass and each Cluster's own control plane, not the templates ([watches][topo-watches], [the control plane's][topo-cp-watch]).
+  Lodia rolls an owner's edit of `spec` at once, outside the tenant's window, with the pending operator revision ([when][lo-upgrade-when]), and an owner's change takes no slot of the fleet ([the fleet][lo-upgrade-fleet]), so the tenants of the class whose spec the change touches roll together.
 - *Stricter skew for CAPI workers.*
   The kubeadm preflight creates workers only on the control plane's minor ([kubeadm skew][ms-kubeadm]), while Lodia lets nodes lag three minors; existing workers keep running.
 - *Contract window.*
@@ -495,6 +510,7 @@ To give the copy a new, empty control plane, remove its annotation `controlplane
 - No replica counts: no `spec.replicas`, scale subresource, `status.selector` or counters ([status-mirrors-lodia](decisions/status-mirrors-lodia.md)).
 - No `clusterctl move` of a hosted control plane ([hosted-control-planes-do-not-move](decisions/hosted-control-planes-do-not-move.md)).
 - No several instances of the provider from the released YAML ([the manager](#the-manager)).
+- No `lodia.io/maintain-requested-at` through the `LodiaControlPlane`: the provider writes no annotation on Lodia's `ControlPlane`, which is where Lodia reads the one that grants a tenant's pending maintenance now ([maintenance on request][lo-upgrade-request]).
 - Open questions:
   - InfraClusters: who marks a `KubevirtCluster` provisioned for Segla's KubeVirt pools: Segla's `cluster` service, or an opt-in in the provider, as k0smotron does ([k0smotron][k0-infra]); Kamaji does it by default ([Kamaji][kp-patchcluster], [its feature gate][kp-gate])?
   - A dedicated CAPI identity (*One credential for two uses*, above): a second standing kubeconfig from PKI, or accept the shared one?
@@ -520,11 +536,11 @@ To give the copy a new, empty control plane, remove its annotation `controlplane
 ## Contracts this provider implements
 
 - Cluster API's [control plane contract][contract] v1beta2 at v1.15.0-beta.0, which [the contract, as built](#the-contract-as-built) answers rule by rule, and its [provider contract for clusterctl](https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/docs/book/src/developer/providers/contracts/clusterctl.md), which [Installation](#installation) and [the releases decision](decisions/releases-through-clusterctl.md) follow.
-- Lodia's decisions, at Lodia's commit 5737583:
-  - [nodes-join-with-kubeadm](https://github.com/lodia-io/lodia/blob/57375832e7fe8b3a06374613797eb4c544fe7612/docs/decisions/nodes-join-with-kubeadm.md) — workers join with `kubeadm join`, and Lodia writes the bootstrap objects.
-  - [one-controlplane-per-cluster](https://github.com/lodia-io/lodia/blob/57375832e7fe8b3a06374613797eb4c544fe7612/docs/decisions/one-controlplane-per-cluster.md) — a `ControlPlane` is the whole tenant cluster, with one `Ready` to watch.
-  - [api-exposure](https://github.com/lodia-io/lodia/blob/57375832e7fe8b3a06374613797eb4c544fe7612/docs/decisions/api-exposure.md) — the endpoint mode owns the API server's port and address.
-  - [short-lived-kubeconfigs](https://github.com/lodia-io/lodia/blob/57375832e7fe8b3a06374613797eb4c544fe7612/docs/decisions/short-lived-kubeconfigs.md) — the admin kubeconfig that the provider copies is a standing credential.
+- Lodia's decisions, at Lodia's commit f91168b:
+  - [nodes-join-with-kubeadm](https://github.com/lodia-io/lodia/blob/f91168b1248dc18151a0c2d442fe2050593a0866/docs/decisions/nodes-join-with-kubeadm.md) — workers join with `kubeadm join`, and Lodia writes the bootstrap objects.
+  - [one-controlplane-per-cluster](https://github.com/lodia-io/lodia/blob/f91168b1248dc18151a0c2d442fe2050593a0866/docs/decisions/one-controlplane-per-cluster.md) — a `ControlPlane` is the whole tenant cluster, with one `Ready` to watch.
+  - [api-exposure](https://github.com/lodia-io/lodia/blob/f91168b1248dc18151a0c2d442fe2050593a0866/docs/decisions/api-exposure.md) — the endpoint mode owns the API server's port and address.
+  - [short-lived-kubeconfigs](https://github.com/lodia-io/lodia/blob/f91168b1248dc18151a0c2d442fe2050593a0866/docs/decisions/short-lived-kubeconfigs.md) — the admin kubeconfig that the provider copies is a standing credential.
 
 <!-- Cluster API v1.15.0-beta.0 -->
 [v1.15.0-beta.0]: https://github.com/kubernetes-sigs/cluster-api/tree/v1.15.0-beta.0
@@ -590,6 +606,20 @@ To give the copy a new, empty control plane, remove its annotation `controlplane
 [patch]: https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/util/patch/patch.go#L82-L83
 [rbac-agg]: https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/core/config/rbac/aggregated_role.yaml#L8
 [contract]: https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/docs/book/src/developer/providers/contracts/control-plane.md
+[ms-cp-version]: https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/core/reconcilers/machineset/machineset_preflight.go#L78-L91
+[topo-cp-version]: https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/exp/topology/desiredstate/desired_state.go#L557-L570
+[topo-cp-stable]: https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/exp/topology/desiredstate/desired_state.go#L586-L608
+[topo-cp-next]: https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/exp/topology/desiredstate/desired_state.go#L707-L742
+[topo-cp-template]: https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/exp/topology/desiredstate/desired_state.go#L327-L330
+[topo-md-version]: https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/exp/topology/desiredstate/desired_state.go#L1165-L1194
+[topo-plan-minors]: https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/exp/topology/desiredstate/upgrade_plan.go#L190-L193
+[topo-plan-one]: https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/exp/topology/desiredstate/upgrade_plan.go#L332-L356
+[topo-plan-versions]: https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/exp/topology/desiredstate/upgrade_plan.go#L358-L361
+[topo-watches]: https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/core/reconcilers/topology/cluster/cluster_controller.go#L124-L139
+[topo-cp-watch]: https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/core/reconcilers/topology/cluster/cluster_controller.go#L434-L443
+[topo-class-clusters]: https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/core/reconcilers/topology/cluster/cluster_controller.go#L492-L516
+[wh-ceiling-when]: https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/core/webhooks/admission/cluster.go#L447-L457
+[wh-ceiling]: https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/core/webhooks/admission/cluster.go#L482-L496
 
 <!-- kustomize v5.7.0 -->
 [ks-restrictor]: https://github.com/kubernetes-sigs/kustomize/blob/kustomize/v5.7.0/kustomize/commands/build/flagloadrestrictor.go#L16-L25
@@ -605,29 +635,36 @@ To give the copy a new, empty control plane, remove its annotation `controlplane
 [kp-ca]: https://github.com/clastix/cluster-api-control-plane-provider-kamaji/blob/v0.21.0/controllers/kamajicontrolplane_controller_resources.go#L61-L124
 [k0-infra]: https://github.com/k0sproject/k0smotron/blob/v2.3.0/internal/controller/controlplane/k0smotron_controlplane_controller.go#L888-L959
 
-<!-- Lodia at 5737583 -->
-[lo]: https://github.com/lodia-io/lodia/tree/57375832e7fe8b3a06374613797eb4c544fe7612
-[lo-name-cap]: https://github.com/lodia-io/lodia/blob/57375832e7fe8b3a06374613797eb4c544fe7612/api/v1alpha1/controlplane_types.go#L17
-[lo-ref-name]: https://github.com/lodia-io/lodia/blob/57375832e7fe8b3a06374613797eb4c544fe7612/docs/api/controlplane.md?plain=1#L8-L9
-[lo-ref-conditions]: https://github.com/lodia-io/lodia/blob/57375832e7fe8b3a06374613797eb4c544fe7612/docs/api/controlplane.md?plain=1#L123-L125
-[lo-ref-kubernetes]: https://github.com/lodia-io/lodia/blob/57375832e7fe8b3a06374613797eb4c544fe7612/docs/api/controlplane.md?plain=1#L77
-[lo-api-gomod]: https://github.com/lodia-io/lodia/blob/57375832e7fe8b3a06374613797eb4c544fe7612/api/go.mod#L1-L10
-[lo-version]: https://github.com/lodia-io/lodia/blob/57375832e7fe8b3a06374613797eb4c544fe7612/api/v1alpha1/controlplane_types.go#L56-L62
-[lo-network]: https://github.com/lodia-io/lodia/blob/57375832e7fe8b3a06374613797eb4c544fe7612/api/v1alpha1/controlplane_types.go#L286-L307
-[lo-names-ca]: https://github.com/lodia-io/lodia/blob/57375832e7fe8b3a06374613797eb4c544fe7612/api/v1alpha1/names.go#L23-L31
-[lo-names-kubeconfig]: https://github.com/lodia-io/lodia/blob/57375832e7fe8b3a06374613797eb4c544fe7612/api/v1alpha1/names.go#L59-L71
-[lo-target]: https://github.com/lodia-io/lodia/blob/57375832e7fe8b3a06374613797eb4c544fe7612/internal/controller/lifecycle/lifecycle.go#L138-L152
-[lo-labels]: https://github.com/lodia-io/lodia/blob/57375832e7fe8b3a06374613797eb4c544fe7612/api/v1alpha1/labels.go#L17-L20
-
-<!-- Lodia at 5f212ed -->
-[lo-readme-netpol]: https://github.com/lodia-io/lodia/blob/5f212ed9acd71fe2a944e5fe63cad73e3d17812e/docs/README.md?plain=1#L510-L518
-[lo-readme-lifecycle]: https://github.com/lodia-io/lodia/blob/5f212ed9acd71fe2a944e5fe63cad73e3d17812e/docs/README.md?plain=1#L634-L646
-[lo-readme-health]: https://github.com/lodia-io/lodia/blob/5f212ed9acd71fe2a944e5fe63cad73e3d17812e/docs/README.md?plain=1#L761-L773
-[lo-readme-config]: https://github.com/lodia-io/lodia/blob/5f212ed9acd71fe2a944e5fe63cad73e3d17812e/docs/README.md?plain=1#L885-L886
-[lo-kubeadm]: https://github.com/lodia-io/lodia/blob/5f212ed9acd71fe2a944e5fe63cad73e3d17812e/docs/decisions/nodes-join-with-kubeadm.md?plain=1#L34-L35
-[lo-shortlived]: https://github.com/lodia-io/lodia/blob/5f212ed9acd71fe2a944e5fe63cad73e3d17812e/docs/decisions/short-lived-kubeconfigs.md?plain=1#L22-L29
-[lo-exposure]: https://github.com/lodia-io/lodia/blob/5f212ed9acd71fe2a944e5fe63cad73e3d17812e/docs/decisions/api-exposure.md?plain=1#L12-L14
-[lo-roadmap-cutover]: https://github.com/lodia-io/lodia/blob/5f212ed9acd71fe2a944e5fe63cad73e3d17812e/docs/roadmap.md?plain=1#L16-L24
-[lo-admin]: https://github.com/lodia-io/lodia/blob/5f212ed9acd71fe2a944e5fe63cad73e3d17812e/internal/controller/pki/secrets.go#L322-L323
-[lo-bootstrap-rbac]: https://github.com/lodia-io/lodia/blob/5f212ed9acd71fe2a944e5fe63cad73e3d17812e/internal/controller/tenant/manifests/bootstrap.yaml#L36-L47
-[lo-ref-nodeport]: https://github.com/lodia-io/lodia/blob/5f212ed9acd71fe2a944e5fe63cad73e3d17812e/docs/api/controlplane.md?plain=1#L23
+<!-- Lodia at f91168b -->
+[lo]: https://github.com/lodia-io/lodia/tree/f91168b1248dc18151a0c2d442fe2050593a0866
+[lo-name-cap]: https://github.com/lodia-io/lodia/blob/f91168b1248dc18151a0c2d442fe2050593a0866/api/v1alpha1/controlplane_types.go#L18
+[lo-ref-name]: https://github.com/lodia-io/lodia/blob/f91168b1248dc18151a0c2d442fe2050593a0866/docs/api/controlplane.md?plain=1#L8-L9
+[lo-ref-conditions]: https://github.com/lodia-io/lodia/blob/f91168b1248dc18151a0c2d442fe2050593a0866/docs/api/controlplane.md?plain=1#L126-L128
+[lo-ref-kubernetes]: https://github.com/lodia-io/lodia/blob/f91168b1248dc18151a0c2d442fe2050593a0866/docs/api/controlplane.md?plain=1#L78
+[lo-api-gomod]: https://github.com/lodia-io/lodia/blob/f91168b1248dc18151a0c2d442fe2050593a0866/api/go.mod#L1-L10
+[lo-version]: https://github.com/lodia-io/lodia/blob/f91168b1248dc18151a0c2d442fe2050593a0866/api/v1alpha1/controlplane_types.go#L57-L63
+[lo-network]: https://github.com/lodia-io/lodia/blob/f91168b1248dc18151a0c2d442fe2050593a0866/api/v1alpha1/controlplane_types.go#L287-L308
+[lo-network-immutable]: https://github.com/lodia-io/lodia/blob/f91168b1248dc18151a0c2d442fe2050593a0866/api/v1alpha1/controlplane_types.go#L87-L90
+[lo-names-ca]: https://github.com/lodia-io/lodia/blob/f91168b1248dc18151a0c2d442fe2050593a0866/api/v1alpha1/names.go#L23-L31
+[lo-names-kubeconfig]: https://github.com/lodia-io/lodia/blob/f91168b1248dc18151a0c2d442fe2050593a0866/api/v1alpha1/names.go#L59-L71
+[lo-upgrade-target]: https://github.com/lodia-io/lodia/blob/f91168b1248dc18151a0c2d442fe2050593a0866/docs/decisions/upgrades-and-maintenance-windows.md?plain=1#L10-L17
+[lo-upgrade-steps]: https://github.com/lodia-io/lodia/blob/f91168b1248dc18151a0c2d442fe2050593a0866/docs/decisions/upgrades-and-maintenance-windows.md?plain=1#L19-L32
+[lo-upgrade-progressing]: https://github.com/lodia-io/lodia/blob/f91168b1248dc18151a0c2d442fe2050593a0866/docs/decisions/upgrades-and-maintenance-windows.md?plain=1#L117
+[lo-upgrade-patch]: https://github.com/lodia-io/lodia/blob/f91168b1248dc18151a0c2d442fe2050593a0866/docs/decisions/upgrades-and-maintenance-windows.md?plain=1#L37-L41
+[lo-upgrade-when]: https://github.com/lodia-io/lodia/blob/f91168b1248dc18151a0c2d442fe2050593a0866/docs/decisions/upgrades-and-maintenance-windows.md?plain=1#L87-L96
+[lo-upgrade-fleet]: https://github.com/lodia-io/lodia/blob/f91168b1248dc18151a0c2d442fe2050593a0866/docs/decisions/upgrades-and-maintenance-windows.md?plain=1#L106
+[lo-upgrade-request]: https://github.com/lodia-io/lodia/blob/f91168b1248dc18151a0c2d442fe2050593a0866/docs/decisions/upgrades-and-maintenance-windows.md?plain=1#L113-L115
+[lo-ref-patch]: https://github.com/lodia-io/lodia/blob/f91168b1248dc18151a0c2d442fe2050593a0866/docs/api/controlplane.md?plain=1#L55
+[lo-labels]: https://github.com/lodia-io/lodia/blob/f91168b1248dc18151a0c2d442fe2050593a0866/api/v1alpha1/labels.go#L17-L20
+[lo-readme-netpol]: https://github.com/lodia-io/lodia/blob/f91168b1248dc18151a0c2d442fe2050593a0866/docs/README.md?plain=1#L198
+[lo-readme-default-deny]: https://github.com/lodia-io/lodia/blob/f91168b1248dc18151a0c2d442fe2050593a0866/docs/README.md?plain=1#L317
+[lo-ref-ready]: https://github.com/lodia-io/lodia/blob/f91168b1248dc18151a0c2d442fe2050593a0866/docs/api/controlplane.md?plain=1#L132
+[lo-readme-health]: https://github.com/lodia-io/lodia/blob/f91168b1248dc18151a0c2d442fe2050593a0866/docs/README.md?plain=1#L460
+[lo-readme-config]: https://github.com/lodia-io/lodia/blob/f91168b1248dc18151a0c2d442fe2050593a0866/docs/README.md?plain=1#L540
+[lo-kubeadm]: https://github.com/lodia-io/lodia/blob/f91168b1248dc18151a0c2d442fe2050593a0866/docs/decisions/nodes-join-with-kubeadm.md?plain=1#L10
+[lo-shortlived]: https://github.com/lodia-io/lodia/blob/f91168b1248dc18151a0c2d442fe2050593a0866/docs/decisions/short-lived-kubeconfigs.md?plain=1#L21-L23
+[lo-exposure]: https://github.com/lodia-io/lodia/blob/f91168b1248dc18151a0c2d442fe2050593a0866/docs/decisions/api-exposure.md?plain=1#L13-L15
+[lo-roadmap-cutover]: https://github.com/lodia-io/lodia/blob/f91168b1248dc18151a0c2d442fe2050593a0866/docs/roadmap.md?plain=1#L15-L18
+[lo-admin]: https://github.com/lodia-io/lodia/blob/f91168b1248dc18151a0c2d442fe2050593a0866/internal/controller/pki/secrets.go#L426-L427
+[lo-bootstrap-rbac]: https://github.com/lodia-io/lodia/blob/f91168b1248dc18151a0c2d442fe2050593a0866/internal/controller/tenant/manifests/bootstrap.yaml#L36-L47
+[lo-ref-nodeport]: https://github.com/lodia-io/lodia/blob/f91168b1248dc18151a0c2d442fe2050593a0866/docs/api/controlplane.md?plain=1#L30

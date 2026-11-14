@@ -192,16 +192,25 @@ func TestTheVersionIsLodiasAndFollowsItPastTheFirstCopy(t *testing.T) {
 			t.Errorf("version %q, versions %+v, want %s", lcp.Status.Version, lcp.Status.Versions, version)
 		}
 	}
+	runs := func(version string) {
+		t.Helper()
+		get(t, cp)
+		cp.Status.Kubernetes.Version = version
+		if err := k8s.Status().Update(t.Context(), cp); err != nil {
+			t.Fatal(err)
+		}
+	}
+	reported("v1.35.8")
+
+	runs("v1.35.9")
+	reported("v1.35.9")
+	runs("v1.35.8")
 	reported("v1.35.8")
 
 	updateSpec(t, lcp, func(l *v1alpha1.LodiaControlPlane) { l.Spec.Version = "v1.35.9" })
 	reported("v1.35.8")
 
-	get(t, cp)
-	cp.Status.Kubernetes.Version = "v1.35.9"
-	if err := k8s.Status().Update(t.Context(), cp); err != nil {
-		t.Fatal(err)
-	}
+	runs("v1.35.9")
 	reported("v1.35.9")
 }
 
