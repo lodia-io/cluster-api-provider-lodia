@@ -6,12 +6,18 @@ LODIA_COMMIT = 57375832e7fe8b3a06374613797eb4c544fe7612
 REMOVE_WORKERS = docker ps --all --quiet --filter label=io.x-k8s.kind.cluster=$(E2E_CLUSTER)-w | xargs -r docker rm --force --volumes
 KUSTOMIZE = sigs.k8s.io/kustomize/kustomize/v5@v5.7.0
 KO = github.com/google/ko@v0.19.1
+CRANE = go run github.com/google/go-containerregistry/cmd/crane@v0.22.1
 IMAGE_REPOSITORY ?= ghcr.io/lodia-io/cluster-api-provider-lodia
 PLATFORMS ?= linux/amd64,linux/arm64
 KO_PUSH ?= true
 IMAGE_TAG ?= latest
 COMMIT ?= HEAD
 RELEASE_DIR ?= out
+GITHUB_REPO = lodia-io/cluster-api-provider-lodia
+RELEASE_IMAGE = go run ./hack/releasecheck image --repository=$(IMAGE_REPOSITORY) --tag=$(IMAGE_TAG) $(RELEASE_DIR)/control-plane-components.yaml
+RELEASE_WORKFLOW = $(GITHUB_REPO)/.github/workflows/release.yml
+VERIFY_IDENTITY = --certificate-identity https://github.com/$(RELEASE_WORKFLOW)@refs/tags/$(IMAGE_TAG) --certificate-oidc-issuer https://token.actions.githubusercontent.com
+VERIFY_ATTESTATION = -R $(GITHUB_REPO) --signer-workflow $(RELEASE_WORKFLOW) --source-ref refs/tags/$(IMAGE_TAG)
 GENERATED = api/v1alpha1/zz_generated.deepcopy.go api/crds/*.yaml config/crd/bases/*.yaml config/rbac/role.yaml
 
 .PHONY: generate
@@ -46,11 +52,35 @@ release-components: ## write $(RELEASE_DIR)/control-plane-components.yaml: confi
 
 .PHONY: release-image
 release-image: ## print the image that $(RELEASE_DIR)/control-plane-components.yaml names, after requiring it to be the only one, $(IMAGE_REPOSITORY):$(IMAGE_TAG) with a digest
-	@go run ./hack/releasecheck image --repository=$(IMAGE_REPOSITORY) --tag=$(IMAGE_TAG) $(RELEASE_DIR)/control-plane-components.yaml
+	@$(RELEASE_IMAGE)
 
 .PHONY: release-login
 release-login: ## log in to the registry of $(IMAGE_REPOSITORY) as $$GITHUB_ACTOR with $$GITHUB_TOKEN, which ko pushes with
 	@printf '%s' "$$GITHUB_TOKEN" | go run $(KO) login $(firstword $(subst /, ,$(IMAGE_REPOSITORY))) --username "$$GITHUB_ACTOR" --password-stdin
+
+.PHONY: release-sign
+release-sign: ## sign keyless, with the workflow's OIDC token, the image that release-image prints by its digest, the index and each platform's image, then $(RELEASE_DIR)/control-plane-components.yaml and metadata.yaml, each with a bundle in $(RELEASE_DIR)
+	image="$$($(RELEASE_IMAGE))" && cosign sign --yes --recursive $(IMAGE_REPOSITORY)@$${image##*@}
+	cosign sign-blob --yes --bundle $(RELEASE_DIR)/control-plane-components.yaml.sigstore.json $(RELEASE_DIR)/control-plane-components.yaml
+	cosign sign-blob --yes --bundle $(RELEASE_DIR)/metadata.yaml.sigstore.json metadata.yaml
+
+.PHONY: release-verify-signatures
+release-verify-signatures: ## run what a user runs for the tag IMAGE_TAG, with the signer pinned to release.yml at refs/tags/$(IMAGE_TAG): cosign verify of the image's index by its digest and of each image that the index lists, then cosign verify-blob of $(RELEASE_DIR)/control-plane-components.yaml and metadata.yaml
+	image="$$($(RELEASE_IMAGE))" && \
+	ref=$(IMAGE_REPOSITORY)@$${image##*@} && \
+	cosign verify $(VERIFY_IDENTITY) $$ref && \
+	manifest="$$($(CRANE) manifest $$ref)" && \
+	digests="$$(printf '%s\n' "$$manifest" | jq -r '.manifests[].digest')" && \
+	[ -n "$$digests" ] && \
+	for digest in $$digests; do cosign verify $(VERIFY_IDENTITY) $(IMAGE_REPOSITORY)@$$digest || exit 1; done
+	cosign verify-blob --bundle $(RELEASE_DIR)/control-plane-components.yaml.sigstore.json $(VERIFY_IDENTITY) $(RELEASE_DIR)/control-plane-components.yaml
+	cosign verify-blob --bundle $(RELEASE_DIR)/metadata.yaml.sigstore.json $(VERIFY_IDENTITY) metadata.yaml
+
+.PHONY: release-verify-attestations
+release-verify-attestations: ## run what a user runs for the tag IMAGE_TAG, with the repository, release.yml and refs/tags/$(IMAGE_TAG) pinned: gh attestation verify of the image by its digest and of $(RELEASE_DIR)/control-plane-components.yaml and metadata.yaml; gh reads $$GH_TOKEN
+	image="$$($(RELEASE_IMAGE))" && gh attestation verify oci://$(IMAGE_REPOSITORY)@$${image##*@} $(VERIFY_ATTESTATION)
+	gh attestation verify $(RELEASE_DIR)/control-plane-components.yaml $(VERIFY_ATTESTATION)
+	gh attestation verify metadata.yaml $(VERIFY_ATTESTATION)
 
 .PHONY: release-check
 release-check: ## refuse TAG before it is pushed: a semver tag with a series in metadata.yaml at COMMIT, a series for every tag there is, COMMIT on origin/main with every run of ci.yml green, the local tags TAG and api/TAG at COMMIT; reads GitHub with $$GITHUB_TOKEN, or with gh's
