@@ -139,7 +139,7 @@ func TestTheReleaseWorkflowPullsTheImageThatTheMakefileChecks(t *testing.T) {
 		{"fetch-depth": float64(0), "persist-credentials": false},
 		{"go-version-file": "go.mod"},
 		{"cosign-release": "v3.1.4"},
-		{"subject-name": "${{ steps.image.outputs.name }}", "subject-digest": "${{ steps.image.outputs.digest }}", "push-to-registry": true},
+		{"subject-name": "${{ steps.image.outputs.name }}", "subject-digest": "${{ steps.image.outputs.digest }}", "push-to-registry": true, "create-storage-record": false},
 		{"subject-path": "out/control-plane-components.yaml\nmetadata.yaml\n"},
 	}, withs); diff != "" {
 		t.Errorf("the inputs of the unnamed steps, in order (-want +got):\n%s", diff)
@@ -297,7 +297,7 @@ func TestTheMakefileSignsAndVerifiesTheImageAndTheFilesOfTheRelease(t *testing.T
 		tag    = "v0.2.0-rc.1"
 		signer = "--certificate-identity https://github.com/lodia-io/cluster-api-provider-lodia/.github/workflows/release.yml@refs/tags/" + tag + " --certificate-oidc-issuer https://token.actions.githubusercontent.com"
 		image  = imageRepository + "@" + digest
-		repo   = "-R lodia-io/cluster-api-provider-lodia"
+		repo   = "-R lodia-io/cluster-api-provider-lodia --signer-workflow lodia-io/cluster-api-provider-lodia/.github/workflows/release.yml"
 	)
 	dir := t.TempDir()
 	bin := t.TempDir()

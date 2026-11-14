@@ -14,7 +14,9 @@ COMMIT ?= HEAD
 RELEASE_DIR ?= out
 GITHUB_REPO = lodia-io/cluster-api-provider-lodia
 RELEASE_IMAGE = go run ./hack/releasecheck image --repository=$(IMAGE_REPOSITORY) --tag=$(IMAGE_TAG) $(RELEASE_DIR)/control-plane-components.yaml
-VERIFY_IDENTITY = --certificate-identity https://github.com/$(GITHUB_REPO)/.github/workflows/release.yml@refs/tags/$(IMAGE_TAG) --certificate-oidc-issuer https://token.actions.githubusercontent.com
+RELEASE_WORKFLOW = $(GITHUB_REPO)/.github/workflows/release.yml
+VERIFY_IDENTITY = --certificate-identity https://github.com/$(RELEASE_WORKFLOW)@refs/tags/$(IMAGE_TAG) --certificate-oidc-issuer https://token.actions.githubusercontent.com
+VERIFY_ATTESTATION = -R $(GITHUB_REPO) --signer-workflow $(RELEASE_WORKFLOW)
 GENERATED = api/v1alpha1/zz_generated.deepcopy.go api/crds/*.yaml config/crd/bases/*.yaml config/rbac/role.yaml
 
 .PHONY: generate
@@ -63,11 +65,11 @@ release-sign: ## sign keyless, with the workflow's OIDC token, the image that re
 
 .PHONY: release-verify
 release-verify: ## run what a user runs for the tag IMAGE_TAG: the signature and the attestation of the image by its digest, then of $(RELEASE_DIR)/control-plane-components.yaml and metadata.yaml; the signer is release.yml at refs/tags/$(IMAGE_TAG), and gh reads $$GH_TOKEN
-	image="$$($(RELEASE_IMAGE))" && cosign verify $(VERIFY_IDENTITY) $(IMAGE_REPOSITORY)@$${image##*@} && gh attestation verify oci://$(IMAGE_REPOSITORY)@$${image##*@} -R $(GITHUB_REPO)
+	image="$$($(RELEASE_IMAGE))" && cosign verify $(VERIFY_IDENTITY) $(IMAGE_REPOSITORY)@$${image##*@} && gh attestation verify oci://$(IMAGE_REPOSITORY)@$${image##*@} $(VERIFY_ATTESTATION)
 	cosign verify-blob --bundle $(RELEASE_DIR)/control-plane-components.yaml.sigstore.json $(VERIFY_IDENTITY) $(RELEASE_DIR)/control-plane-components.yaml
 	cosign verify-blob --bundle $(RELEASE_DIR)/metadata.yaml.sigstore.json $(VERIFY_IDENTITY) metadata.yaml
-	gh attestation verify $(RELEASE_DIR)/control-plane-components.yaml -R $(GITHUB_REPO)
-	gh attestation verify metadata.yaml -R $(GITHUB_REPO)
+	gh attestation verify $(RELEASE_DIR)/control-plane-components.yaml $(VERIFY_ATTESTATION)
+	gh attestation verify metadata.yaml $(VERIFY_ATTESTATION)
 
 .PHONY: release-check
 release-check: ## refuse TAG before it is pushed: a semver tag with a series in metadata.yaml at COMMIT, a series for every tag there is, COMMIT on origin/main with every run of ci.yml green, the local tags TAG and api/TAG at COMMIT; reads GitHub with $$GITHUB_TOKEN, or with gh's

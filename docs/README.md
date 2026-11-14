@@ -422,10 +422,15 @@ For any release tag, `--certificate-identity-regexp` takes the place of `--certi
 The attestations verify with the GitHub CLI ([verifying](https://github.com/github/docs/blob/6d56af0c8b62bde11bb3d9df46244fab5f0a00f9/content/actions/how-tos/secure-your-work/use-artifact-attestations/use-artifact-attestations.md?plain=1#L161-L176)):
 
 ```sh
-gh attestation verify oci://ghcr.io/lodia-io/cluster-api-provider-lodia@<digest> -R lodia-io/cluster-api-provider-lodia
-gh attestation verify control-plane-components.yaml -R lodia-io/cluster-api-provider-lodia
-gh attestation verify metadata.yaml -R lodia-io/cluster-api-provider-lodia
+gh attestation verify oci://ghcr.io/lodia-io/cluster-api-provider-lodia@<digest> \
+  -R lodia-io/cluster-api-provider-lodia --signer-workflow lodia-io/cluster-api-provider-lodia/.github/workflows/release.yml
+gh attestation verify control-plane-components.yaml \
+  -R lodia-io/cluster-api-provider-lodia --signer-workflow lodia-io/cluster-api-provider-lodia/.github/workflows/release.yml
+gh attestation verify metadata.yaml \
+  -R lodia-io/cluster-api-provider-lodia --signer-workflow lodia-io/cluster-api-provider-lodia/.github/workflows/release.yml
 ```
+
+`--signer-workflow` pins the workflow file that signed the attestation, as `--certificate-identity` pins the identity for cosign; given without a ref, as here, it accepts the workflow at any ref ([the flag](https://github.com/cli/cli/blob/v2.104.0/pkg/cmd/attestation/verify/verify.go#L263), [what it matches](https://github.com/cli/cli/blob/v2.104.0/pkg/cmd/attestation/verify/policy.go#L46-L52)).
 
 `release.yml` runs these commands, with the identity of its own tag, before it publishes the release (`make release-verify`).
 
