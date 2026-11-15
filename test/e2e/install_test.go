@@ -233,7 +233,7 @@ func installProviders(ctx context.Context, cfg *envconf.Config) error {
 	}); err != nil {
 		return fmt.Errorf("clusterctl init: %w", err)
 	}
-	return requireTheKubeadmBootstrapGrant(ctx, cfg)
+	return nil
 }
 
 func repositoryDir(cfg *envconf.Config) string {

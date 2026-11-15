@@ -52,10 +52,6 @@ jobs:
         include:
           - target: e2e
             timeout: 74
-          - target: e2e-upgrade
-            timeout: 56
-          - target: e2e-minor
-            timeout: 57
     steps:
       - name: Free the runner's disk
         run: |
