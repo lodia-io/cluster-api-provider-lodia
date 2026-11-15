@@ -1,0 +1,48 @@
+apiVersion: infrastructure.cluster.x-k8s.io/v1beta2
+kind: DevMachineTemplate
+metadata:
+  name: ${CLUSTER_NAME}-md-1
+  namespace: capi-join
+spec:
+  template:
+    spec:
+      backend:
+        docker: {}
+---
+apiVersion: bootstrap.cluster.x-k8s.io/v1beta2
+kind: KubeadmConfigTemplate
+metadata:
+  name: ${CLUSTER_NAME}-md-1
+  namespace: capi-join
+spec:
+  template:
+    spec:
+      files:
+      - path: /etc/capl-e2e/control-plane-version
+        permissions: "0644"
+        contentFormat: Template
+        content: "{{ .controlPlane.version }}"
+---
+apiVersion: cluster.x-k8s.io/v1beta2
+kind: MachineDeployment
+metadata:
+  name: ${CLUSTER_NAME}-md-1
+  namespace: capi-join
+spec:
+  clusterName: ${CLUSTER_NAME}
+  replicas: 1
+  selector:
+    matchLabels:
+  template:
+    spec:
+      clusterName: ${CLUSTER_NAME}
+      version: ${KUBERNETES_VERSION}
+      bootstrap:
+        configRef:
+          apiGroup: bootstrap.cluster.x-k8s.io
+          kind: KubeadmConfigTemplate
+          name: ${CLUSTER_NAME}-md-1
+      infrastructureRef:
+        apiGroup: infrastructure.cluster.x-k8s.io
+        kind: DevMachineTemplate
+        name: ${CLUSTER_NAME}-md-1

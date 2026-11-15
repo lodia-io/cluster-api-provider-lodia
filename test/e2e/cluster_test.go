@@ -55,6 +55,13 @@ func clusterContainers(ctx context.Context, cluster string) ([]string, error) {
 	return strings.Fields(out), err
 }
 
+func requireContainers(containers []string, workers int) error {
+	if len(containers) != workers {
+		return fmt.Errorf("%d containers are labelled for the Cluster, want the %d of its workers: %v", len(containers), workers, containers)
+	}
+	return nil
+}
+
 func kindCluster(kubeconfig string) (string, error) {
 	cfg, err := clientcmd.LoadFromFile(kubeconfig)
 	if err != nil {
@@ -121,6 +128,32 @@ func TestADockerCallThatHangsEndsWithItsCallersContext(t *testing.T) {
 			defer cancel()
 			if err := returnsWithin(t, 3*time.Second, "the call", func() error { return call(ctx) }); err == nil {
 				t.Fatal("the call says nothing about a docker that hung")
+			}
+		})
+	}
+}
+
+func TestTheContainersOfTheClusterAreItsWorkersAlone(t *testing.T) {
+	cases := []struct {
+		name       string
+		containers []string
+		workers    int
+		want       string
+	}{
+		{"the container of one worker", []string{"a"}, 1, ""},
+		{"the containers of two workers", []string{"a", "b"}, 2, ""},
+		{"a second container where one worker is expected", []string{"a", "b"}, 1, "2 containers are labelled for the Cluster, want the 1 of its workers"},
+		{"no container", nil, 1, "0 containers are labelled for the Cluster, want the 1 of its workers"},
+		{"one container where two workers are expected", []string{"a"}, 2, "1 containers are labelled for the Cluster, want the 2 of its workers"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			err := requireContainers(c.containers, c.workers)
+			switch {
+			case c.want == "" && err != nil:
+				t.Fatalf("want accepted, got %v", err)
+			case c.want != "" && (err == nil || !strings.Contains(err.Error(), c.want)):
+				t.Fatalf("want an error with %q, got %v", c.want, err)
 			}
 		})
 	}

@@ -41,7 +41,7 @@ metadata:
   name: ${CLUSTER_NAME}
   namespace: capi-join
 spec:
-  version: v1.37.0
+  version: ${KUBERNETES_VERSION}
   datastore:
     dedicated:
       className: e2e-capi

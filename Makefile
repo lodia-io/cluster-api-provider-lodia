@@ -1,6 +1,7 @@
 ENVTEST_K8S_VERSION ?= 1.35.0
 E2E_CLUSTER ?= capl-e2e
 E2E_UPGRADE_CLUSTER ?= capl-e2e-upgrade
+E2E_MINOR_CLUSTER ?= capl-e2e-minor
 E2E_DIR = $(CURDIR)/work/e2e/$(E2E_CLUSTER)
 LODIA_DIR = $(CURDIR)/work/lodia
 PIN_DIR = $(CURDIR)/work/pin
@@ -34,11 +35,12 @@ lint:
 	golangci-lint run ./...
 	golangci-lint run --build-tags e2e ./test/e2e/...
 	golangci-lint run --build-tags e2e,upgrade ./test/e2e/...
+	golangci-lint run --build-tags e2e,minor ./test/e2e/...
 	cd api && golangci-lint run ./...
 
 .PHONY: test
 test: ## unit and envtest tests; envtest runs a real API server and etcd
-	KUBEBUILDER_ASSETS="$$(go tool setup-envtest use $(ENVTEST_K8S_VERSION) -p path)" go test ./...
+	assets="$$(go tool setup-envtest use $(ENVTEST_K8S_VERSION) -p path)" && KUBEBUILDER_ASSETS="$$assets" go test ./...
 	cd api && go test ./...
 
 .PHONY: components
@@ -143,5 +145,16 @@ e2e-upgrade: e2e-cluster ## the upgrade e2e: the previous release that test/pin 
 	go tool kind create cluster --name $(E2E_CLUSTER) --kubeconfig $(E2E_DIR)/kubeconfig --config test/e2e/testdata/kind.yaml
 	rm -rf $(E2E_DIR)/artifacts
 	$(REMOVE_WORKERS) && E2E_KUBECONFIG=$(E2E_DIR)/kubeconfig go test -v -tags e2e,upgrade -count=1 -timeout 46m -run '^TestTheProviderUpgradesFromThePreviousRelease$$' ./test/e2e/...; status=$$?; \
+	$(REMOVE_WORKERS) || status=1; \
+	go tool kind delete cluster --name $(E2E_CLUSTER) --kubeconfig $(E2E_DIR)/kubeconfig; exit $$status
+
+.PHONY: e2e-minor
+e2e-minor: E2E_CLUSTER = $(E2E_MINOR_CLUSTER)
+e2e-minor: e2e-cluster ## the minor step e2e: a Cluster at v1.36.4 with a worker that joined, its control plane stepped to v1.37.0 by Lodia while a second MachineDeployment at v1.37.0 waits for it, on a kind cluster of its own that e2e-cluster accepts, that it deletes afterwards with the containers of the Cluster the suite creates
+	$(MAKE) --no-print-directory e2e-lodia
+	mkdir -p $(E2E_DIR)
+	go tool kind create cluster --name $(E2E_CLUSTER) --kubeconfig $(E2E_DIR)/kubeconfig --config test/e2e/testdata/kind.yaml
+	rm -rf $(E2E_DIR)/artifacts
+	$(REMOVE_WORKERS) && E2E_KUBECONFIG=$(E2E_DIR)/kubeconfig go test -v -tags e2e,minor -count=1 -timeout 47m -run '^TestAMinorStepHoldsNewWorkersUntilLodiaRunsIt$$' ./test/e2e/...; status=$$?; \
 	$(REMOVE_WORKERS) || status=1; \
 	go tool kind delete cluster --name $(E2E_CLUSTER) --kubeconfig $(E2E_DIR)/kubeconfig; exit $$status

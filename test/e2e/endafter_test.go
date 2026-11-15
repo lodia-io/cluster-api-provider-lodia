@@ -216,14 +216,19 @@ func problemsWithTheCutShort(fset *token.FileSet, file *ast.File) ([]string, int
 func problemsWithTheCutShortOfTheFiles(fset *token.FileSet, files []*ast.File) []string {
 	var problems []string
 	checked := make(map[string]int)
+	wanted := []string{"suite_test.go", "steps_test.go", "join_test.go", "upgrade_test.go"}
 	for _, file := range files {
 		found, n := problemsWithTheCutShort(fset, file)
 		problems = append(problems, found...)
-		checked[fset.Position(file.FileStart).Filename] = n
+		name := fset.Position(file.FileStart).Filename
+		checked[name] = n
+		if len(testsOf(file)) > 0 && !slices.Contains(wanted, name) {
+			wanted = append(wanted, name)
+		}
 	}
-	for _, name := range []string{"suite_test.go", "steps_test.go", "join_test.go", "upgrade_test.go"} {
+	for _, name := range wanted {
 		if checked[name] == 0 {
-			problems = append(problems, fmt.Sprintf("%s holds no call on a context that endAfter made, and the install, the status patch before step 1, the move and the upgrade are such calls", name))
+			problems = append(problems, fmt.Sprintf("%s holds no call on a context that endAfter made, and the install, the status patch before step 1, the move and the upgrade are such calls, and so is one in every file that declares a test", name))
 		}
 	}
 	return problems
@@ -559,8 +564,10 @@ func TestTheCheckOfCutShortCountsTheCallsItHolds(t *testing.T) {
 
 func TestTheCheckOfCutShortWantsACallOnAContextThatEndAfterMadeInEachFileItNames(t *testing.T) {
 	const (
-		held = "package p\nfunc TestX() {\nf := func(ctx context.Context, t *testing.T) {\nbounded, cancel := endAfter(ctx, bounds.Apply)\nif err := wait(bounded); err != nil {\nt.Fatal(cutShort(bounded, err))\n}\n}\n}\n"
-		none = "package p\nfunc TestX() {}\n"
+		held     = "package p\nfunc TestX() {\nf := func(ctx context.Context, t *testing.T) {\nbounded, cancel := endAfter(ctx, bounds.Apply)\nif err := wait(bounded); err != nil {\nt.Fatal(cutShort(bounded, err))\n}\n}\n}\n"
+		none     = "package p\nfunc TestX() {}\n"
+		helper   = "package p\nfunc helper() {}\n"
+		mainOnly = "package p\nfunc TestMain(m *testing.M) {}\n"
 	)
 	cases := []struct {
 		name  string
@@ -573,7 +580,10 @@ func TestTheCheckOfCutShortWantsACallOnAContextThatEndAfterMadeInEachFileItNames
 		{"none in the join test", map[string]string{"suite_test.go": held, "steps_test.go": held, "join_test.go": none, "upgrade_test.go": held}, []string{"join_test.go holds no call"}},
 		{"none in the upgrade test", map[string]string{"suite_test.go": held, "steps_test.go": held, "join_test.go": held, "upgrade_test.go": none}, []string{"upgrade_test.go holds no call"}},
 		{"a file that is not read", map[string]string{"suite_test.go": held, "steps_test.go": held, "upgrade_test.go": held}, []string{"join_test.go holds no call"}},
-		{"none in a file that the check does not name", map[string]string{"suite_test.go": held, "steps_test.go": held, "join_test.go": held, "upgrade_test.go": held, "install_test.go": none}, nil},
+		{"none in a file that declares no test and the check does not name", map[string]string{"suite_test.go": held, "steps_test.go": held, "join_test.go": held, "upgrade_test.go": held, "install_test.go": helper}, nil},
+		{"none in a file that declares TestMain alone and the check does not name", map[string]string{"suite_test.go": held, "steps_test.go": held, "join_test.go": held, "upgrade_test.go": held, "other_test.go": mainOnly}, nil},
+		{"a call in a file that declares a test and the check does not name", map[string]string{"suite_test.go": held, "steps_test.go": held, "join_test.go": held, "upgrade_test.go": held, "minor_test.go": held}, nil},
+		{"none in a file that declares a test and the check does not name", map[string]string{"suite_test.go": held, "steps_test.go": held, "join_test.go": held, "upgrade_test.go": held, "minor_test.go": none}, []string{"minor_test.go holds no call"}},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
