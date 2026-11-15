@@ -1025,9 +1025,10 @@ func fieldsOf(set any) []string {
 	return names
 }
 
-func requireEveryWaitBounded(t *testing.T, name, owner string, set any, outside []string) {
+func requireEveryWaitBounded(t *testing.T, name string) {
 	t.Helper()
-	for field, bound := range reflect.ValueOf(set).Fields() {
+	waited := waitedFiles[name]
+	for field, bound := range reflect.ValueOf(waited.set).Fields() {
 		if bound.Int() <= 0 {
 			t.Errorf("the bound %s is %s", field.Name, bound)
 		}
@@ -1037,21 +1038,21 @@ func requireEveryWaitBounded(t *testing.T, name, owner string, set any, outside 
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, problem := range problemsWithTheWaits(fset, file, owner, fieldsOf(set), outside) {
+	for _, problem := range problemsWithTheWaits(fset, file, waited.owner, fieldsOf(waited.set), waited.outside) {
 		t.Error(problem)
 	}
 }
 
 func TestEveryWaitOfTheJoinTestIsBoundedByAFieldOfTheBoundsThatNoOtherWaitTakes(t *testing.T) {
-	requireEveryWaitBounded(t, "join_test.go", "bounds", bounds, boundsOutsideTheJoinTest)
+	requireEveryWaitBounded(t, "join_test.go")
 }
 
 func TestEveryWaitOfTheUpgradeTestIsBoundedByAFieldOfItsOwnBoundsThatNoOtherWaitTakes(t *testing.T) {
-	requireEveryWaitBounded(t, "upgrade_test.go", "upgradeBounds", upgradeBounds, nil)
+	requireEveryWaitBounded(t, "upgrade_test.go")
 }
 
 func TestEveryWaitOfTheMinorTestIsBoundedByAFieldOfItsOwnBoundsThatNoOtherWaitTakes(t *testing.T) {
-	requireEveryWaitBounded(t, "minor_test.go", "minorBounds", minorBounds, nil)
+	requireEveryWaitBounded(t, "minor_test.go")
 }
 
 func TestTheCheckOfTheWaitsRefusesWhatBreaksTheSumOfTheBounds(t *testing.T) {

@@ -291,6 +291,18 @@ var jobs = []job{
 	{"e2e-minor", "e2e-minor", "e2e,minor", "TestAMinorStepHoldsNewWorkersUntilLodiaRunsIt", minorBounds},
 }
 
+type waitedFile struct {
+	owner   string
+	set     any
+	outside []string
+}
+
+var waitedFiles = map[string]waitedFile{
+	"join_test.go":    {"bounds", bounds, boundsOutsideTheJoinTest},
+	"upgrade_test.go": {"upgradeBounds", upgradeBounds, nil},
+	"minor_test.go":   {"minorBounds", minorBounds, nil},
+}
+
 var targetRule = regexp.MustCompile(`(?m)^([A-Za-z][\w.-]*):.*\n((?:\t.*(?:\n|$)|\n)*)`)
 
 func suiteTargets(makefile []byte) []string {
@@ -393,41 +405,108 @@ func testFilesOfThePackage() (map[string]string, error) {
 	return files, nil
 }
 
-func requireEachJobToCompileItsOwnTests(files map[string]string, model []job) error {
+type testFile struct {
+	tests    []string
+	tagged   bool
+	compiled []job
+}
+
+func (f testFile) declaresATest() bool {
+	return f.tagged && len(f.tests) > 0
+}
+
+func (f testFile) compiledBy(j job) bool {
+	return slices.ContainsFunc(f.compiled, func(c job) bool { return c.name == j.name })
+}
+
+func (f testFile) namesOfTheJobs() []string {
+	names := make([]string, len(f.compiled))
+	for i, j := range f.compiled {
+		names[i] = j.name
+	}
+	return names
+}
+
+func testFilesCompiledBy(files map[string]string, model []job) (map[string]testFile, error) {
 	names := slices.Sorted(maps.Keys(files))
-	tests := make(map[string][]string, len(names))
-	tagged := make(map[string]bool, len(names))
+	compiled := make(map[string]testFile, len(names))
 	for _, name := range names {
 		file, err := parser.ParseFile(token.NewFileSet(), name, files[name], parser.ParseComments)
 		if err != nil {
-			return err
+			return nil, err
 		}
-		tests[name], tagged[name] = testsOf(file), carriesABuildTag(file)
+		compiled[name] = testFile{tests: testsOf(file), tagged: carriesABuildTag(file)}
 	}
-	compiledBy := make(map[string][]string, len(names))
-	var errs []error
 	for _, j := range model {
 		ctxt := build.Default
 		ctxt.BuildTags = strings.Split(j.tags, ",")
 		ctxt.OpenFile = func(name string) (io.ReadCloser, error) { return io.NopCloser(strings.NewReader(files[name])), nil }
-		declared := false
 		for _, name := range names {
-			compiled, err := ctxt.MatchFile("", name)
+			matches, err := ctxt.MatchFile("", name)
 			if err != nil {
-				return err
+				return nil, err
 			}
-			if compiled {
-				compiledBy[name] = append(compiledBy[name], j.name)
-				declared = declared || slices.Contains(tests[name], j.test)
+			if matches {
+				f := compiled[name]
+				f.compiled = append(f.compiled, j)
+				compiled[name] = f
 			}
+		}
+	}
+	return compiled, nil
+}
+
+func requireEachJobToCompileItsOwnTests(files map[string]string, model []job) error {
+	compiled, err := testFilesCompiledBy(files, model)
+	if err != nil {
+		return err
+	}
+	var errs []error
+	for _, j := range model {
+		declared := false
+		for _, f := range compiled {
+			declared = declared || f.compiledBy(j) && slices.Contains(f.tests, j.test)
 		}
 		if j.test != "" && !declared {
 			errs = append(errs, fmt.Errorf("the %s job runs %s alone, and no file that its build tags %s compile declares it: go test would run nothing and pass", j.name, j.test, j.tags))
 		}
 	}
-	for _, name := range names {
-		if tagged[name] && len(tests[name]) > 0 && len(compiledBy[name]) != 1 {
-			errs = append(errs, fmt.Errorf("%s declares %v, and the jobs %v compile it, want exactly one: a job that compiles another job's test runs it on its own cluster beside its own, and a test that no job compiles runs nowhere", name, tests[name], compiledBy[name]))
+	for _, name := range slices.Sorted(maps.Keys(compiled)) {
+		f := compiled[name]
+		switch {
+		case !f.declaresATest():
+		case len(f.compiled) != 1:
+			errs = append(errs, fmt.Errorf("%s declares %v, and the jobs %v compile it, want exactly one: a job that compiles another job's test runs it on its own cluster beside its own, and a test that no job compiles runs nowhere", name, f.tests, f.namesOfTheJobs()))
+		case f.compiled[0].test != "":
+			for _, test := range f.tests {
+				if test != f.compiled[0].test {
+					errs = append(errs, fmt.Errorf("%s declares %s, and only the %s job compiles it, which runs %s alone: the test runs nowhere, and its job passes without it", name, test, f.compiled[0].name, f.compiled[0].test))
+				}
+			}
+		}
+	}
+	return errors.Join(errs...)
+}
+
+func requireEachJobToHoldTheBoundsOfTheWaitsOfItsTests(files map[string]string, model []job, waited map[string]waitedFile) error {
+	compiled, err := testFilesCompiledBy(files, model)
+	if err != nil {
+		return err
+	}
+	var errs []error
+	for _, name := range slices.Sorted(maps.Keys(compiled)) {
+		f := compiled[name]
+		w, ok := waited[name]
+		switch {
+		case !f.declaresATest():
+		case !ok:
+			errs = append(errs, fmt.Errorf("%s declares %v, and the checks of the waits hold no set of bounds for it: add it to waitedFiles", name, f.tests))
+		default:
+			for _, j := range f.compiled {
+				if !reflect.DeepEqual(j.set, w.set) {
+					errs = append(errs, fmt.Errorf("the %s job adds up %v, and the waits of %s, which holds its test, are held to %s, %v: the model would not count what the job waits for", j.name, j.set, name, w.owner, w.set))
+				}
+			}
 		}
 	}
 	return errors.Join(errs...)
@@ -467,6 +546,9 @@ func TestTheBoundsFitUnderTheTimeouts(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := requireEachJobToCompileItsOwnTests(files, jobs); err != nil {
+		t.Fatal(err)
+	}
+	if err := requireEachJobToHoldTheBoundsOfTheWaitsOfItsTests(files, jobs, waitedFiles); err != nil {
 		t.Fatal(err)
 	}
 	for _, j := range jobs {
@@ -873,17 +955,32 @@ func TestTheModelHoldsEveryTargetThatRunsTheSuiteAndEveryJobThatMakesOne(t *test
 	}
 }
 
-func TestEachJobIsHeldToTheTestsOfTheFilesItsBuildTagsCompile(t *testing.T) {
-	source := func(constraint string, tests ...string) string {
-		src := "package e2e\n"
-		if constraint != "" {
-			src = "//go:build " + constraint + "\n\n" + src
-		}
-		for _, test := range tests {
-			src += "func " + test + "(t *testing.T) {}\n"
-		}
-		return src
+func sourceOfATestFile(constraint string, tests ...string) string {
+	src := "package e2e\n"
+	if constraint != "" {
+		src = "//go:build " + constraint + "\n\n" + src
 	}
+	for _, test := range tests {
+		src += "func " + test + "(t *testing.T) {}\n"
+	}
+	return src
+}
+
+func testFilesOfTheSuite() map[string]string {
+	source := sourceOfATestFile
+	return map[string]string{
+		"suite_test.go":      source("e2e", "TestMain"),
+		"steps_test.go":      source("e2e"),
+		"join_test.go":       source("e2e && !upgrade && !minor", "TestJoin"),
+		"lodia_join_test.go": source("e2e && !upgrade"),
+		"upgrade_test.go":    source("e2e && upgrade", "TestUpgrade"),
+		"minor_test.go":      source("e2e && minor", "TestMinor"),
+		"bounds_test.go":     source("", "TestBounds"),
+	}
+}
+
+func TestEachJobIsHeldToTheTestsOfTheFilesItsBuildTagsCompile(t *testing.T) {
+	source := sourceOfATestFile
 	model := []job{{name: "e2e", tags: "e2e"}, {name: "e2e-upgrade", tags: "e2e,upgrade", test: "TestUpgrade"}, {name: "e2e-minor", tags: "e2e,minor", test: "TestMinor"}}
 	cases := []struct {
 		name   string
@@ -898,23 +995,74 @@ func TestEachJobIsHeldToTheTestsOfTheFilesItsBuildTagsCompile(t *testing.T) {
 		{"the minor test behind the upgrade's tags", map[string]string{"minor_test.go": source("e2e && upgrade", "TestMinor")}, "the e2e-minor job runs TestMinor alone, and no file that its build tags e2e,minor compile declares it"},
 		{"the upgrade test behind e2e alone", map[string]string{"upgrade_test.go": source("e2e", "TestUpgrade")}, "upgrade_test.go declares [TestUpgrade], and the jobs [e2e e2e-upgrade e2e-minor] compile it"},
 		{"the upgrade test behind the minor's tags", map[string]string{"upgrade_test.go": source("e2e && minor", "TestUpgrade")}, "the e2e-upgrade job runs TestUpgrade alone, and no file that its build tags e2e,upgrade compile declares it"},
+		{"the join test behind the minor's tags alone", map[string]string{"join_test.go": source("e2e && !upgrade && minor", "TestJoin")}, "join_test.go declares TestJoin, and only the e2e-minor job compiles it, which runs TestMinor alone"},
+		{"the join test behind the upgrade's tags alone", map[string]string{"join_test.go": source("e2e && upgrade && !minor", "TestJoin")}, "join_test.go declares TestJoin, and only the e2e-upgrade job compiles it, which runs TestUpgrade alone"},
+		{"a second test in the minor file", map[string]string{"minor_test.go": source("e2e && minor", "TestMinor", "TestMinorAgain")}, "minor_test.go declares TestMinorAgain, and only the e2e-minor job compiles it, which runs TestMinor alone"},
+		{"a second test in the upgrade file", map[string]string{"upgrade_test.go": source("e2e && upgrade", "TestUpgradeAgain", "TestUpgrade")}, "upgrade_test.go declares TestUpgradeAgain, and only the e2e-upgrade job compiles it, which runs TestUpgrade alone"},
+		{"a second test in the join file, which its job runs with every test", map[string]string{"join_test.go": source("e2e && !upgrade && !minor", "TestJoin", "TestJoinAgain")}, ""},
 		{"a test that no file declares", map[string]string{"minor_test.go": source("e2e && minor")}, "the e2e-minor job runs TestMinor alone"},
 		{"a constraint that does not parse", map[string]string{"minor_test.go": source("e2e &&", "TestMinor")}, "minor_test.go"},
 		{"a file that does not parse", map[string]string{"minor_test.go": "package e2e\nfunc ("}, "minor_test.go"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			files := map[string]string{
-				"suite_test.go":      source("e2e", "TestMain"),
-				"steps_test.go":      source("e2e"),
-				"join_test.go":       source("e2e && !upgrade && !minor", "TestJoin"),
-				"lodia_join_test.go": source("e2e && !upgrade"),
-				"upgrade_test.go":    source("e2e && upgrade", "TestUpgrade"),
-				"minor_test.go":      source("e2e && minor", "TestMinor"),
-				"bounds_test.go":     source("", "TestBounds"),
-			}
+			files := testFilesOfTheSuite()
 			maps.Copy(files, c.change)
 			err := requireEachJobToCompileItsOwnTests(files, model)
+			switch {
+			case c.want == "" && err != nil:
+				t.Fatalf("want accepted, got %v", err)
+			case c.want != "" && (err == nil || !strings.Contains(err.Error(), c.want)):
+				t.Fatalf("want an error with %q, got %v", c.want, err)
+			}
+		})
+	}
+}
+
+func TestEachJobIsHeldToTheBoundsOfTheWaitsOfItsTests(t *testing.T) {
+	var (
+		join    = boundSet{Apply: time.Minute}
+		upgrade = upgradeBoundSet{Apply: time.Minute}
+		minor   = minorBoundSet{Apply: time.Minute}
+	)
+	waited := func() map[string]waitedFile {
+		return map[string]waitedFile{
+			"join_test.go":    {owner: "bounds", set: join},
+			"upgrade_test.go": {owner: "upgradeBounds", set: upgrade},
+			"minor_test.go":   {owner: "minorBounds", set: minor},
+		}
+	}
+	models := func(sets ...any) []job {
+		return []job{
+			{name: "e2e", tags: "e2e", set: sets[0]},
+			{name: "e2e-upgrade", tags: "e2e,upgrade", test: "TestUpgrade", set: sets[1]},
+			{name: "e2e-minor", tags: "e2e,minor", test: "TestMinor", set: sets[2]},
+		}
+	}
+	cases := []struct {
+		name   string
+		model  []job
+		waited map[string]waitedFile
+		change map[string]string
+		want   string
+	}{
+		{"each job with the set of its file", models(join, upgrade, minor), waited(), nil, ""},
+		{"the minor job with the upgrade test's set", models(join, upgrade, upgrade), waited(), nil, "the e2e-minor job adds up {1m0s"},
+		{"the minor job with an empty set", models(join, upgrade, minorBoundSet{}), waited(), nil, "the e2e-minor job adds up {0s"},
+		{"the minor job with a set of another value", models(join, upgrade, minorBoundSet{Apply: 2 * time.Minute}), waited(), nil, "the e2e-minor job adds up"},
+		{"the upgrade job with the join test's set", models(join, join, minor), waited(), nil, "the e2e-upgrade job adds up"},
+		{"the join job with the minor test's set", models(minor, upgrade, minor), waited(), nil, "the e2e job adds up"},
+		{"the set of a file's waits that is not its job's", models(join, upgrade, minor), map[string]waitedFile{"join_test.go": {owner: "bounds", set: join}, "upgrade_test.go": {owner: "upgradeBounds", set: upgrade}, "minor_test.go": {owner: "minorBounds", set: minorBoundSet{}}}, nil, "the e2e-minor job adds up"},
+		{"a file with a test that the checks of the waits do not hold", models(join, upgrade, minor), waited(), map[string]string{"extra_test.go": sourceOfATestFile("e2e && extra", "TestExtra")}, "extra_test.go declares [TestExtra], and the checks of the waits hold no set of bounds for it"},
+		{"a file without a build tag that declares a test", models(join, upgrade, minor), waited(), map[string]string{"extra_test.go": sourceOfATestFile("", "TestExtra")}, ""},
+		{"a file with a build tag that declares no test", models(join, upgrade, minor), waited(), map[string]string{"extra_test.go": sourceOfATestFile("e2e && extra")}, ""},
+		{"a file that does not parse", models(join, upgrade, minor), waited(), map[string]string{"minor_test.go": "package e2e\nfunc ("}, "minor_test.go"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			files := testFilesOfTheSuite()
+			maps.Copy(files, c.change)
+			err := requireEachJobToHoldTheBoundsOfTheWaitsOfItsTests(files, c.model, c.waited)
 			switch {
 			case c.want == "" && err != nil:
 				t.Fatalf("want accepted, got %v", err)
