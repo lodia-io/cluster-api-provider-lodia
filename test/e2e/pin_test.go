@@ -33,6 +33,9 @@ func pinImages(manifest []byte, digests map[string]string) ([]byte, []string) {
 	var unpinned []string
 	pinned := imageLine.ReplaceAllFunc(manifest, func(line []byte) []byte {
 		match := imageLine.FindSubmatch(line)
+		if bytes.Contains(match[2], []byte("@sha256:")) {
+			return line
+		}
 		digest, ok := digests[string(match[2])]
 		if !ok {
 			unpinned = append(unpinned, string(match[2]))
@@ -291,6 +294,9 @@ func TestEveryImageLineIsPinned(t *testing.T) {
 		{"the first key of a list item", "      - image: example.io/b:v1\n", "      - image: example.io/b:v1@sha256:bb\n", nil},
 		{"a list item with an image outside the table", "      - image: example.io/c:v1\n", "      - image: example.io/c:v1\n", []string{"example.io/c:v1"}},
 		{"a key that only ends in image", "      - myimage: example.io/a:v1\n", "      - myimage: example.io/a:v1\n", nil},
+		{"a reference that carries its digest", "        image: example.io/c:v1@sha256:cc\n", "        image: example.io/c:v1@sha256:cc\n", nil},
+		{"a quoted reference that carries its digest", "image: \"example.io/c:v1@sha256:cc\"\n", "image: \"example.io/c:v1@sha256:cc\"\n", nil},
+		{"a reference that carries a digest beside one outside the table", "image: example.io/c:v1@sha256:cc\nimage: example.io/d:v1\n", "image: example.io/c:v1@sha256:cc\nimage: example.io/d:v1\n", []string{"example.io/d:v1"}},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -311,6 +317,8 @@ func TestEveryContainerImageIsPinnedOrRefused(t *testing.T) {
 		name, manifest, want, wantErr string
 	}{
 		{"a container in the table", pod("  containers:\n  - name: c\n    image: example.io/a:v1\n"), pod("  containers:\n  - name: c\n    image: example.io/a:v1@sha256:aa\n"), ""},
+		{"a container that carries its digest", pod("  containers:\n  - name: c\n    image: example.io/c:v1@sha256:cc\n"), pod("  containers:\n  - name: c\n    image: example.io/c:v1@sha256:cc\n"), ""},
+		{"a container that carries its digest beside one outside the table", pod("  containers:\n  - name: c\n    image: example.io/c:v1@sha256:cc\n  - name: d\n    image: example.io/d:v1\n"), "", "outside the suite's table: example.io/d:v1"},
 		{"a container outside the table", pod("  containers:\n  - name: c\n    image: example.io/c:v1\n"), "", "outside the suite's table: example.io/c:v1"},
 		{"a comment after the image", pod("  containers:\n  - name: c\n    image: example.io/a:v1 # c\n"), "", "without a digest: example.io/a:v1"},
 		{"a flow mapping", pod("  containers:\n  - {name: c, image: example.io/a:v1}\n"), "", "without a digest: example.io/a:v1"},

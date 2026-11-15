@@ -15,6 +15,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	admissionregistrationv1 "k8s.io/api/admissionregistration/v1"
@@ -23,7 +24,10 @@ import (
 	apiextensionsv1beta1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1beta1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
+	"k8s.io/apimachinery/pkg/util/sets"
+	clientdiscovery "k8s.io/client-go/discovery"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
 	addonsv1 "sigs.k8s.io/cluster-api/api/addons/v1beta2"
@@ -137,11 +141,73 @@ func (p *proxy) CurrentNamespace() (string, error) {
 }
 
 func (p *proxy) CheckClusterAvailable(context.Context) error {
-	return errors.New("CheckClusterAvailable is not on the path of Init or Move")
+	return errors.New("CheckClusterAvailable is not on the path of Init, Move or ApplyUpgrade")
 }
 
-func (p *proxy) ListResources(context.Context, map[string]string, ...string) ([]unstructured.Unstructured, error) {
-	return nil, errors.New("ListResources is not on the path of Init or Move")
+// ListResources lists what clusterctl's own proxy does, which ApplyUpgrade and
+// Delete ask for: the objects with the labels, in the namespaces for the
+// namespaced kinds and in the cluster for the others, of every kind that
+// supports list and delete but the kinds of the CRDs that belong to a provider,
+// or to cert-manager when the labels are its own. Discovery goes through a
+// client of the discovery timeout, and both it and the lists end with the
+// context, which clusterctl's discovery does not. clusterctl also retries each
+// read, which the suite's Proxy does for none.
+// https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/cmd/clusterctl/client/cluster/proxy.go#L206-L309
+func (p *proxy) ListResources(ctx context.Context, labels map[string]string, namespaces ...string) ([]unstructured.Unstructured, error) {
+	cfg := rest.CopyConfig(p.cfg)
+	cfg.Timeout = p.discoveryTimeout
+	discoveryClient, err := clientdiscovery.NewDiscoveryClientForConfig(cfg)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create the discovery client: %w", err)
+	}
+	c, err := p.NewClient(ctx)
+	if err != nil {
+		return nil, err
+	}
+	resourceList, err := discoveryClient.ServerPreferredResourcesWithContext(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list api resources: %w", err)
+	}
+	crdList := &apiextensionsv1.CustomResourceDefinitionList{}
+	if err := c.List(ctx, crdList); err != nil {
+		return nil, fmt.Errorf("failed to list CRDs: %w", err)
+	}
+	crdsToExclude := sets.New[string]()
+	component, isCoreComponent := labels[clusterctlv1.ClusterctlCoreLabel]
+	for _, crd := range crdList.Items {
+		if _, isProviderResource := crd.Labels[clusterv1.ProviderNameLabel]; isProviderResource || isCoreComponent && component == clusterctlv1.ClusterctlCoreLabelCertManagerValue {
+			for _, version := range crd.Spec.Versions {
+				crdsToExclude.Insert(crd.Spec.Group + "/" + version.Name + "/" + crd.Spec.Names.Kind)
+			}
+		}
+	}
+	var listed []unstructured.Unstructured
+	for _, group := range clientdiscovery.FilteredBy(clientdiscovery.SupportsAllVerbs{Verbs: []string{"list", "delete"}}, resourceList) {
+		gv, err := schema.ParseGroupVersion(group.GroupVersion)
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse GroupVersion: %w", err)
+		}
+		for _, kind := range group.APIResources {
+			if group.GroupVersion == "extensions/v1beta1" && slices.Contains([]string{"daemonsets", "deployments", "replicasets", "networkpolicies", "ingresses"}, kind.Name) ||
+				crdsToExclude.Has(gv.Group+"/"+gv.Version+"/"+kind.Kind) {
+				continue
+			}
+			where := []string{""}
+			if kind.Namespaced {
+				where = namespaces
+			}
+			for _, namespace := range where {
+				objects := &unstructured.UnstructuredList{}
+				objects.SetAPIVersion(group.GroupVersion)
+				objects.SetKind(kind.Kind + "List")
+				if err := c.List(ctx, objects, client.MatchingLabels(labels), client.InNamespace(namespace)); err != nil {
+					return nil, fmt.Errorf("failed to list objects for the %q GroupVersionKind: %w", gv.WithKind(kind.Kind), err)
+				}
+				listed = append(listed, objects.Items...)
+			}
+		}
+	}
+	return listed, nil
 }
 
 func (p *proxy) GetContexts(string) ([]string, error) {
@@ -149,5 +215,5 @@ func (p *proxy) GetContexts(string) ([]string, error) {
 }
 
 func (p *proxy) GetResourceNames(context.Context, string, string, []client.ListOption, string) ([]string, error) {
-	return nil, errors.New("GetResourceNames is not on the path of Init or Move")
+	return nil, errors.New("GetResourceNames is not on the path of Init, Move or ApplyUpgrade")
 }

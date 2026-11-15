@@ -32,6 +32,7 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	apiextensionsv1beta1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1beta1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/rest"
 	addonsv1 "sigs.k8s.io/cluster-api/api/addons/v1beta2"
@@ -148,10 +149,14 @@ var calls = map[string]func(context.Context, clusterctl.Client) error{
 	"Move": func(ctx context.Context, c clusterctl.Client) error {
 		return c.Move(ctx, clusterctl.MoveOptions{ToKubeconfig: Kubeconfig, Namespace: "capi-join"})
 	},
+	"ApplyUpgrade": func(ctx context.Context, c clusterctl.Client) error {
+		return c.ApplyUpgrade(ctx, clusterctl.ApplyUpgradeOptions{ControlPlaneProviders: []string{"lodia:v0.1.99"}})
+	},
 }
 
-func within(t *testing.T, limit time.Duration, what string, call func() error) (time.Duration, error) {
+func within(t *testing.T, what string, call func() error) (time.Duration, error) {
 	t.Helper()
+	limit := 2 * request
 	done := make(chan error, 1)
 	start := time.Now()
 	go func() { done <- call() }()
@@ -164,7 +169,7 @@ func within(t *testing.T, limit time.Duration, what string, call func() error) (
 	}
 }
 
-func TestInitAndMoveAgainstAClusterThatDoesNotAnswerEndWithinTheirBoundAndOneDiscoveryTimeout(t *testing.T) {
+func TestEveryCallAgainstAClusterThatDoesNotAnswerEndsWithinItsBoundAndOneDiscoveryTimeout(t *testing.T) {
 	servers := map[string]func(*testing.T) *server{
 		"a cluster that accepts connections and never completes TLS": neverCompletesTLS,
 		"a cluster that completes TLS and never answers":             func(t *testing.T) *server { return serve(t, neverAnswers) },
@@ -177,7 +182,7 @@ func TestInitAndMoveAgainstAClusterThatDoesNotAnswerEndWithinTheirBoundAndOneDis
 				c := newClusterctl(t, s)
 				ctx, cancel := context.WithTimeout(t.Context(), bound)
 				defer cancel()
-				took, err := within(t, 2*request, call, func() error { return run(ctx, c) })
+				took, err := within(t, call, func() error { return run(ctx, c) })
 				if err == nil {
 					t.Fatalf("%s says nothing about a cluster that did not answer", call)
 				}
@@ -199,7 +204,7 @@ func TestNoCallReadsAKubeconfigOrTheCurrentContext(t *testing.T) {
 			c := newClusterctl(t, s)
 			ctx, cancel := context.WithTimeout(t.Context(), bound)
 			defer cancel()
-			if _, err := within(t, 2*request, call, func() error { return run(ctx, c) }); err == nil {
+			if _, err := within(t, call, func() error { return run(ctx, c) }); err == nil {
 				t.Fatalf("%s says nothing about a cluster that did not answer", call)
 			}
 			if s.asked() == 0 {
@@ -622,5 +627,273 @@ func TestEveryClusterctlClientIsBuiltThroughTheFactory(t *testing.T) {
 	}
 	if missing := notScanned(listPackages(t, moduleRoot, "e2e"), scanned); len(missing) > 0 {
 		t.Fatalf("the scan read no Go file in the directories %v, which hold packages of the module", missing)
+	}
+}
+
+type listRequest struct{ path, selector string }
+
+func (r listRequest) String() string { return r.path + "?" + r.selector }
+
+const providerLabels = "clusterctl.cluster.x-k8s.io="
+
+func thing(apiVersion, kind, namespace, name string) string {
+	return fmt.Sprintf(`{"apiVersion":%q,"kind":%q,"metadata":{"namespace":%q,"name":%q}}`, apiVersion, kind, namespace, name)
+}
+
+func list(apiVersion, kind string, items ...string) string {
+	return fmt.Sprintf(`{"apiVersion":%q,"kind":%q,"items":[%s]}`, apiVersion, kind+"List", strings.Join(items, ","))
+}
+
+func resources(groupVersion string, resources ...string) string {
+	return fmt.Sprintf(`{"kind":"APIResourceList","apiVersion":"v1","groupVersion":%q,"resources":[%s]}`, groupVersion, strings.Join(resources, ","))
+}
+
+func resource(name, kind string, namespaced bool, verbs ...string) string {
+	quoted := make([]string, len(verbs))
+	for i, verb := range verbs {
+		quoted[i] = strconv.Quote(verb)
+	}
+	return fmt.Sprintf(`{"name":%q,"singularName":"","kind":%q,"namespaced":%t,"verbs":[%s]}`, name, kind, namespaced, strings.Join(quoted, ","))
+}
+
+func group(name, version string) string {
+	return fmt.Sprintf(`{"name":%q,"versions":[{"groupVersion":"%s/%s","version":%q}],"preferredVersion":{"groupVersion":"%s/%s","version":%q}}`, name, name, version, version, name, version, version)
+}
+
+func crdOf(name, group, kind string, labelled bool) string {
+	labels := ""
+	if labelled {
+		labels = `"cluster.x-k8s.io/provider":"control-plane-x"`
+	}
+	return fmt.Sprintf(`{"apiVersion":"apiextensions.k8s.io/v1","kind":"CustomResourceDefinition","metadata":{"name":%q,"labels":{%s}},"spec":{"group":%q,"names":{"kind":%q},"versions":[{"name":"v1"}]}}`, name, labels, group, kind)
+}
+
+var clusterWithAProviderAndOthers = map[string]string{
+	"/api":  `{"kind":"APIVersions","versions":["v1"]}`,
+	"/apis": `{"kind":"APIGroupList","apiVersion":"v1","groups":[` + strings.Join([]string{group("rbac.authorization.k8s.io", "v1"), group("apiextensions.k8s.io", "v1"), group("example.io", "v1"), group("extensions", "v1beta1")}, ",") + `]}`,
+	"/api/v1": resources("v1",
+		resource("namespaces", "Namespace", false, "get", "list", "delete"),
+		resource("serviceaccounts", "ServiceAccount", true, "get", "list", "delete"),
+		resource("events", "Event", true, "get", "list")),
+	"/apis/rbac.authorization.k8s.io/v1": resources("rbac.authorization.k8s.io/v1", resource("clusterroles", "ClusterRole", false, "list", "delete")),
+	"/apis/apiextensions.k8s.io/v1":      resources("apiextensions.k8s.io/v1", resource("customresourcedefinitions", "CustomResourceDefinition", false, "list", "delete")),
+	"/apis/example.io/v1": resources("example.io/v1",
+		resource("things", "Thing", true, "list", "delete"),
+		resource("others", "Other", true, "list", "delete")),
+	"/apis/extensions/v1beta1": resources("extensions/v1beta1", resource("deployments", "Deployment", true, "list", "delete")),
+
+	"/api/v1/namespaces":                              list("v1", "Namespace", thing("v1", "Namespace", "", "ns1")),
+	"/api/v1/namespaces/ns1/serviceaccounts":          list("v1", "ServiceAccount", thing("v1", "ServiceAccount", "ns1", "sa")),
+	"/api/v1/namespaces/ns2/serviceaccounts":          list("v1", "ServiceAccount", thing("v1", "ServiceAccount", "ns2", "sa")),
+	"/apis/rbac.authorization.k8s.io/v1/clusterroles": list("rbac.authorization.k8s.io/v1", "ClusterRole", thing("rbac.authorization.k8s.io/v1", "ClusterRole", "", "role")),
+	"/apis/apiextensions.k8s.io/v1/customresourcedefinitions": list("apiextensions.k8s.io/v1", "CustomResourceDefinition",
+		crdOf("things.example.io", "example.io", "Thing", true), crdOf("others.example.io", "example.io", "Other", false)),
+	"/apis/example.io/v1/namespaces/ns1/others": list("example.io/v1", "Other", thing("example.io/v1", "Other", "ns1", "other")),
+	"/apis/example.io/v1/namespaces/ns2/others": list("example.io/v1", "Other"),
+}
+
+func apiServerThatAnswers(t *testing.T, answers map[string]string, stalls ...string) (*server, func() []listRequest) {
+	t.Helper()
+	var (
+		mu    sync.Mutex
+		asked []listRequest
+	)
+	s := &server{}
+	ts := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		asked = append(asked, listRequest{r.URL.Path, r.URL.Query().Get("labelSelector")})
+		mu.Unlock()
+		body, ok := answers[r.URL.Path]
+		if !ok || slices.Contains(stalls, r.URL.Path) {
+			<-r.Context().Done()
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, body)
+	}))
+	t.Cleanup(func() {
+		ts.CloseClientConnections()
+		ts.Close()
+	})
+	s.url = ts.URL
+	return s, func() []listRequest {
+		mu.Lock()
+		defer mu.Unlock()
+		return slices.Clone(asked)
+	}
+}
+
+func namesOf(objs []unstructured.Unstructured) []string {
+	var names []string
+	for _, obj := range objs {
+		names = append(names, obj.GetKind()+" "+obj.GetNamespace()+"/"+obj.GetName())
+	}
+	slices.Sort(names)
+	return names
+}
+
+func TestListResourcesListsWhatClusterctlsOwnProxyDoes(t *testing.T) {
+	cases := []struct {
+		name       string
+		labels     map[string]string
+		namespaces []string
+		want       []string
+		notAsked   []string
+	}{
+		{
+			name:       "the labels of a provider in two namespaces",
+			labels:     map[string]string{"clusterctl.cluster.x-k8s.io": ""},
+			namespaces: []string{"ns1", "ns2"},
+			want: []string{
+				"ClusterRole /role",
+				"CustomResourceDefinition /others.example.io", "CustomResourceDefinition /things.example.io",
+				"Namespace /ns1",
+				"Other ns1/other",
+				"ServiceAccount ns1/sa", "ServiceAccount ns2/sa",
+			},
+			notAsked: []string{"/apis/example.io/v1/namespaces/ns1/things", "/apis/extensions/v1beta1/namespaces/ns1/deployments", "/api/v1/namespaces/ns1/events"},
+		},
+		{
+			name:       "the labels of a provider in no namespace",
+			labels:     map[string]string{"clusterctl.cluster.x-k8s.io": ""},
+			namespaces: nil,
+			want:       []string{"ClusterRole /role", "CustomResourceDefinition /others.example.io", "CustomResourceDefinition /things.example.io", "Namespace /ns1"},
+			notAsked:   []string{"/api/v1/namespaces/ns1/serviceaccounts", "/apis/example.io/v1/namespaces/ns1/others"},
+		},
+		{
+			name:       "the labels of cert-manager, whose CRDs are every CRD",
+			labels:     map[string]string{"clusterctl.cluster.x-k8s.io/core": "cert-manager"},
+			namespaces: []string{"ns1"},
+			want:       []string{"ClusterRole /role", "CustomResourceDefinition /others.example.io", "CustomResourceDefinition /things.example.io", "Namespace /ns1", "ServiceAccount ns1/sa"},
+			notAsked:   []string{"/apis/example.io/v1/namespaces/ns1/things", "/apis/example.io/v1/namespaces/ns1/others"},
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			TrapTheDefaultKubeconfig(t)
+			s, asked := apiServerThatAnswers(t, clusterWithAProviderAndOthers)
+			p := &proxy{cfg: restConfig(s), requestTimeout: request, discoveryTimeout: discovery}
+
+			got, err := p.ListResources(t.Context(), c.labels, c.namespaces...)
+
+			if err != nil {
+				t.Fatal(err)
+			}
+			if names := namesOf(got); !slices.Equal(names, c.want) {
+				t.Errorf("listed %v, want %v", names, c.want)
+			}
+			for _, path := range c.notAsked {
+				if slices.ContainsFunc(asked(), func(r listRequest) bool { return r.path == path }) {
+					t.Errorf("asked for %s, which clusterctl's own proxy leaves out", path)
+				}
+			}
+		})
+	}
+}
+
+func TestListResourcesAsksForTheLabelsInEveryList(t *testing.T) {
+	TrapTheDefaultKubeconfig(t)
+	s, asked := apiServerThatAnswers(t, clusterWithAProviderAndOthers)
+	p := &proxy{cfg: restConfig(s), requestTimeout: request, discoveryTimeout: discovery}
+	if _, err := p.ListResources(t.Context(), map[string]string{"clusterctl.cluster.x-k8s.io": ""}, "ns1"); err != nil {
+		t.Fatal(err)
+	}
+	var lists int
+	for _, r := range asked() {
+		if !strings.Contains(r.path, "/apis/example.io/v1/namespaces") && r.path != "/api/v1/namespaces/ns1/serviceaccounts" && r.path != "/api/v1/namespaces" && !strings.HasSuffix(r.path, "/clusterroles") {
+			continue
+		}
+		lists++
+		if r.selector != providerLabels {
+			t.Errorf("asked %s, want the selector %s", r, providerLabels)
+		}
+	}
+	if lists != 4 {
+		t.Errorf("asked %d lists of objects, want 4: %v", lists, asked())
+	}
+}
+
+func TestListResourcesEndsItsDiscoveryAtTheDiscoveryTimeout(t *testing.T) {
+	TrapTheDefaultKubeconfig(t)
+	s, _ := apiServerThatAnswers(t, clusterWithAProviderAndOthers, "/apis")
+	p := &proxy{cfg: restConfig(s), requestTimeout: request, discoveryTimeout: discovery}
+
+	took, err := within(t, "ListResources", func() error {
+		_, err := p.ListResources(t.Context(), map[string]string{"clusterctl.cluster.x-k8s.io": ""}, "ns1")
+		return err
+	})
+
+	if err == nil || !strings.Contains(err.Error(), "failed to list api resources") {
+		t.Fatalf("want the failure of the discovery, got %v", err)
+	}
+	if took > discovery+slack {
+		t.Errorf("ListResources ended after %s, more than the discovery timeout %s (and %s of slack) after it, with the request timeout at %s", took, discovery, slack, request)
+	}
+}
+
+func TestListResourcesEndsItsListsWithItsContext(t *testing.T) {
+	TrapTheDefaultKubeconfig(t)
+	s, _ := apiServerThatAnswers(t, clusterWithAProviderAndOthers, "/api/v1/namespaces/ns1/serviceaccounts")
+	p := &proxy{cfg: restConfig(s), requestTimeout: request, discoveryTimeout: discovery}
+	ctx, cancel := context.WithTimeout(t.Context(), bound)
+	defer cancel()
+
+	took, err := within(t, "ListResources", func() error {
+		_, err := p.ListResources(ctx, map[string]string{"clusterctl.cluster.x-k8s.io": ""}, "ns1")
+		return err
+	})
+
+	if err == nil || !strings.Contains(err.Error(), `failed to list objects for the "/v1, Kind=ServiceAccount"`) {
+		t.Fatalf("want the failure of the list, got %v", err)
+	}
+	if took > bound+slack {
+		t.Errorf("ListResources ended after %s, more than its bound %s (and %s of slack) after it", took, bound, slack)
+	}
+}
+
+func TestListResourcesReportsAFailedListOfTheCRDs(t *testing.T) {
+	TrapTheDefaultKubeconfig(t)
+	s, _ := apiServerThatAnswers(t, clusterWithAProviderAndOthers, "/apis/apiextensions.k8s.io/v1/customresourcedefinitions")
+	p := &proxy{cfg: restConfig(s), requestTimeout: bound, discoveryTimeout: discovery}
+
+	_, err := p.ListResources(t.Context(), map[string]string{"clusterctl.cluster.x-k8s.io": ""}, "ns1")
+
+	if err == nil || !strings.Contains(err.Error(), "failed to list CRDs") {
+		t.Fatalf("want the failure of the list of the CRDs, got %v", err)
+	}
+}
+
+func TestListResourcesEndsItsDiscoveryWithItsContext(t *testing.T) {
+	TrapTheDefaultKubeconfig(t)
+	s, _ := apiServerThatAnswers(t, clusterWithAProviderAndOthers, "/apis")
+	p := &proxy{cfg: restConfig(s), requestTimeout: request, discoveryTimeout: request}
+	ctx, cancel := context.WithTimeout(t.Context(), bound)
+	defer cancel()
+
+	took, err := within(t, "ListResources", func() error {
+		_, err := p.ListResources(ctx, map[string]string{"clusterctl.cluster.x-k8s.io": ""}, "ns1")
+		return err
+	})
+
+	if err == nil || !strings.Contains(err.Error(), "failed to list api resources") {
+		t.Fatalf("want the failure of the discovery, got %v", err)
+	}
+	if took > bound+slack {
+		t.Errorf("ListResources ended after %s, more than its bound %s (and %s of slack) after it, with the discovery timeout at %s", took, bound, slack, request)
+	}
+}
+
+func TestListResourcesAsksNothingOnceItsContextHasEnded(t *testing.T) {
+	TrapTheDefaultKubeconfig(t)
+	s, asked := apiServerThatAnswers(t, clusterWithAProviderAndOthers)
+	p := &proxy{cfg: restConfig(s), requestTimeout: request, discoveryTimeout: discovery}
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+
+	if _, err := p.ListResources(ctx, map[string]string{"clusterctl.cluster.x-k8s.io": ""}, "ns1"); !errors.Is(err, context.Canceled) {
+		t.Fatalf("want the error of the context, got %v", err)
+	}
+	if got := asked(); len(got) > 0 {
+		t.Errorf("asked %v after the context ended", got)
 	}
 }

@@ -54,8 +54,11 @@ type clusterctlProvider struct {
 // writeRepository lays the providers out as test/framework/clusterctl's
 // CreateRepository does, with the directory of overrides empty so that a
 // developer's own never applies, and returns the clusterctl configuration for
-// it. cert-manager is the suite's own, so clusterctl only waits for it.
+// it. cert-manager is the suite's own, so clusterctl only waits for it. A
+// provider of several versions is one element for each; clusterctl merges the
+// entries of the configuration that they write into one.
 // https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/test/framework/clusterctl/repository.go#L104-L158
+// https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/cmd/clusterctl/client/config/providers_client.go#L541-L564
 func writeRepository(dir string, providers []clusterctlProvider, variables map[string]string) (string, error) {
 	if err := os.RemoveAll(dir); err != nil {
 		return "", err
@@ -210,6 +213,7 @@ func TestTheRepositoryIsWhatClusterctlReadsBack(t *testing.T) {
 		{"cluster-api", clusterctlv1.CoreProviderType, "v1.15.0-beta.0", componentsIn("capi-system"), []byte(metadataHead + capiMetadata)},
 		{"kubeadm", clusterctlv1.BootstrapProviderType, "v1.15.0-beta.0", componentsIn("bootstrap-system"), []byte(metadataHead + capiMetadata)},
 		{"docker", clusterctlv1.InfrastructureProviderType, "v1.15.0-beta.0", componentsIn("capd-system"), []byte(metadataHead + capiMetadata)},
+		{"lodia", clusterctlv1.ControlPlaneProviderType, "v0.1.0-alpha.2", componentsIn("lodia-previous-system"), []byte(metadataHead + lodiaSeries)},
 		{"lodia", clusterctlv1.ControlPlaneProviderType, "v0.1.99", componentsIn("lodia-system"), []byte(metadataHead + lodiaSeries)},
 	}
 	dir := filepath.Join(t.TempDir(), "repository")
@@ -233,21 +237,34 @@ func TestTheRepositoryIsWhatClusterctlReadsBack(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, p := range providers {
-		components, err := c.GetProviderComponents(t.Context(), p.name, p.kind, clusterctl.ComponentsOptions{})
+		components, err := c.GetProviderComponents(t.Context(), p.name+":"+p.version, p.kind, clusterctl.ComponentsOptions{})
 		if err != nil {
-			t.Fatalf("%s: %v", p.name, err)
+			t.Fatalf("%s %s: %v", p.name, p.version, err)
 		}
 		if components.Version() != p.version {
-			t.Errorf("%s: latest is %s, want %s", p.name, components.Version(), p.version)
+			t.Errorf("%s: asked for %s, got %s", p.name, p.version, components.Version())
 		}
 		for _, obj := range components.Objs() {
-			if obj.GetKind() != "ClusterRoleBinding" {
-				continue
+			switch obj.GetKind() {
+			case "Namespace":
+				if !strings.Contains(string(p.components), "kind: Namespace\nmetadata:\n  name: "+obj.GetName()+"\n") {
+					t.Errorf("%s %s: the Namespace %s is not in the components laid out for this version", p.name, p.version, obj.GetName())
+				}
+			case "ClusterRoleBinding":
+				subjects, _, _ := unstructured.NestedSlice(obj.Object, "subjects")
+				if got := subjects[0].(map[string]any)["name"]; got != "system:serviceaccount:bootstrap:manager" {
+					t.Errorf("%s %s: the subject is %v, want the variables of the configuration to have filled it in", p.name, p.version, got)
+				}
 			}
-			subjects, _, _ := unstructured.NestedSlice(obj.Object, "subjects")
-			if got := subjects[0].(map[string]any)["name"]; got != "system:serviceaccount:bootstrap:manager" {
-				t.Errorf("%s: the subject is %v, want the variables of the configuration to have filled it in", p.name, got)
-			}
+		}
+	}
+	for name, kind := range map[string]clusterctlv1.ProviderType{"cluster-api": clusterctlv1.CoreProviderType, "lodia": clusterctlv1.ControlPlaneProviderType} {
+		components, err := c.GetProviderComponents(t.Context(), name, kind, clusterctl.ComponentsOptions{})
+		if err != nil {
+			t.Fatalf("%s latest: %v", name, err)
+		}
+		if want := map[string]string{"cluster-api": "v1.15.0-beta.0", "lodia": "v0.1.99"}[name]; components.Version() != want {
+			t.Errorf("%s: latest is %s, want %s", name, components.Version(), want)
 		}
 	}
 	certManager, err := configClient.CertManager().Get()
@@ -428,6 +445,9 @@ func TestTheClusterctlClientEndsItsCallsAtTheSuitesTimeouts(t *testing.T) {
 		"Move": func(ctx context.Context, c clusterctl.Client) error {
 			return c.Move(ctx, clusterctl.MoveOptions{ToKubeconfig: clusterctlproxy.Kubeconfig, Namespace: namespace})
 		},
+		"ApplyUpgrade": func(ctx context.Context, c clusterctl.Client) error {
+			return c.ApplyUpgrade(ctx, clusterctl.ApplyUpgradeOptions{ControlPlaneProviders: []string{"lodia:v0.1.99"}})
+		},
 	}
 	for name, stalled := range stalledTenants {
 		for call, run := range calls {
@@ -471,31 +491,51 @@ func clusterThatHoldsTheInventory(t *testing.T) http.Handler {
 }
 
 func TestTheClusterctlClientsRequestsAskForTheirOwnTimeouts(t *testing.T) {
-	clusterctlproxy.TrapTheDefaultKubeconfig(t)
-	shortenTheDiscovery(t, 7*time.Second)
-	shortenTheClientRequests(t, 11*time.Second)
-	empty := filepath.Join(t.TempDir(), "clusterctl.yaml")
-	if err := os.WriteFile(empty, nil, 0o600); err != nil {
-		t.Fatal(err)
+	for call, c := range map[string]struct {
+		run       func(context.Context, clusterctl.Client) error
+		discovery []string
+		request   string
+	}{
+		"Init": {
+			run: func(ctx context.Context, c clusterctl.Client) error {
+				_, err := c.Init(ctx, clusterctl.InitOptions{CoreProvider: "cluster-api"})
+				return err
+			},
+			discovery: []string{"/version", "/api", "/apis", "/apis/apiextensions.k8s.io/v1"},
+			request:   "/customresourcedefinitions/providers.clusterctl.cluster.x-k8s.io",
+		},
+		"ApplyUpgrade": {
+			run: func(ctx context.Context, c clusterctl.Client) error {
+				return c.ApplyUpgrade(ctx, clusterctl.ApplyUpgradeOptions{ControlPlaneProviders: []string{"lodia:v0.1.99"}})
+			},
+			discovery: []string{"/api", "/apis", "/apis/apiextensions.k8s.io/v1"},
+			request:   "/customresourcedefinitions/clusters.cluster.x-k8s.io",
+		},
+	} {
+		t.Run(call, func(t *testing.T) {
+			clusterctlproxy.TrapTheDefaultKubeconfig(t)
+			shortenTheDiscovery(t, 7*time.Second)
+			shortenTheClientRequests(t, 11*time.Second)
+			empty := filepath.Join(t.TempDir(), "clusterctl.yaml")
+			if err := os.WriteFile(empty, nil, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			url, asked := recordedServer(t, clusterThatHoldsTheInventory(t))
+			client, err := newClusterctl(t.Context(), configFor(t, url), empty)
+			if err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+			defer cancel()
+			if returnsWithin(t, 30*time.Second, call, func() error { return c.run(ctx, client) }) == nil {
+				t.Fatalf("%s says nothing about a cluster that holds the inventory's CustomResourceDefinition", call)
+			}
+			for _, suffix := range c.discovery {
+				requireRequestTimeout(t, asked(), suffix, discoveryTimeout)
+			}
+			requireRequestTimeout(t, asked(), c.request, clientRequestTimeout)
+		})
 	}
-	url, asked := recordedServer(t, clusterThatHoldsTheInventory(t))
-	c, err := newClusterctl(t.Context(), configFor(t, url), empty)
-	if err != nil {
-		t.Fatal(err)
-	}
-	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
-	defer cancel()
-	err = returnsWithin(t, 30*time.Second, "Init", func() error {
-		_, err := c.Init(ctx, clusterctl.InitOptions{CoreProvider: "cluster-api"})
-		return err
-	})
-	if err == nil {
-		t.Fatal("Init says nothing about a cluster that holds the inventory's CustomResourceDefinition")
-	}
-	for _, suffix := range []string{"/version", "/api", "/apis", "/apis/apiextensions.k8s.io/v1"} {
-		requireRequestTimeout(t, asked(), suffix, discoveryTimeout)
-	}
-	requireRequestTimeout(t, asked(), "/customresourcedefinitions/providers.clusterctl.cluster.x-k8s.io", clientRequestTimeout)
 }
 
 const templatedFile = "/etc/capl-e2e/control-plane-version"
