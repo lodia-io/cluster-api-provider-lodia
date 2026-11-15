@@ -118,6 +118,7 @@ func TestMakeAcceptsOnlyNamesWhoseClusterLodiaAccepts(t *testing.T) {
 
 func TestEachTargetThatRunsTheSuiteCreatesAClusterOfItsOwnThatTheGuardAccepts(t *testing.T) {
 	creates := regexp.MustCompile(`kind create cluster --name (\S+) --kubeconfig (\S+)`)
+	runs := regexp.MustCompile(`go test [^;&|\n]*-tags e2e`)
 	var names []string
 	for target, tags := range map[string]string{"e2e": "-tags e2e ", "e2e-upgrade": "-tags e2e,upgrade "} {
 		t.Run(target, func(t *testing.T) {
@@ -130,6 +131,9 @@ func TestEachTargetThatRunsTheSuiteCreatesAClusterOfItsOwnThatTheGuardAccepts(t 
 			}
 			name, kubeconfigPath := found[1], found[2]
 			names = append(names, name)
+			if n := len(runs.FindAllString(recipe, -1)); n != 1 {
+				t.Errorf("the target runs go test with -tags e2e %d times, want once, since a suite that a prerequisite or a recursive make runs besides it is on the same cluster and under no bound of the target:\n%s", n, recipe)
+			}
 			if err := RequireNamedCluster(kubeconfig(t, "https://127.0.0.1:6443", "kind-"+name, "kind-"+name)); err != nil {
 				t.Errorf("the guard refuses the cluster %s: %v", name, err)
 			}

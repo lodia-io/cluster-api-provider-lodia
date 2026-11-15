@@ -47,7 +47,7 @@ components: ## render config/default and check that every variable has a non-emp
 	printf '%s\n' "$$rendered" | go run ./test/components
 
 .PHONY: upgrade-components
-upgrade-components: ## compare the render of config/default with the components of the release that test/pin names, which the first run downloads into $(PIN_DIR) and checks against the pinned sha256: fail on a cluster-scoped object of the release that clusterctl's upgrade keeps and the render drops or renames, a ClusterRoleBinding whose roleRef the render changes, a CRD version that the release serves and the render drops or does not serve, and a storage version that the render drops
+upgrade-components: ## compare the render of config/default with the components of the release that test/pin names, which the first run downloads into $(PIN_DIR) and checks against the pinned sha256: fail on a cluster-scoped object of the release, or a custom resource of a CRD that carries the provider label, that clusterctl's upgrade keeps and the render drops or renames, a ClusterRoleBinding whose roleRef the render changes, a CRD version that the release serves and the render drops or does not serve, and a storage version that the render drops
 	@rendered="$$(go run $(KUSTOMIZE) build config/default)" || exit 1; \
 	printf '%s\n' "$$rendered" | go run ./test/components upgrade $(PIN_DIR)
 
