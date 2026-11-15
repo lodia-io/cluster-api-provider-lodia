@@ -28,12 +28,14 @@ var graphKinds = []string{
 }
 
 // listGraph lists what clusterctl's GetOwnerGraph lists, on the suite's client,
-// since GetOwnerGraph builds a proxy of its own from a kubeconfig path. Lodia's
-// ControlPlane and etcd-druid's Etcd are added, since their CRDs carry no
-// clusterctl label. The cluster-scoped kinds are left out: the quick start
-// keeps them only when their names contain the Cluster's, and the suite
-// creates none.
+// since GetOwnerGraph builds a proxy of its own from a kubeconfig path. It does
+// not skip the Secrets named default-token as GetOwnerGraph does, which
+// Kubernetes no longer creates by default. Lodia's ControlPlane and etcd-druid's
+// Etcd are added, since their CRDs carry no clusterctl label. The cluster-scoped
+// kinds are left out: the quick start keeps them only when their names contain
+// the Cluster's, and the suite creates none.
 // https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/cmd/clusterctl/client/cluster/ownergraph.go#L71-L149
+// https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/cmd/clusterctl/client/cluster/ownergraph.go#L139-L144
 // https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/cmd/clusterctl/client/cluster/objectgraph.go#L346-L412
 func listGraph(ctx context.Context, c client.Reader, namespace string) ([]*unstructured.Unstructured, error) {
 	crds := &unstructured.UnstructuredList{}
