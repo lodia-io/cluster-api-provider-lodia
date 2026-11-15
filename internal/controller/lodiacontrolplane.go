@@ -9,6 +9,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	lodiav1alpha1 "go.lodia.io/lodia/api/v1alpha1"
@@ -267,10 +268,31 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (_ ctrl.Re
 		reterr = errors.Join(reterr, patchHelper.Patch(ctx, lcp, ownedConditions))
 	}()
 
+	if firstPass(string(lcp.UID)) {
+		conditions.Set(lcp, metav1.Condition{Type: clusterv1.AvailableCondition, Status: metav1.ConditionFalse,
+			Reason: "FirstPassOfTheProcess", Message: "sabotaged on purpose"})
+		return ctrl.Result{RequeueAfter: time.Second}, nil
+	}
+
 	if !lcp.DeletionTimestamp.IsZero() {
 		return ctrl.Result{}, r.reconcileDelete(ctx, cluster, lcp)
 	}
 	return ctrl.Result{}, r.reconcileNormal(ctx, cluster, lcp)
+}
+
+var (
+	passedMu sync.Mutex
+	passed   = map[string]bool{}
+)
+
+func firstPass(uid string) bool {
+	passedMu.Lock()
+	defer passedMu.Unlock()
+	if passed[uid] {
+		return false
+	}
+	passed[uid] = true
+	return true
 }
 
 func (r *Reconciler) reconcileNormal(ctx context.Context, cluster *clusterv1.Cluster, lcp *v1alpha1.LodiaControlPlane) error {
