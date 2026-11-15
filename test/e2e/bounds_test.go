@@ -277,8 +277,6 @@ type job struct {
 	set                      any
 }
 
-// The join set holds the install and the dump, which the other jobs run through
-// the same functions.
 func (j job) bounded() time.Duration {
 	sum := total(j.set)
 	if _, ok := j.set.(boundSet); !ok {
