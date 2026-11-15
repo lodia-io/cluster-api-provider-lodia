@@ -38,7 +38,7 @@ spec:
   template:
     spec:
       clusterName: ${CLUSTER_NAME}
-      version: v1.37.0
+      version: ${KUBERNETES_VERSION}
       bootstrap:
         configRef:
           apiGroup: bootstrap.cluster.x-k8s.io

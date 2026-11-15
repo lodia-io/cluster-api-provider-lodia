@@ -9,8 +9,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
 	"text/template"
 
@@ -21,7 +19,6 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
-	"sigs.k8s.io/cluster-api/cmd/clusterctl/client/yamlprocessor"
 	"sigs.k8s.io/cluster-api/util/secret"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/e2e-framework/pkg/envconf"
@@ -29,22 +26,11 @@ import (
 	"go.lodia.io/cluster-api-provider-lodia/api/v1alpha1"
 )
 
-func render(file, cluster string) ([]byte, error) {
-	raw, err := os.ReadFile(filepath.Join("testdata", file))
-	if err != nil {
-		return nil, err
-	}
-	return yamlprocessor.NewSimpleProcessor().Process(raw, func(name string) (string, error) {
-		if name != "CLUSTER_NAME" {
-			return "", fmt.Errorf("%s is not set", name)
-		}
-		return cluster, nil
-	})
-}
+const newestKubernetes = "v1.37.0"
 
-func applyTheCluster(ctx context.Context, cfg *envconf.Config, k8s client.Client, key client.ObjectKey) error {
+func applyTheCluster(ctx context.Context, cfg *envconf.Config, k8s client.Client, key client.ObjectKey, kubernetes string) error {
 	for _, file := range []string{"cluster.yaml", "workers.yaml"} {
-		manifest, err := render(file, key.Name)
+		manifest, err := render(file, testdataVariables(key.Name, kubernetes))
 		if err != nil {
 			return err
 		}
@@ -95,7 +81,7 @@ func kindnetOf(ctx context.Context, cfg *envconf.Config, k8s client.Reader, key 
 	return rendered.Bytes(), nil
 }
 
-func deleteTheCluster(ctx context.Context, k8s client.Client, key client.ObjectKey) ([]client.Object, error) {
+func deleteTheCluster(ctx context.Context, k8s client.Client, key client.ObjectKey, workers int) ([]client.Object, error) {
 	etcd := lodiav1alpha1.EtcdName(key.Name)
 	owned := []client.Object{
 		&corev1.PersistentVolumeClaim{ObjectMeta: metav1.ObjectMeta{Namespace: key.Namespace, Name: etcd + "-" + etcd + "-0"}},
@@ -111,8 +97,8 @@ func deleteTheCluster(ctx context.Context, k8s client.Client, key client.ObjectK
 	if err != nil {
 		return nil, err
 	}
-	if len(containers) != 1 {
-		return nil, fmt.Errorf("%d containers are labelled for the Cluster, want the worker's alone: %v", len(containers), containers)
+	if err := requireContainers(containers, workers); err != nil {
+		return nil, err
 	}
 	return owned, k8s.Delete(ctx, &clusterv1.Cluster{ObjectMeta: metav1.ObjectMeta{Namespace: key.Namespace, Name: key.Name}})
 }

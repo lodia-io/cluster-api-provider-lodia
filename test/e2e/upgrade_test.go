@@ -98,7 +98,7 @@ func TestTheProviderUpgradesFromThePreviousRelease(t *testing.T) {
 		Assess("the objects are applied under the release, and the DevCluster, whose infrastructure the suite manages, is marked provisioned", func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
 			bounded, cancel := endAfter(ctx, upgradeBounds.Apply)
 			defer cancel()
-			if err := applyTheCluster(bounded, cfg, k8s, key); err != nil {
+			if err := applyTheCluster(bounded, cfg, k8s, key, newestKubernetes); err != nil {
 				t.Fatal(err)
 			}
 			return ctx
@@ -227,7 +227,7 @@ func TestTheProviderUpgradesFromThePreviousRelease(t *testing.T) {
 			return ctx
 		}).
 		Assess("deleting the Cluster removes the LodiaControlPlane, the ControlPlane, the etcd claim, the copied Secrets and the worker's container", func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
-			owned, err := deleteTheCluster(ctx, k8s, key)
+			owned, err := deleteTheCluster(ctx, k8s, key, 1)
 			if err != nil {
 				t.Fatal(err)
 			}

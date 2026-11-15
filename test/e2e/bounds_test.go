@@ -318,6 +318,36 @@ func requireTheModelIsTheSuiteOfTheMakefileAndCI(makefile []byte, ci map[string]
 	return errors.Join(errs...)
 }
 
+var lintRule = regexp.MustCompile(`(?m)^lint:.*\n((?:\t.*(?:\n|$)|\n)*)`)
+
+func requireEveryJobLinted(makefile []byte, model []job) error {
+	rule := lintRule.FindSubmatch(makefile)
+	if rule == nil {
+		return errors.New("the Makefile has no target lint")
+	}
+	var runs []string
+	for line := range strings.SplitSeq(string(rule[1]), "\n") {
+		runs = append(runs, strings.TrimPrefix(line, "\t"))
+	}
+	var errs []error
+	for _, j := range model {
+		if want := "golangci-lint run --build-tags " + j.tags + " ./test/e2e/..."; !slices.Contains(runs, want) {
+			errs = append(errs, fmt.Errorf("the lint target does not run %q, so the files behind the build tags %s of the %s job go unlinted", want, j.tags, j.name))
+		}
+	}
+	return errors.Join(errs...)
+}
+
+func testsOf(file *ast.File) []string {
+	var tests []string
+	for _, decl := range file.Decls {
+		if fn, ok := decl.(*ast.FuncDecl); ok && fn.Recv == nil && strings.HasPrefix(fn.Name.Name, "Test") && fn.Name.Name != "TestMain" {
+			tests = append(tests, fn.Name.Name)
+		}
+	}
+	return tests
+}
+
 func testsOfThePackage() ([]string, error) {
 	names, err := filepath.Glob("*_test.go")
 	if err != nil {
@@ -329,11 +359,7 @@ func testsOfThePackage() ([]string, error) {
 		if err != nil {
 			return nil, err
 		}
-		for _, decl := range file.Decls {
-			if fn, ok := decl.(*ast.FuncDecl); ok && fn.Recv == nil && strings.HasPrefix(fn.Name.Name, "Test") && fn.Name.Name != "TestMain" {
-				tests = append(tests, fn.Name.Name)
-			}
-		}
+		tests = append(tests, testsOf(file)...)
 	}
 	return tests, nil
 }
@@ -406,6 +432,50 @@ func TestTheBoundsFitUnderTheTimeouts(t *testing.T) {
 	}
 	if err := unpauseFits(unpauseBound, discoveryTimeout); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestEveryJobIsLintedWithItsBuildTags(t *testing.T) {
+	makefile, err := os.ReadFile("../../Makefile")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := requireEveryJobLinted(makefile, jobs); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestALintThatLacksTheTagsOfAJobIsRefused(t *testing.T) {
+	const (
+		suite   = "\tgolangci-lint run --build-tags e2e ./test/e2e/...\n"
+		upgrade = "\tgolangci-lint run --build-tags e2e,upgrade ./test/e2e/...\n"
+		minor   = "\tgolangci-lint run --build-tags e2e,minor ./test/e2e/...\n"
+		plain   = "\tgolangci-lint run ./...\n"
+	)
+	model := []job{{name: "e2e", tags: "e2e"}, {name: "e2e-upgrade", tags: "e2e,upgrade"}, {name: "e2e-minor", tags: "e2e,minor"}}
+	cases := []struct {
+		name, makefile, want string
+	}{
+		{"a run for each job", "lint:\n" + plain + suite + upgrade + minor, ""},
+		{"the runs in another order", "lint:\n" + minor + upgrade + suite + plain, ""},
+		{"a target after the lint", "lint:\n" + plain + suite + upgrade + minor + "test:\n\tgo test ./...\n", ""},
+		{"no run for the third job", "lint:\n" + plain + suite + upgrade, "does not run \"golangci-lint run --build-tags e2e,minor ./test/e2e/...\", so the files behind the build tags e2e,minor of the e2e-minor job go unlinted"},
+		{"no run for the second job", "lint:\n" + plain + suite + minor, "of the e2e-upgrade job go unlinted"},
+		{"no run for the first job", "lint:\n" + plain + upgrade + minor, "of the e2e job go unlinted"},
+		{"a run of the third job's tags in another target", "lint:\n" + plain + suite + upgrade + "test:\n" + minor, "of the e2e-minor job go unlinted"},
+		{"the run on another path", "lint:\n" + plain + suite + upgrade + "\tgolangci-lint run --build-tags e2e,minor ./...\n", "of the e2e-minor job go unlinted"},
+		{"no lint target", "test:\n" + minor, "no target lint"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			err := requireEveryJobLinted([]byte(c.makefile), model)
+			switch {
+			case c.want == "" && err != nil:
+				t.Fatalf("want accepted, got %v", err)
+			case c.want != "" && (err == nil || !strings.Contains(err.Error(), c.want)):
+				t.Fatalf("want an error with %q, got %v", c.want, err)
+			}
+		})
 	}
 }
 
