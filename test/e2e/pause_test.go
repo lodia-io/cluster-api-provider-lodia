@@ -58,12 +58,13 @@ var unpauseBound = 30 * time.Second
 // https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/core/reconcilers/cluster/cluster_controller_status.go#L92
 // https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/util/conditions/setter.go#L84
 func pauseCycle(ctx context.Context, c client.Client, key client.ObjectKey, bound, interval time.Duration, pause bool, act func(context.Context) error) error {
-	bounded, cancel := endAfter(ctx, bound)
+	bounded, cancel := within(ctx, bound)
 	defer cancel()
 	var err error
 	if pause {
-		_, err = setClusterPaused(bounded, c, key, true)
-		err = cutShort(bounded, err)
+		if _, err = setClusterPaused(bounded, c, key, true); err != nil {
+			err = errors.Join(err, context.Cause(bounded))
+		}
 	}
 	holding := pause
 	if err == nil {
@@ -78,7 +79,9 @@ func pauseCycle(ctx context.Context, c client.Client, key client.ObjectKey, boun
 		} else {
 			holding = true
 			if act != nil {
-				err = cutShort(bounded, act(bounded))
+				if err = act(bounded); err != nil {
+					err = errors.Join(err, context.Cause(bounded))
+				}
 			}
 		}
 	}

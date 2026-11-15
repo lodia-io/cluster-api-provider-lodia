@@ -42,7 +42,7 @@ func dump(ctx context.Context, cfg *envconf.Config) {
 }
 
 func install(ctx context.Context, cfg *envconf.Config) (context.Context, error) {
-	bounded, cancel := endAfter(ctx, suiteBounds.Install)
+	bounded, cancel := within(ctx, suiteBounds.Install)
 	defer cancel()
 	for _, component := range []struct {
 		name    string
@@ -55,7 +55,7 @@ func install(ctx context.Context, cfg *envconf.Config) (context.Context, error) 
 		start := time.Now()
 		if err := component.install(bounded, cfg); err != nil {
 			dump(ctx, cfg)
-			return ctx, fmt.Errorf("install %s: %w", component.name, cutShort(bounded, err))
+			return ctx, fmt.Errorf("install %s: %w", component.name, errors.Join(err, context.Cause(bounded)))
 		}
 		fmt.Printf("installed %s after %s\n", component.name, time.Since(start).Round(time.Second))
 	}

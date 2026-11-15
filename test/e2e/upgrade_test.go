@@ -8,6 +8,7 @@ package e2e
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -96,7 +97,7 @@ func TestTheProviderUpgradesFromThePreviousRelease(t *testing.T) {
 			return ctx
 		}).
 		Assess("the objects are applied under the release, and the DevCluster, whose infrastructure the suite manages, is marked provisioned", func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
-			bounded, cancel := endAfter(ctx, upgradeBounds.Apply)
+			bounded, cancel := within(ctx, upgradeBounds.Apply)
 			defer cancel()
 			if err := applyTheCluster(bounded, cfg, k8s, key, newestKubernetes); err != nil {
 				t.Fatal(err)
@@ -159,10 +160,10 @@ func TestTheProviderUpgradesFromThePreviousRelease(t *testing.T) {
 			return ctx
 		}).
 		Assess("clusterctl upgrades the provider to the tree's build", func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
-			bounded, cancel := endAfter(ctx, upgradeBounds.Upgrade)
+			bounded, cancel := within(ctx, upgradeBounds.Upgrade)
 			defer cancel()
 			if err := upgradeProvider(bounded, cfg, u.to); err != nil {
-				t.Fatal(cutShort(bounded, fmt.Errorf("clusterctl upgrade apply --control-plane lodia:%s: %w", u.to, err)))
+				t.Fatal(errors.Join(fmt.Errorf("clusterctl upgrade apply --control-plane lodia:%s: %w", u.to, err), context.Cause(bounded)))
 			}
 			return ctx
 		}).

@@ -809,16 +809,15 @@ func TestAScaleDownIsDoneWhenTheMachineAndEverythingItOwnedAreGoneAndTheOtherSta
 
 var (
 	boundArgumentOf = map[string]int{
-		"until":               2,
-		"requireUnpaused":     3,
-		"whilePaused":         3,
-		"pauseCycle":          3,
-		"settle":              3,
-		"hold":                3,
-		"endAfter":            1,
-		"context.WithTimeout": 1,
+		"until":           2,
+		"requireUnpaused": 3,
+		"whilePaused":     3,
+		"pauseCycle":      3,
+		"settle":          3,
+		"hold":            3,
+		"within":          1,
 	}
-	contextsThatEnd          = []string{"endAfter"}
+	contextsThatEnd          = []string{"within"}
 	waitsOnTheCallersContext = []string{
 		"pollUntil", "apply", "applyRelease", "applyTheCluster", "upgradeProvider", "available", "installCertManager", "deploymentsAvailable", "deploymentAvailableWithin",
 		"clusterctlproxy.MoveUntilBlocked",
@@ -831,7 +830,7 @@ var (
 	}
 	waitsWithoutABound = []string{
 		"time.Sleep", "time.After", "time.AfterFunc", "time.NewTimer", "time.NewTicker", "time.Tick",
-		"context.WithDeadline", "context.WithTimeoutCause", "context.WithDeadlineCause",
+		"context.WithTimeout", "context.WithDeadline", "context.WithTimeoutCause", "context.WithDeadlineCause",
 	}
 )
 
@@ -1094,9 +1093,9 @@ func TestTheCheckOfTheWaitsRefusesWhatBreaksTheSumOfTheBounds(t *testing.T) {
 	for _, callee := range waitsOnTheCallersContext {
 		cases = append(cases,
 			struct{ name, body, want string }{callee + " on the step's own context", strings.Join(all, "\n") + "\n" + callee + "(ctx)", callee + " runs on a context that no field of bounds ends in this step"},
-			struct{ name, body, want string }{callee + " on a context made in another step", "func() {\n" + madeBy("endAfter") + "\n}()\nfunc() {\n" + callee + "(bounded)\n}()", callee + " runs on a context that no field of bounds ends in this step"},
-			struct{ name, body, want string }{callee + " on a context that context.WithTimeout made from a field", madeBy("context.WithTimeout") + "\n" + callee + "(bounded)", callee + " runs on a context that no field of bounds ends in this step"},
-			struct{ name, body, want string }{callee + " on a context made from a literal", strings.Join(all[1:], "\n") + "\nbounded, cancel := endAfter(ctx, 5*time.Minute)\n" + callee + "(bounded)", callee + " runs on a context that no field of bounds ends in this step"},
+			struct{ name, body, want string }{callee + " on a context made in another step", "func() {\n" + madeBy("within") + "\n}()\nfunc() {\n" + callee + "(bounded)\n}()", callee + " runs on a context that no field of bounds ends in this step"},
+			struct{ name, body, want string }{callee + " on a context that context.WithTimeout made from a field", strings.Join(all, "\n") + "\nbounded, cancel := context.WithTimeout(ctx, bounds.A)\n" + callee + "(bounded)", callee + " runs on a context that no field of bounds ends in this step"},
+			struct{ name, body, want string }{callee + " on a context made from a literal", strings.Join(all[1:], "\n") + "\nbounded, cancel := within(ctx, 5*time.Minute)\n" + callee + "(bounded)", callee + " runs on a context that no field of bounds ends in this step"},
 		)
 		for _, maker := range contextsThatEnd {
 			cases = append(cases,
@@ -1135,7 +1134,7 @@ func TestTheCheckOfTheWaitsRefusesWhatBreaksTheSumOfTheBounds(t *testing.T) {
 	}
 	for _, callee := range []string{
 		"time.Sleep", "time.After", "time.AfterFunc", "time.NewTimer", "time.NewTicker", "time.Tick",
-		"context.WithDeadline", "context.WithTimeoutCause", "context.WithDeadlineCause",
+		"context.WithTimeout", "context.WithDeadline", "context.WithTimeoutCause", "context.WithDeadlineCause",
 	} {
 		cases = append(cases, struct{ name, body, want string }{callee, strings.Join(all, "\n") + "\n" + callee + "()", callee + " waits without a field"})
 	}
@@ -1173,8 +1172,8 @@ func TestTheCheckOfTheWaitsHoldsAFileToTheFieldsOfItsOwnBounds(t *testing.T) {
 		{"a field of another set that bounds nothing", "upgradeBounds", "until(ctx, t, upgradeBounds.A, w, f)\nother(ctx, bounds.A)", onlyA, ""},
 		{"a wait that takes the suite's bound of the install", "upgradeBounds", "until(ctx, t, upgradeBounds.A, w, f)\nuntil(ctx, t, suiteBounds.Install, w, f)", onlyA, "suiteBounds.Install bounds the install or the dump"},
 		{"a field that bounds no wait of the file", "upgradeBounds", "until(ctx, t, upgradeBounds.A, w, f)", aAndB, "upgradeBounds.B bounds 0 waits of the file, want 1"},
-		{"a wait on a context that a field of the file's own set ends", "upgradeBounds", "bounded, cancel := endAfter(ctx, upgradeBounds.A)\npollUntil(bounded)", onlyA, ""},
-		{"a wait on a context that a field of another set ends", "upgradeBounds", "bounded, cancel := endAfter(ctx, bounds.A)\npollUntil(bounded)", onlyA, "pollUntil runs on a context that no field of bounds ends in this step"},
+		{"a wait on a context that a field of the file's own set ends", "upgradeBounds", "bounded, cancel := within(ctx, upgradeBounds.A)\npollUntil(bounded)", onlyA, ""},
+		{"a wait on a context that a field of another set ends", "upgradeBounds", "bounded, cancel := within(ctx, bounds.A)\npollUntil(bounded)", onlyA, "pollUntil runs on a context that no field of bounds ends in this step"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -1215,7 +1214,7 @@ func TestTheCheckOfTheFunctionsThatWaitRefusesWhatItDoesNotKnow(t *testing.T) {
 		{"a helper that sleeps", "func helper() { time.Sleep() }", "helper calls time.Sleep"},
 		{"a helper that makes a ticker in a loop", "func helper() { for { time.NewTicker() } }", "helper calls time.NewTicker"},
 		{"a helper that makes a context with a timeout", "func helper() { context.WithTimeout() }", "helper calls context.WithTimeout"},
-		{"a helper that ends a context", "func helper() { endAfter() }", "helper calls endAfter"},
+		{"a helper that ends a context", "func helper() { within() }", "helper calls within"},
 		{"a helper that calls a wait that takes its bound", "func helper() { settle() }", "helper calls settle"},
 		{"a helper that calls a wait on its caller's context", "func helper() { pollUntil() }", "helper calls pollUntil"},
 		{"a helper that calls a wait of clusterctlproxy", "func helper() { clusterctlproxy.MoveUntilBlocked() }", "helper calls clusterctlproxy.MoveUntilBlocked"},

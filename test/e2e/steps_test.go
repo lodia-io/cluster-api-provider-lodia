@@ -8,6 +8,7 @@ package e2e
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"text/template"
@@ -43,7 +44,10 @@ func applyTheCluster(ctx context.Context, cfg *envconf.Config, k8s client.Client
 	provisioned.SetNamespace(key.Namespace)
 	provisioned.SetName(key.Name)
 	patch := client.RawPatch(types.MergePatchType, []byte(`{"status":{"initialization":{"provisioned":true}}}`))
-	return cutShort(ctx, k8s.Status().Patch(ctx, provisioned, patch))
+	if err := k8s.Status().Patch(ctx, provisioned, patch); err != nil {
+		return errors.Join(err, context.Cause(ctx))
+	}
+	return nil
 }
 
 func requireInitialized(ctx context.Context, k8s client.Reader, key client.ObjectKey) error {

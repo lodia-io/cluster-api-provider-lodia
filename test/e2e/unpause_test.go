@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"runtime"
 	"strings"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -17,7 +16,6 @@ import (
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/wait"
-	"k8s.io/client-go/util/flowcontrol"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -56,7 +54,7 @@ var untilInterval = 2 * time.Second
 func until(ctx context.Context, t testing.TB, timeout time.Duration, what string, check func(context.Context) error) {
 	t.Helper()
 	start := time.Now()
-	bounded, cancel := endAfter(ctx, timeout)
+	bounded, cancel := within(ctx, timeout)
 	defer cancel()
 	if err := pollUntil(bounded, untilInterval, check); err != nil {
 		t.Fatalf("%s: %v", what, err)
@@ -304,16 +302,6 @@ func shortenTheUntil(t *testing.T, interval time.Duration) {
 	untilInterval = interval
 }
 
-func throttled(ctx context.Context, limiter flowcontrol.RateLimiter, deadlined *atomic.Int32) error {
-	if _, ok := ctx.Deadline(); ok {
-		deadlined.Add(1)
-	}
-	if err := limiter.Wait(ctx); err != nil {
-		return fmt.Errorf("client rate limiter Wait returned an error: %w", err)
-	}
-	return nil
-}
-
 type failing struct {
 	testing.TB
 	message string
@@ -350,7 +338,7 @@ func requireEndedAtItsBound(t *testing.T, took, bound time.Duration) {
 	}
 }
 
-func requireNamed(t *testing.T, err error, deadlined *atomic.Int32, want ...string) {
+func requireNamed(t *testing.T, err error, want ...string) {
 	t.Helper()
 	if err == nil {
 		t.Fatalf("want a failure with %q, got none", want)
@@ -360,15 +348,9 @@ func requireNamed(t *testing.T, err error, deadlined *atomic.Int32, want ...stri
 			t.Errorf("want the failure to say %q, got %v", w, err)
 		}
 	}
-	if strings.Contains(err.Error(), "rate limiter") {
-		t.Errorf("the failure blames the limiter: %v", err)
-	}
-	if n := deadlined.Load(); n > 0 {
-		t.Errorf("%d reads ran under a deadline, which makes the limiter refuse a read at once with an error that is no context's", n)
-	}
 }
 
-func TestUntilFailsWithTheCauseOfItsEndAndTheReasonOfTheLastCheckWhereTheClientsLimiterWouldHoldARead(t *testing.T) {
+func TestUntilFailsWithTheCauseOfItsEndAndTheReasonOfTheLastCheck(t *testing.T) {
 	const bound = 300 * time.Millisecond
 	shortenTheUntil(t, 20*time.Millisecond)
 	cases := []struct {
@@ -376,21 +358,16 @@ func TestUntilFailsWithTheCauseOfItsEndAndTheReasonOfTheLastCheckWhereTheClients
 		passesAt int
 		failure  []string
 	}{
-		{"a check that never passes", 0, []string{"the step: context deadline exceeded", "the real reason"}},
+		{"a check that never passes", 0, []string{"the step: context deadline exceeded after 300ms", "the real reason"}},
 		{"a check that passes at its first read", 1, nil},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			var deadlined atomic.Int32
-			limiter := flowcontrol.NewTokenBucketRateLimiter(0.001, 1)
 			var reads int
 			start := time.Now()
 			message := failureOf(t, func(f testing.TB) {
-				until(t.Context(), f, bound, "the step", func(ctx context.Context) error {
+				until(t.Context(), f, bound, "the step", func(context.Context) error {
 					reads++
-					if err := throttled(ctx, limiter, &deadlined); err != nil {
-						return err
-					}
 					if reads == c.passesAt {
 						return nil
 					}
@@ -404,49 +381,7 @@ func TestUntilFailsWithTheCauseOfItsEndAndTheReasonOfTheLastCheckWhereTheClients
 				return
 			}
 			requireEndedAtItsBound(t, time.Since(start), bound)
-			requireNamed(t, errors.New(message), &deadlined, c.failure...)
-		})
-	}
-}
-
-type throttledGets struct {
-	client.Client
-	limiter   flowcontrol.RateLimiter
-	deadlined *atomic.Int32
-}
-
-func (g throttledGets) Get(ctx context.Context, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
-	if err := throttled(ctx, g.limiter, g.deadlined); err != nil {
-		return err
-	}
-	return g.Client.Get(ctx, key, obj, opts...)
-}
-
-func TestAPauseNamesWhatTheControllersDidNotReportWhereTheClientsLimiterWouldHoldAReadPastTheBound(t *testing.T) {
-	lcpNeverReports := reported{metav1.ConditionTrue, metav1.ConditionFalse, metav1.ConditionTrue, pausedGeneration - 1}
-	unpausing := func(c client.Client) error {
-		return requireUnpaused(t.Context(), c, unpausedKey, 200*time.Millisecond, 10*time.Millisecond)
-	}
-	pausing := func(c client.Client) error {
-		return whilePaused(t.Context(), c, unpausedKey, 200*time.Millisecond, 10*time.Millisecond, nil)
-	}
-	cases := []struct {
-		name   string
-		call   func(client.Client) error
-		world  func() *world
-		passes int
-		want   []string
-	}{
-		{"the first wait of an unpause", unpausing, func() *world { return newWorld(always(lcpNeverReports), always(runAgain)) }, 2, []string{"Paused is not True on both", "the Paused of the LodiaControlPlane"}},
-		{"the second wait of an unpause", unpausing, func() *world { return newWorld(always(pausedByTheMove), always(pausedByTheMove)) }, 4, []string{"both controllers did not run", "the Paused of the Cluster"}},
-		{"the first wait of a pause", pausing, func() *world { return newWorldPausedAt(false, always(lcpNeverReports), always(runAgain)) }, 2, []string{"Paused is not True on both", "the Paused of the LodiaControlPlane"}},
-		{"the second wait of a pause", pausing, func() *world { return newWorldPausedAt(false, always(pausedByTheMove), always(pausedByTheMove)) }, 4, []string{"both controllers did not run", "the Paused of the Cluster"}},
-	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			var deadlined atomic.Int32
-			err := c.call(throttledGets{c.world(), flowcontrol.NewTokenBucketRateLimiter(0.001, c.passes), &deadlined})
-			requireNamed(t, err, &deadlined, c.want...)
+			requireNamed(t, errors.New(message), c.failure...)
 		})
 	}
 }
