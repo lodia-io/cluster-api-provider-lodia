@@ -1,0 +1,4 @@
+contact_links:
+  - name: Report a vulnerability
+    url: https://github.com/lodia-io/cluster-api-provider-lodia/security/advisories/new
+    about: Privately, as the security policy asks.

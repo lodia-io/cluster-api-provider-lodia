@@ -1,0 +1,53 @@
+name: Bug report
+description: The provider does something its docs say it does not, or fails to do what they say.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: A vulnerability goes through the [security policy](https://github.com/lodia-io/cluster-api-provider-lodia/security/policy), never a public issue.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what happened instead.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: How to reproduce
+      description: The smallest steps, on kind if you can, with the `Cluster` and `LodiaControlPlane` manifests.
+    validations:
+      required: true
+  - type: textarea
+    id: state
+    attributes:
+      label: Status and logs
+      description: "`kubectl get cluster <cluster> -o yaml`, `kubectl get lodiacontrolplane <lodiacontrolplane> -o yaml`, the Lodia `ControlPlane` that the `LodiaControlPlane` owns, which is named after the `Cluster` (`kubectl get controlplane <cluster> -o yaml`), and the provider's manager logs around the failure."
+      render: text
+  - type: input
+    id: provider
+    attributes:
+      label: Provider version
+      description: The release, or the image of the manager.
+    validations:
+      required: true
+  - type: input
+    id: cluster-api
+    attributes:
+      label: Cluster API version
+    validations:
+      required: true
+  - type: input
+    id: lodia
+    attributes:
+      label: Lodia commit or chart version
+    validations:
+      required: true
+  - type: input
+    id: kubernetes
+    attributes:
+      label: Kubernetes versions
+      description: The management cluster's, and the `LodiaControlPlane`'s `spec.version`.
+    validations:
+      required: true

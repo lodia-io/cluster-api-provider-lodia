@@ -4,7 +4,6 @@
 package e2e
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"os"
@@ -92,17 +91,19 @@ func TestEveryObjectOfTheTestdataIsAcceptedByTheCRDOfItsKind(t *testing.T) {
 	}
 }
 
-var assetsOfEnvtest = regexp.MustCompile(`^assets="\$\(go tool setup-envtest use \S+ -p path\)" && KUBEBUILDER_ASSETS="\$assets" go test \./\.\.\.$`)
+const versionSetupEnvtestRejects = "not-a-version"
+
+var assetsOfEnvtest = regexp.MustCompile(`^assets="\$\(go tool setup-envtest use ` + versionSetupEnvtestRejects + ` -p path\)" && KUBEBUILDER_ASSETS="\$assets" go test \./\.\.\.$`)
 
 func requireVerifyToRunTheTestsOfTheModuleWithTheAssetsOfEnvtest(plan string) error {
 	if !slices.ContainsFunc(strings.Split(plan, "\n"), assetsOfEnvtest.MatchString) {
-		return errors.New("make -n verify has no line that runs the go test of every package of the module with KUBEBUILDER_ASSETS taken from setup-envtest, and only when setup-envtest succeeds")
+		return errors.New("make -n verify has no line that runs the go test of every package of the module with KUBEBUILDER_ASSETS taken from setup-envtest for the version of ENVTEST_K8S_VERSION, and only when setup-envtest succeeds")
 	}
 	return nil
 }
 
 func TestMakeVerifyRunsTheTestsOfTheModuleWithTheAssetsOfEnvtest(t *testing.T) {
-	cmd := exec.CommandContext(t.Context(), "make", "--no-print-directory", "verify")
+	cmd := exec.CommandContext(t.Context(), "make", "--no-print-directory", "verify", "ENVTEST_K8S_VERSION="+versionSetupEnvtestRejects)
 	cmd.Dir = root
 	if err := requireVerifyToRunTheTestsOfTheModuleWithTheAssetsOfEnvtest(recipeOf(t, cmd)); err != nil {
 		t.Fatal(err)
@@ -111,23 +112,24 @@ func TestMakeVerifyRunsTheTestsOfTheModuleWithTheAssetsOfEnvtest(t *testing.T) {
 
 func TestAVerifyThatRunsNoTestsOfTheModuleWithTheAssetsOfEnvtestIsRefused(t *testing.T) {
 	const (
-		module = `assets="$(go tool setup-envtest use 1.35.0 -p path)" && KUBEBUILDER_ASSETS="$assets" go test ./...` + "\n"
-		api    = "cd api && go test ./...\n"
-		other  = "go mod tidy -diff\ngolangci-lint run ./...\n"
+		version = versionSetupEnvtestRejects
+		module  = `assets="$(go tool setup-envtest use ` + version + ` -p path)" && KUBEBUILDER_ASSETS="$assets" go test ./...` + "\n"
+		api     = "cd api && go test ./...\n"
+		other   = "go mod tidy -diff\ngolangci-lint run ./...\n"
 	)
 	cases := []struct {
 		name, plan, want string
 	}{
 		{"the assets for the module and none for the API's", other + module + api, ""},
 		{"the assets for the module after the API's", other + api + module, ""},
-		{"another version of Kubernetes", other + strings.Replace(module, "1.35.0", "1.36.1", 1) + api, ""},
+		{"a version of Kubernetes written out in place of ENVTEST_K8S_VERSION", other + strings.Replace(module, version, "1.35.0", 1) + api, "has no line"},
 		{"no tests", other + api, "has no line"},
 		{"no plan", "", "has no line"},
 		{"an empty assignment", other + "KUBEBUILDER_ASSETS= go test ./...\n" + api, "has no line"},
-		{"an assignment that runs go test whether setup-envtest succeeds or not", other + `KUBEBUILDER_ASSETS="$(go tool setup-envtest use 1.35.0 -p path)" go test ./...` + "\n" + api, "has no line"},
-		{"go test after a semicolon, whatever setup-envtest did", other + `assets="$(go tool setup-envtest use 1.35.0 -p path)"; KUBEBUILDER_ASSETS="$assets" go test ./...` + "\n" + api, "has no line"},
+		{"an assignment that runs go test whether setup-envtest succeeds or not", other + `KUBEBUILDER_ASSETS="$(go tool setup-envtest use ` + version + ` -p path)" go test ./...` + "\n" + api, "has no line"},
+		{"go test after a semicolon, whatever setup-envtest did", other + `assets="$(go tool setup-envtest use ` + version + ` -p path)"; KUBEBUILDER_ASSETS="$assets" go test ./...` + "\n" + api, "has no line"},
 		{"assets that setup-envtest did not give", other + `assets="/opt/envtest" && KUBEBUILDER_ASSETS="$assets" go test ./...` + "\n" + api, "has no line"},
-		{"a variable that the test does not get", other + `assets="$(go tool setup-envtest use 1.35.0 -p path)" && KUBEBUILDER_ASSETS= go test ./...` + "\n" + api, "has no line"},
+		{"a variable that the test does not get", other + `assets="$(go tool setup-envtest use ` + version + ` -p path)" && KUBEBUILDER_ASSETS= go test ./...` + "\n" + api, "has no line"},
 		{"a part of the module", other + strings.Replace(module, "./...", "./internal/...", 1) + api, "has no line"},
 		{"the assets for the API's module alone", other + "cd api && " + module + "go test ./...\n", "has no line"},
 	}
@@ -144,71 +146,43 @@ func TestAVerifyThatRunsNoTestsOfTheModuleWithTheAssetsOfEnvtestIsRefused(t *tes
 	}
 }
 
-var (
-	assetsLineOfTheTestRule = regexp.MustCompile(`^\tassets="\$\$\(go tool setup-envtest use \S+ -p path\)" && KUBEBUILDER_ASSETS="\$\$assets" go test \./\.\.\.$`)
-	ruleThatIgnoresFailures = regexp.MustCompile(`(?m)^ *\.IGNORE\b`)
-)
+var ignoreInTheMakefile = regexp.MustCompile(`(?m)^ *\.IGNORE\b`)
 
-func requireTheTestRuleToStopWhenSetupEnvtestFails(makefile []byte) error {
-	if ruleThatIgnoresFailures.Match(makefile) {
-		return errors.New("the Makefile has .IGNORE, with which make goes on past a failed line, so make verify passes whatever setup-envtest and the tests do")
+func requireTheMakefileToHaveNoIgnore(makefile []byte) error {
+	if ignoreInTheMakefile.Match(makefile) {
+		return errors.New("the Makefile has .IGNORE, with which make goes on past the failed lines of the recipes that it names, or of all of them: make verify passes whatever they find, and the verify job of ci.yml sees only the failure of the test rule")
 	}
-	for _, rule := range targetRule.FindAllSubmatch(makefile, -1) {
-		if string(rule[1]) != "test" {
-			continue
-		}
-		for line := range bytes.SplitSeq(rule[2], []byte("\n")) {
-			if assetsLineOfTheTestRule.Match(line) {
-				return nil
-			}
-		}
-		return errors.New("no line of the test rule has, right after its tab, the assets of setup-envtest and the go test of every package of the module that runs only when it succeeds: a - before it makes make ignore its failure")
-	}
-	return errors.New("the Makefile has no rule test")
+	return nil
 }
 
-func TestMakeVerifyRunsATestRuleThatStopsWhenSetupEnvtestFails(t *testing.T) {
-	makefile, err := os.ReadFile("../../Makefile")
+func TestTheMakefileHasNoIgnore(t *testing.T) {
+	makefile, err := os.ReadFile(filepath.Join(root, "Makefile"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := requireTheTestRuleToStopWhenSetupEnvtestFails(makefile); err != nil {
+	if err := requireTheMakefileToHaveNoIgnore(makefile); err != nil {
 		t.Fatal(err)
 	}
 }
 
-func TestAVerifyWhoseTestRuleMakeMayIgnoreAFailureOfIsRefused(t *testing.T) {
-	const (
-		module = "\tassets=\"$$(go tool setup-envtest use $(ENVTEST_K8S_VERSION) -p path)\" && KUBEBUILDER_ASSETS=\"$$assets\" go test ./...\n"
-		api    = "\tcd api && go test ./...\n"
-	)
+func TestAMakefileWithIgnoreIsRefused(t *testing.T) {
+	const rules = "lint:\n\tgolangci-lint run ./...\ntest:\n\tgo test ./...\n"
 	cases := []struct {
 		name, makefile, want string
 	}{
-		{"the assets for the module and none for the API's", "test:\n" + module + api, ""},
-		{"the assets after the API's", "test:\n" + api + module, ""},
-		{"a comment on the rule", "test: ## unit and envtest tests\n" + module + api, ""},
-		{"a target after the test", "test:\n" + module + "components:\n\t-go run ./test/components\n", ""},
-		{"a version of Kubernetes written out", "test:\n" + strings.Replace(module, "$(ENVTEST_K8S_VERSION)", "1.35.0", 1) + api, ""},
-		{"a comment that names .IGNORE", "# .IGNORE: test\ntest:\n" + module + api, ""},
-		{"a recipe line that names .IGNORE", "test:\n" + module + "\techo .IGNORE: test\n", ""},
-		{"a dash before the assets", "test:\n\t-" + module[1:] + api, "no line of the test rule"},
-		{"a dash after an at sign", "test:\n\t@-" + module[1:] + api, "no line of the test rule"},
-		{"an at sign after a dash", "test:\n\t-@" + module[1:] + api, "no line of the test rule"},
-		{".IGNORE for the test target", ".IGNORE: test\n.PHONY: test\ntest:\n" + module + api, "has .IGNORE"},
-		{".IGNORE for every target", "test:\n" + module + api + ".IGNORE:\n", "has .IGNORE"},
-		{".IGNORE with a space before its colon", ".IGNORE : test\ntest:\n" + module + api, "has .IGNORE"},
-		{".IGNORE after a space", " .IGNORE: test\ntest:\n" + module + api, "has .IGNORE"},
-		{"no assets", "test:\n\tgo test ./...\n" + api, "no line of the test rule"},
-		{"a semicolon where the && was", "test:\n\tassets=\"$$(go tool setup-envtest use $(ENVTEST_K8S_VERSION) -p path)\"; KUBEBUILDER_ASSETS=\"$$assets\" go test ./...\n" + api, "no line of the test rule"},
-		{"a failure of go test that the line hides", "test:\n" + strings.Replace(module, "\n", " || true\n", 1) + api, "no line of the test rule"},
-		{"a part of the module", "test:\n" + strings.Replace(module, "./...", "./internal/...", 1) + api, "no line of the test rule"},
-		{"the assets in another rule", "verify:\n" + module + "test:\n" + api, "no line of the test rule"},
-		{"no test rule", "verify:\n" + module, "no rule test"},
+		{"no .IGNORE", rules, ""},
+		{"a comment that names .IGNORE", "# .IGNORE: test\n" + rules, ""},
+		{"a recipe line that names .IGNORE", rules + "\techo .IGNORE: test\n", ""},
+		{".IGNORE for the test target", ".IGNORE: test\n" + rules, "has .IGNORE"},
+		{".IGNORE for the lint target", ".IGNORE: lint\n" + rules, "has .IGNORE"},
+		{".IGNORE for the verify target", ".IGNORE: verify\n" + rules, "has .IGNORE"},
+		{".IGNORE for every target", rules + ".IGNORE:\n", "has .IGNORE"},
+		{".IGNORE with a space before its colon", ".IGNORE : lint\n" + rules, "has .IGNORE"},
+		{".IGNORE after a space", " .IGNORE: lint\n" + rules, "has .IGNORE"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			err := requireTheTestRuleToStopWhenSetupEnvtestFails([]byte(c.makefile))
+			err := requireTheMakefileToHaveNoIgnore([]byte(c.makefile))
 			switch {
 			case c.want == "" && err != nil:
 				t.Fatalf("want accepted, got %v", err)
