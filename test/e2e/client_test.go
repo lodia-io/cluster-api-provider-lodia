@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"slices"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -92,17 +93,14 @@ func webhookNotReady(err error) bool {
 
 func deploymentsAvailable(ctx context.Context, c client.Reader, namespace string, bound, interval time.Duration, names ...string) error {
 	for _, name := range names {
-		if err := deploymentAvailableWithin(ctx, c, client.ObjectKey{Namespace: namespace, Name: name}, bound, interval); err != nil {
+		bounded, cancel := within(ctx, bound)
+		err := endedBy(bounded, wait.PollUntilContextCancel(bounded, interval, true, deploymentAvailable(c, client.ObjectKey{Namespace: namespace, Name: name})))
+		cancel()
+		if err != nil {
 			return fmt.Errorf("deployment %s/%s is not Available: %w", namespace, name, err)
 		}
 	}
 	return nil
-}
-
-func deploymentAvailableWithin(ctx context.Context, c client.Reader, key client.ObjectKey, bound, interval time.Duration) error {
-	bounded, cancel := within(ctx, bound)
-	defer cancel()
-	return endedBy(bounded, wait.PollUntilContextCancel(bounded, interval, true, deploymentAvailable(c, key)))
 }
 
 func shortenTheDiscovery(t *testing.T, timeout time.Duration) {
@@ -369,5 +367,33 @@ func TestDeploymentsAreAvailableWhenEachBecomesAvailableWithinItsBoundAndTheFail
 			}
 			requireNamed(t, err, c.wantErr...)
 		})
+	}
+}
+
+func TestEachDeploymentHasABoundOfItsOwn(t *testing.T) {
+	const bound, becomes = 300 * time.Millisecond, 200 * time.Millisecond
+	var mu sync.Mutex
+	firstRead := map[string]time.Time{}
+	deployment := func(name string) *appsv1.Deployment {
+		return &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Namespace: "ns", Name: name}}
+	}
+	reads := interceptor.NewClient(fake.NewClientBuilder().WithObjects(deployment("a"), deployment("b")).Build(), interceptor.Funcs{
+		Get: func(ctx context.Context, w client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+			if err := w.Get(ctx, key, obj, opts...); err != nil {
+				return err
+			}
+			mu.Lock()
+			defer mu.Unlock()
+			if _, ok := firstRead[key.Name]; !ok {
+				firstRead[key.Name] = time.Now()
+			}
+			if time.Since(firstRead[key.Name]) >= becomes {
+				obj.(*appsv1.Deployment).Status.Conditions = []appsv1.DeploymentCondition{{Type: appsv1.DeploymentAvailable, Status: corev1.ConditionTrue}}
+			}
+			return nil
+		},
+	})
+	if err := deploymentsAvailable(t.Context(), reads, "ns", bound, 10*time.Millisecond, "a", "b"); err != nil {
+		t.Fatalf("two Deployments that each become Available after %s, within a bound of %s each, failed: %v", becomes, bound, err)
 	}
 }

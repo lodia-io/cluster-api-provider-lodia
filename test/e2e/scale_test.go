@@ -819,7 +819,7 @@ var (
 	}
 	contextsThatEnd          = []string{"within"}
 	waitsOnTheCallersContext = []string{
-		"pollUntil", "apply", "applyRelease", "applyTheCluster", "upgradeProvider", "available", "installCertManager", "deploymentsAvailable", "deploymentAvailableWithin",
+		"pollUntil", "apply", "applyTheCluster", "upgradeProvider", "installCertManager", "deploymentsAvailable",
 		"clusterctlproxy.MoveUntilBlocked",
 	}
 	waitsAStepMayCall = []string{"docker", "clusterContainers", "kindnetOf", "deleteTheCluster", "requireGone"}
