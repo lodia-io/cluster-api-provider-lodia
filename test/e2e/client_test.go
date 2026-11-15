@@ -46,10 +46,6 @@ var clientScheme = func() *runtime.Scheme {
 	return s
 }()
 
-// envconf's Client builds, on every call, a client of a config that keeps client-go's rate limiter
-// https://github.com/kubernetes-sigs/e2e-framework/blob/v0.7.0/pkg/envconf/config.go#L130-L143
-// https://github.com/kubernetes-sigs/e2e-framework/blob/v0.7.0/klient/client.go#L60-L67
-// unless WithClient gave it one.
 func newEnvconf(kubeconfig string) (*envconf.Config, error) {
 	restConfig, err := conf.New(kubeconfig)
 	if err != nil {
