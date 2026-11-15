@@ -120,8 +120,8 @@ func problemsWithTheContextOfTheInstall(fset *token.FileSet, fn *ast.FuncDecl) [
 				if assigned != nil {
 					made, _ = assigned.Lhs[0].(*ast.Ident)
 				}
-				if callee != "endAfter" || !identNamed(argumentOf(n, 0), suite) || !isField || !isBoundsField(field, "bounds") || field.Sel.Name != "Install" || made == nil || bounded != "" || slices.ContainsFunc(stack, repeats) {
-					problems = append(problems, problemAt(fset, n, "%s makes a context of %s, whose one context has to be made by endAfter(%s, bounds.Install)", callee, fn.Name.Name, suite))
+				if callee != "endAfter" || !identNamed(argumentOf(n, 0), suite) || !isField || !isBoundsField(field, "suiteBounds") || field.Sel.Name != "Install" || made == nil || bounded != "" || slices.ContainsFunc(stack, repeats) {
+					problems = append(problems, problemAt(fset, n, "%s makes a context of %s, whose one context has to be made by endAfter(%s, suiteBounds.Install)", callee, fn.Name.Name, suite))
 					break
 				}
 				bounded = made.Name
@@ -135,9 +135,9 @@ func problemsWithTheContextOfTheInstall(fset *token.FileSet, fn *ast.FuncDecl) [
 	})
 	switch {
 	case bounded == "":
-		problems = append(problems, problemAt(fset, fn, "%s makes no context with endAfter(%s, bounds.Install) for its waits to run on", fn.Name.Name, suite))
+		problems = append(problems, problemAt(fset, fn, "%s makes no context with endAfter(%s, suiteBounds.Install) for its waits to run on", fn.Name.Name, suite))
 	case waits == 0:
-		problems = append(problems, problemAt(fset, fn, "no wait of %s runs on the context that endAfter(%s, bounds.Install) made", fn.Name.Name, suite))
+		problems = append(problems, problemAt(fset, fn, "no wait of %s runs on the context that endAfter(%s, suiteBounds.Install) made", fn.Name.Name, suite))
 	}
 	return problems
 }
@@ -374,7 +374,7 @@ func TestTheFailureOfACallOnAContextThatEndAfterMadeGoesThroughCutShort(t *testi
 	}
 }
 
-const theInstall = `bounded, cancel := endAfter(ctx, bounds.Install)
+const theInstall = `bounded, cancel := endAfter(ctx, suiteBounds.Install)
 defer cancel()
 for _, component := range components {
 	start := time.Now()
@@ -395,25 +395,25 @@ func TestTheCheckOfTheInstallRefusesAWaitOnAContextThatNoBoundOfTheInstallEnds(t
 		{"a second wait on the bounded context", setup, "fmt.Printf", "component.verify(bounded, cfg)\nfmt.Printf", ""},
 		{"a call that takes no context", setup, "return ctx, nil", "component.report(cfg)\nreturn ctx, nil", ""},
 		{"the dump on the suite's own context", setup, "dump(ctx, cfg)", "dump(ctx, cfg)\ndump(ctx, cfg)", ""},
-		{"context.WithTimeout in place of endAfter", setup, "endAfter(ctx, bounds.Install)", "context.WithTimeout(ctx, bounds.Install)", "context.WithTimeout makes a context of install"},
-		{"endAfter with another field", setup, "bounds.Install", "bounds.Dump", "endAfter makes a context of install"},
-		{"endAfter with a literal", setup, "bounds.Install", "15*time.Minute", "endAfter makes a context of install"},
+		{"context.WithTimeout in place of endAfter", setup, "endAfter(ctx, suiteBounds.Install)", "context.WithTimeout(ctx, suiteBounds.Install)", "context.WithTimeout makes a context of install"},
+		{"endAfter with another field", setup, "suiteBounds.Install", "suiteBounds.Dump", "endAfter makes a context of install"},
+		{"endAfter with a literal", setup, "suiteBounds.Install", "15*time.Minute", "endAfter makes a context of install"},
 		{"endAfter on a context of another origin", setup, "endAfter(ctx", "endAfter(context.Background()", "endAfter makes a context of install"},
-		{"a second context that endAfter makes", setup, "for _, component", "again, stop := endAfter(ctx, bounds.Install)\nfor _, component", "endAfter makes a context of install"},
+		{"a second context that endAfter makes", setup, "for _, component", "again, stop := endAfter(ctx, suiteBounds.Install)\nfor _, component", "endAfter makes a context of install"},
 		{"a context made from the bounded one", setup, "for _, component", "inner, stop := context.WithCancel(bounded)\nfor _, component", "context.WithCancel makes a context of install"},
-		{"a context that endAfter makes and nothing keeps", setup, "bounded, cancel := endAfter(ctx, bounds.Install)\ndefer cancel()\n", "endAfter(ctx, bounds.Install)\n", "endAfter makes a context of install"},
+		{"a context that endAfter makes and nothing keeps", setup, "bounded, cancel := endAfter(ctx, suiteBounds.Install)\ndefer cancel()\n", "endAfter(ctx, suiteBounds.Install)\n", "endAfter makes a context of install"},
 		{"a second wait on context.Background()", setup, "return ctx, nil", "if err := component.verify(context.Background(), cfg); err != nil {\nreturn ctx, err\n}\nreturn ctx, nil", "context.Background makes a context of install"},
 		{"a second wait on context.TODO() through a variable", setup, "return ctx, nil", "fresh := context.TODO()\nif err := component.verify(fresh, cfg); err != nil {\nreturn ctx, err\n}\nreturn ctx, nil", "context.TODO makes a context of install"},
 		{"the only wait on context.Background()", setup, "component.install(bounded, cfg)", "component.install(context.Background(), cfg)", "context.Background makes a context of install"},
-		{"endAfter with a bound of another value", setup, "bounds.Install", "other.Install", "endAfter makes a context of install"},
-		{"a context made once for each component, in a range", setup, "bounded, cancel := endAfter(ctx, bounds.Install)\ndefer cancel()\nfor _, component := range components {\n", "for _, component := range components {\nbounded, cancel := endAfter(ctx, bounds.Install)\ndefer cancel()\n", "endAfter makes a context of install"},
-		{"a context made in a for", setup, "bounded, cancel := endAfter(ctx, bounds.Install)\ndefer cancel()\n", "for i := 0; i < 3; i++ {\nbounded, cancel := endAfter(ctx, bounds.Install)\ndefer cancel()\n}\n", "endAfter makes a context of install"},
-		{"a context made in a function literal", setup, "bounded, cancel := endAfter(ctx, bounds.Install)\ndefer cancel()\n", "run := func() {\nbounded, cancel := endAfter(ctx, bounds.Install)\ndefer cancel()\n}\n", "endAfter makes a context of install"},
+		{"endAfter with a bound of another value", setup, "suiteBounds.Install", "other.Install", "endAfter makes a context of install"},
+		{"a context made once for each component, in a range", setup, "bounded, cancel := endAfter(ctx, suiteBounds.Install)\ndefer cancel()\nfor _, component := range components {\n", "for _, component := range components {\nbounded, cancel := endAfter(ctx, suiteBounds.Install)\ndefer cancel()\n", "endAfter makes a context of install"},
+		{"a context made in a for", setup, "bounded, cancel := endAfter(ctx, suiteBounds.Install)\ndefer cancel()\n", "for i := 0; i < 3; i++ {\nbounded, cancel := endAfter(ctx, suiteBounds.Install)\ndefer cancel()\n}\n", "endAfter makes a context of install"},
+		{"a context made in a function literal", setup, "bounded, cancel := endAfter(ctx, suiteBounds.Install)\ndefer cancel()\n", "run := func() {\nbounded, cancel := endAfter(ctx, suiteBounds.Install)\ndefer cancel()\n}\n", "endAfter makes a context of install"},
 		{"a wait on the suite's own context", setup, "component.install(bounded, cfg)", "component.install(ctx, cfg)", "component.install is given the suite's own context"},
 		{"cutShort on the suite's own context", setup, "cutShort(bounded, err)", "cutShort(ctx, err)", "cutShort is given the suite's own context"},
 		{"the bounded context replaced by the suite's own", setup, "for _, component", "bounded = ctx\nfor _, component", "bounded is assigned again"},
-		{"no context made", setup, "bounded, cancel := endAfter(ctx, bounds.Install)\ndefer cancel()\n", "bounded := ctx\n", "install makes no context with endAfter(ctx, bounds.Install)"},
-		{"no wait on the bounded context", setup, "component.install(bounded, cfg)", "component.install(cfg)", "no wait of install runs on the context that endAfter(ctx, bounds.Install) made"},
+		{"no context made", setup, "bounded, cancel := endAfter(ctx, suiteBounds.Install)\ndefer cancel()\n", "bounded := ctx\n", "install makes no context with endAfter(ctx, suiteBounds.Install)"},
+		{"no wait on the bounded context", setup, "component.install(bounded, cfg)", "component.install(cfg)", "no wait of install runs on the context that endAfter(ctx, suiteBounds.Install) made"},
 		{"a function that testenv.Setup is handed by another name", "other", "return ctx, nil", "return ctx, nil", "testenv.Setup is handed other, which the files declare no function of"},
 		{"a function literal handed to testenv.Setup", "func() {}", "return ctx, nil", "return ctx, nil", "testenv.Setup is handed something but the name of a function"},
 		{"nothing handed to testenv.Setup", "", "return ctx, nil", "return ctx, nil", "no file hands a function to testenv.Setup"},

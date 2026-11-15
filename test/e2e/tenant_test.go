@@ -216,9 +216,9 @@ func returnsWithin(t *testing.T, limit time.Duration, what string, call func() e
 
 func shortenTheDump(t *testing.T, dump, tenant, workers time.Duration) {
 	t.Helper()
-	was, wasTenant, wasWorkers := bounds.Dump, tenantDumpBound, workerDumpBound
-	t.Cleanup(func() { bounds.Dump, tenantDumpBound, workerDumpBound = was, wasTenant, wasWorkers })
-	bounds.Dump, tenantDumpBound, workerDumpBound = dump, tenant, workers
+	was, wasTenant, wasWorkers := suiteBounds.Dump, tenantDumpBound, workerDumpBound
+	t.Cleanup(func() { suiteBounds.Dump, tenantDumpBound, workerDumpBound = was, wasTenant, wasWorkers })
+	suiteBounds.Dump, tenantDumpBound, workerDumpBound = dump, tenant, workers
 }
 
 func TestTheDumpOfATenantThatDoesNotAnswerEndsInItsBoundAndWritesTheWorkers(t *testing.T) {

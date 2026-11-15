@@ -42,7 +42,7 @@ func dump(ctx context.Context, cfg *envconf.Config) {
 }
 
 func install(ctx context.Context, cfg *envconf.Config) (context.Context, error) {
-	bounded, cancel := endAfter(ctx, bounds.Install)
+	bounded, cancel := endAfter(ctx, suiteBounds.Install)
 	defer cancel()
 	for _, component := range []struct {
 		name    string

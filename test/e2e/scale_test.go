@@ -833,7 +833,6 @@ var (
 		"time.Sleep", "time.After", "time.AfterFunc", "time.NewTimer", "time.NewTicker", "time.Tick",
 		"context.WithDeadline", "context.WithTimeoutCause", "context.WithDeadlineCause",
 	}
-	boundsOutsideTheJoinTest = []string{"Install", "Dump"}
 )
 
 func calleeOf(call *ast.CallExpr) string {
@@ -868,9 +867,10 @@ func isAWait(callee string) bool {
 // bound from the context it runs on to a context that a field of the owner ends
 // in the same step. It refuses the waits that bound themselves but for the two
 // that a step may call, whose bound the model holds per call (dockerFits), and
-// the dump, which only a teardown may call, since the model counts bounds.Dump
-// once. The fields outside bound no wait of the file.
-func problemsWithTheWaits(fset *token.FileSet, file *ast.File, owner string, fields, outside []string) []string {
+// the dump, which only a teardown may call, since the model counts
+// suiteBounds.Dump once, and every field of suiteBounds, which bounds the
+// install and the dump.
+func problemsWithTheWaits(fset *token.FileSet, file *ast.File, owner string, fields []string) []string {
 	var problems []string
 	problem := func(n ast.Node, format string, args ...any) {
 		problems = append(problems, fmt.Sprintf("%s: %s", fset.Position(n.Pos()), fmt.Sprintf(format, args...)))
@@ -950,7 +950,10 @@ func problemsWithTheWaits(fset *token.FileSet, file *ast.File, owner string, fie
 					problem(n, "%s waits without a field of bounds to bound it", callee)
 				}
 			case *ast.SelectorExpr:
-				if isBoundsField(n, owner) && !taken[n] {
+				switch {
+				case isBoundsField(n, "suiteBounds"):
+					problem(n, "suiteBounds.%s bounds the install or the dump, which no step waits on", n.Sel.Name)
+				case isBoundsField(n, owner) && !taken[n]:
 					problem(n, "%s.%s is not the bound of a wait that the test knows", owner, n.Sel.Name)
 				}
 			}
@@ -961,12 +964,8 @@ func problemsWithTheWaits(fset *token.FileSet, file *ast.File, owner string, fie
 		problems = append(problems, "the file holds no wait")
 	}
 	for _, field := range fields {
-		want := 1
-		if slices.Contains(outside, field) {
-			want = 0
-		}
-		if used[field] != want {
-			problems = append(problems, fmt.Sprintf("%s.%s bounds %d waits of the file, want %d", owner, field, used[field], want))
+		if used[field] != 1 {
+			problems = append(problems, fmt.Sprintf("%s.%s bounds %d waits of the file, want 1", owner, field, used[field]))
 		}
 	}
 	return problems
@@ -1026,28 +1025,27 @@ func fieldsOf(set any) []string {
 	return names
 }
 
-func requireEveryWaitBounded(t *testing.T, name string) {
+func requireEveryWaitBounded(t *testing.T, j job) {
 	t.Helper()
-	waited := waitedFiles[name]
-	for field, bound := range reflect.ValueOf(waited.set).Fields() {
+	for field, bound := range reflect.ValueOf(j.set).Fields() {
 		if bound.Int() <= 0 {
 			t.Errorf("the bound %s is %s", field.Name, bound)
 		}
 	}
 	fset := token.NewFileSet()
-	file, err := parser.ParseFile(fset, name, nil, 0)
+	file, err := parser.ParseFile(fset, j.file, nil, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, problem := range problemsWithTheWaits(fset, file, waited.owner, fieldsOf(waited.set), waited.outside) {
+	for _, problem := range problemsWithTheWaits(fset, file, j.owner, fieldsOf(j.set)) {
 		t.Error(problem)
 	}
 }
 
-func TestEveryWaitOfEveryWaitedFileIsBoundedByAFieldOfItsOwnBoundsThatNoOtherWaitTakes(t *testing.T) {
-	for _, name := range slices.Sorted(maps.Keys(waitedFiles)) {
-		t.Run(name, func(t *testing.T) {
-			requireEveryWaitBounded(t, name)
+func TestEveryWaitOfEveryJobsFileIsBoundedByAFieldOfItsOwnBoundsThatNoOtherWaitTakes(t *testing.T) {
+	for _, j := range jobs {
+		t.Run(j.file, func(t *testing.T) {
+			requireEveryWaitBounded(t, j)
 		})
 	}
 }
@@ -1073,7 +1071,7 @@ func TestTheCheckOfTheWaitsRefusesWhatBreaksTheSumOfTheBounds(t *testing.T) {
 		made[slices.Index(slices.Sorted(maps.Keys(boundArgumentOf)), maker)] = "bounded, cancel := " + call(maker, boundArgumentOf[maker], field[maker])
 		return strings.Join(made, "\n")
 	}
-	fields := []string{"Install"}
+	var fields []string
 	for i := range all {
 		fields = append(fields, string(rune('A'+i)))
 	}
@@ -1084,8 +1082,9 @@ func TestTheCheckOfTheWaitsRefusesWhatBreaksTheSumOfTheBounds(t *testing.T) {
 		{"nothing waits", "", "holds no wait"},
 		{"a field that bounds two waits", strings.Join(twice, "\n"), fmt.Sprintf("bounds.A bounds %d waits", len(twice))},
 		{"a field that bounds no wait", strings.Join(all[1:], "\n"), "bounds.A bounds 0 waits"},
-		{"the install's bound", strings.Join(all, "\n") + "\n" + call("until", 2, "bounds.Install"), "bounds.Install bounds 1 waits of the file, want 0"},
-		{"a bound that is not a wait's", strings.Join(all, "\n") + "\nother(ctx, bounds.Install)", "bounds.Install is not the bound of a wait"},
+		{"the install's bound", strings.Join(all, "\n") + "\n" + call("until", 2, "suiteBounds.Install"), "suiteBounds.Install bounds the install or the dump"},
+		{"the dump's bound, given to another call", strings.Join(all, "\n") + "\nother(ctx, suiteBounds.Dump)", "suiteBounds.Dump bounds the install or the dump"},
+		{"a bound that is not a wait's", strings.Join(all, "\n") + "\nother(ctx, bounds.Z)", "bounds.Z is not the bound of a wait"},
 		{"a field that bounds a wait, written as a sum", strings.Join(all[1:], "\n") + "\nuntil(ctx, t, bounds.A+time.Second)", "is bounded by something that is not a field of bounds"},
 		{"a wait without a bound", strings.Join(all, "\n") + "\nuntil(ctx, t)", "until takes a bound as its argument 3"},
 		{"a wait with a field of another value", strings.Join(all[1:], "\n") + "\nuntil(ctx, t, other.A)", "is bounded by something that is not a field of bounds"},
@@ -1142,13 +1141,13 @@ func TestTheCheckOfTheWaitsRefusesWhatBreaksTheSumOfTheBounds(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			source := "package p\nfunc TestX() {\n" + c.body + "\n}\nfunc until() { wait.PollUntilContextTimeout(); time.Sleep(); bounds.Install() }\n"
+			source := "package p\nfunc TestX() {\n" + c.body + "\n}\nfunc until() { wait.PollUntilContextTimeout(); time.Sleep() }\n"
 			fset := token.NewFileSet()
 			file, err := parser.ParseFile(fset, "x.go", source, 0)
 			if err != nil {
 				t.Fatal(err)
 			}
-			problems := strings.Join(problemsWithTheWaits(fset, file, "bounds", fields, []string{"Install"}), "\n")
+			problems := strings.Join(problemsWithTheWaits(fset, file, "bounds", fields), "\n")
 			switch {
 			case c.want == "" && problems != "":
 				t.Fatalf("want accepted, got %s", problems)
@@ -1160,7 +1159,7 @@ func TestTheCheckOfTheWaitsRefusesWhatBreaksTheSumOfTheBounds(t *testing.T) {
 }
 
 func TestTheCheckOfTheWaitsHoldsAFileToTheFieldsOfItsOwnBounds(t *testing.T) {
-	onlyA, aAndInstall, aAndB := []string{"A"}, []string{"A", "Install"}, []string{"A", "B"}
+	onlyA, aAndB := []string{"A"}, []string{"A", "B"}
 	cases := []struct {
 		name, owner, body string
 		fields            []string
@@ -1172,7 +1171,7 @@ func TestTheCheckOfTheWaitsHoldsAFileToTheFieldsOfItsOwnBounds(t *testing.T) {
 		{"a wait bounded by a field of the upgrade's set in the join test", "bounds", "until(ctx, t, upgradeBounds.A, w, f)", onlyA, "is bounded by something that is not a field of bounds"},
 		{"a field of the file's own set that bounds nothing", "upgradeBounds", "until(ctx, t, upgradeBounds.A, w, f)\nother(ctx, upgradeBounds.A)", onlyA, "upgradeBounds.A is not the bound of a wait"},
 		{"a field of another set that bounds nothing", "upgradeBounds", "until(ctx, t, upgradeBounds.A, w, f)\nother(ctx, bounds.A)", onlyA, ""},
-		{"a field outside the file that bounds a wait of it", "upgradeBounds", "until(ctx, t, upgradeBounds.A, w, f)\nuntil(ctx, t, upgradeBounds.Install, w, f)", aAndInstall, "upgradeBounds.Install bounds 1 waits of the file, want 0"},
+		{"a wait that takes the suite's bound of the install", "upgradeBounds", "until(ctx, t, upgradeBounds.A, w, f)\nuntil(ctx, t, suiteBounds.Install, w, f)", onlyA, "suiteBounds.Install bounds the install or the dump"},
 		{"a field that bounds no wait of the file", "upgradeBounds", "until(ctx, t, upgradeBounds.A, w, f)", aAndB, "upgradeBounds.B bounds 0 waits of the file, want 1"},
 		{"a wait on a context that a field of the file's own set ends", "upgradeBounds", "bounded, cancel := endAfter(ctx, upgradeBounds.A)\npollUntil(bounded)", onlyA, ""},
 		{"a wait on a context that a field of another set ends", "upgradeBounds", "bounded, cancel := endAfter(ctx, bounds.A)\npollUntil(bounded)", onlyA, "pollUntil runs on a context that no field of bounds ends in this step"},
@@ -1185,7 +1184,7 @@ func TestTheCheckOfTheWaitsHoldsAFileToTheFieldsOfItsOwnBounds(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			problems := strings.Join(problemsWithTheWaits(fset, file, c.owner, c.fields, []string{"Install"}), "\n")
+			problems := strings.Join(problemsWithTheWaits(fset, file, c.owner, c.fields), "\n")
 			switch {
 			case c.want == "" && problems != "":
 				t.Fatalf("want accepted, got %s", problems)
@@ -1200,7 +1199,10 @@ func TestTheFieldsOfASetAreItsOwn(t *testing.T) {
 	if got := fieldsOf(struct{ A, B, C time.Duration }{}); !slices.Equal(got, []string{"A", "B", "C"}) {
 		t.Errorf("got %v", got)
 	}
-	if got := fieldsOf(boundSet{}); !slices.Contains(got, "Install") || !slices.Contains(got, "Stable") {
+	if got := fieldsOf(boundSet{}); slices.Contains(got, "Install") || slices.Contains(got, "Dump") || !slices.Contains(got, "Stable") {
+		t.Errorf("got %v", got)
+	}
+	if got := fieldsOf(suiteBoundSet{}); !slices.Equal(got, []string{"Install", "Dump"}) {
 		t.Errorf("got %v", got)
 	}
 }

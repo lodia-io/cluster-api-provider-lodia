@@ -103,7 +103,7 @@ func dumpCluster(ctx context.Context, cfg *envconf.Config, dir string) error {
 }
 
 func dumpBounded(ctx context.Context, cfg *envconf.Config, c client.Client, dir string) error {
-	ctx, cancel := context.WithTimeout(ctx, bounds.Dump)
+	ctx, cancel := context.WithTimeout(ctx, suiteBounds.Dump)
 	defer cancel()
 	return dumpAll(ctx, cfg, c, dir, tenantDumpBound, workerDumpBound)
 }
