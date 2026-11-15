@@ -815,14 +815,14 @@ var (
 	}
 	contextsThatEnd          = []string{"endAfter"}
 	waitsOnTheCallersContext = []string{
-		"pollUntil", "apply", "applyRelease", "available", "installCertManager", "deploymentsAvailable", "deploymentAvailableWithin",
+		"pollUntil", "apply", "applyRelease", "applyTheCluster", "upgradeProvider", "available", "installCertManager", "deploymentsAvailable", "deploymentAvailableWithin",
 		"clusterctlproxy.MoveUntilBlocked",
 	}
-	waitsAStepMayCall = []string{"docker", "clusterContainers"}
+	waitsAStepMayCall = []string{"docker", "clusterContainers", "kindnetOf", "deleteTheCluster", "requireGone"}
 	waitsOfTheirOwn   = []string{
 		"dump", "dumpBounded", "dumpTenant", "dumpWorkers", "dumpAll", "dumpCluster", "install", "installLodia", "installProviders", "ko", "toolOutput", "renderProvider", "lodiaProvider",
 		"createWhenWebhooksAnswer", "gatedServer", "gatedTenant", "tenantThatNeverAnswers", "tenantThatNeverAnswersApis",
-		"managementThatHolds", "requestsOfTheDump", "returnsWithin", "dockerCalls",
+		"managementThatHolds", "requestsOfTheDump", "returnsWithin", "dockerCalls", "lodiaProviders",
 	}
 	waitsWithoutABound = []string{
 		"time.Sleep", "time.After", "time.AfterFunc", "time.NewTimer", "time.NewTicker", "time.Tick",
@@ -1040,6 +1040,10 @@ func requireEveryWaitBounded(t *testing.T, name, owner string, set any, outside 
 
 func TestEveryWaitOfTheJoinTestIsBoundedByAFieldOfTheBoundsThatNoOtherWaitTakes(t *testing.T) {
 	requireEveryWaitBounded(t, "join_test.go", "bounds", bounds, boundsOutsideTheJoinTest)
+}
+
+func TestEveryWaitOfTheUpgradeTestIsBoundedByAFieldOfItsOwnBoundsThatNoOtherWaitTakes(t *testing.T) {
+	requireEveryWaitBounded(t, "upgrade_test.go", "upgradeBounds", upgradeBounds, nil)
 }
 
 func TestTheCheckOfTheWaitsRefusesWhatBreaksTheSumOfTheBounds(t *testing.T) {

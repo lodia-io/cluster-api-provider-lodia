@@ -1,5 +1,6 @@
 ENVTEST_K8S_VERSION ?= 1.35.0
 E2E_CLUSTER ?= capl-e2e
+E2E_UPGRADE_CLUSTER ?= capl-e2e-upgrade
 E2E_DIR = $(CURDIR)/work/e2e/$(E2E_CLUSTER)
 LODIA_DIR = $(CURDIR)/work/lodia
 PIN_DIR = $(CURDIR)/work/pin
@@ -32,6 +33,7 @@ generate: ## regenerate deepcopy functions, the CRDs in api/crds with the copy k
 lint:
 	golangci-lint run ./...
 	golangci-lint run --build-tags e2e ./test/e2e/...
+	golangci-lint run --build-tags e2e,upgrade ./test/e2e/...
 	cd api && golangci-lint run ./...
 
 .PHONY: test
@@ -130,5 +132,16 @@ e2e: e2e-cluster ## the e2e suite, on a kind cluster of its own that e2e-cluster
 	go tool kind create cluster --name $(E2E_CLUSTER) --kubeconfig $(E2E_DIR)/kubeconfig --config test/e2e/testdata/kind.yaml
 	rm -rf $(E2E_DIR)/artifacts
 	$(REMOVE_WORKERS) && E2E_KUBECONFIG=$(E2E_DIR)/kubeconfig go test -v -tags e2e -count=1 -timeout 64m ./test/e2e/...; status=$$?; \
+	$(REMOVE_WORKERS) || status=1; \
+	go tool kind delete cluster --name $(E2E_CLUSTER) --kubeconfig $(E2E_DIR)/kubeconfig; exit $$status
+
+.PHONY: e2e-upgrade
+e2e-upgrade: E2E_CLUSTER = $(E2E_UPGRADE_CLUSTER)
+e2e-upgrade: e2e-cluster ## the upgrade e2e: the previous release that test/pin names installed through clusterctl, a worker that joins, and clusterctl's upgrade to the tree's build, on a kind cluster of its own that e2e-cluster accepts, that it deletes afterwards with the containers of the Cluster the suite creates
+	$(MAKE) --no-print-directory e2e-lodia
+	mkdir -p $(E2E_DIR)
+	go tool kind create cluster --name $(E2E_CLUSTER) --kubeconfig $(E2E_DIR)/kubeconfig --config test/e2e/testdata/kind.yaml
+	rm -rf $(E2E_DIR)/artifacts
+	$(REMOVE_WORKERS) && E2E_KUBECONFIG=$(E2E_DIR)/kubeconfig go test -v -tags e2e,upgrade -count=1 -timeout 46m ./test/e2e/...; status=$$?; \
 	$(REMOVE_WORKERS) || status=1; \
 	go tool kind delete cluster --name $(E2E_CLUSTER) --kubeconfig $(E2E_DIR)/kubeconfig; exit $$status

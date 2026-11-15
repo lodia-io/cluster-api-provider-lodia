@@ -218,11 +218,11 @@ func installProviders(ctx context.Context, cfg *envconf.Config) error {
 		}
 		providers = append(providers, clusterctlProvider{p.name, p.kind, p.from.version(), components, metadata})
 	}
-	lodia, err := lodiaProvider(ctx, cfg)
+	lodia, installed, err := lodiaProviders(ctx, cfg)
 	if err != nil {
 		return err
 	}
-	providers = append(providers, lodia)
+	providers = append(providers, lodia...)
 	var components [][]byte
 	for _, p := range providers {
 		components = append(components, p.components)
@@ -246,7 +246,7 @@ func installProviders(ctx context.Context, cfg *envconf.Config) error {
 		CoreProvider:            "cluster-api",
 		BootstrapProviders:      []string{"kubeadm"},
 		InfrastructureProviders: []string{"docker"},
-		ControlPlaneProviders:   []string{"lodia"},
+		ControlPlaneProviders:   []string{installed},
 		WaitProviders:           true,
 		WaitProviderTimeout:     providerWait,
 	}); err != nil {

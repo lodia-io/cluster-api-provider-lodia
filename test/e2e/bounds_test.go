@@ -59,6 +59,25 @@ var bounds = boundSet{
 	Stable:             2 * time.Minute,
 }
 
+type upgradeBoundSet struct {
+	Apply, Initialized, Kindnet, Running, Ready, Available, Upgrade, Leader, Paused, Settled, Stable, Deleted time.Duration
+}
+
+var upgradeBounds = upgradeBoundSet{
+	Apply:       time.Minute,
+	Initialized: 4 * time.Minute,
+	Kindnet:     time.Minute,
+	Running:     3 * time.Minute,
+	Ready:       3 * time.Minute,
+	Available:   time.Minute,
+	Upgrade:     4 * time.Minute,
+	Leader:      2 * time.Minute,
+	Paused:      30 * time.Second,
+	Settled:     2 * time.Minute,
+	Stable:      2 * time.Minute,
+	Deleted:     3 * time.Minute,
+}
+
 const (
 	// callsWithoutBound covers the calls between the waits, of which the first
 	// to fail ends the test, and what a poll overshoots by.
@@ -100,14 +119,16 @@ var goTestTimeout = regexp.MustCompile(`-timeout (\d+)m\b`)
 // carries the build tags of the job's test and the -timeout the model fits
 // under.
 func targetTimeout(makefile []byte, target, tags string) (time.Duration, error) {
-	recipe := regexp.MustCompile(`(?m)^` + regexp.QuoteMeta(target) + `:.*\n((?:\t.*(?:\n|$)|\n)*)`).FindSubmatch(makefile)
-	if recipe == nil {
+	rules := regexp.MustCompile(`(?m)^`+regexp.QuoteMeta(target)+`:.*\n((?:\t.*(?:\n|$)|\n)*)`).FindAllSubmatch(makefile, -1)
+	if rules == nil {
 		return 0, fmt.Errorf("the Makefile has no target %s", target)
 	}
 	var lines [][]byte
-	for line := range bytes.SplitSeq(recipe[1], []byte("\n")) {
-		if bytes.Contains(line, []byte("go test")) {
-			lines = append(lines, line)
+	for _, rule := range rules {
+		for line := range bytes.SplitSeq(rule[1], []byte("\n")) {
+			if bytes.Contains(line, []byte("go test")) {
+				lines = append(lines, line)
+			}
 		}
 	}
 	if len(lines) != 1 {
@@ -124,7 +145,7 @@ func targetTimeout(makefile []byte, target, tags string) (time.Duration, error) 
 	return time.Duration(n) * time.Minute, err
 }
 
-func total(b boundSet) time.Duration {
+func total(b any) time.Duration {
 	var sum time.Duration
 	for _, bound := range reflect.ValueOf(b).Fields() {
 		sum += time.Duration(bound.Int())
@@ -234,6 +255,7 @@ type job struct {
 
 var jobs = []job{
 	{"e2e", "e2e", "e2e", total(bounds)},
+	{"e2e-upgrade", "e2e-upgrade", "e2e,upgrade", bounds.Install + bounds.Dump + total(upgradeBounds)},
 }
 
 func TestTheBoundsFitUnderTheTimeouts(t *testing.T) {
@@ -299,16 +321,19 @@ func TestTheBoundsFitUnderTheTimeouts(t *testing.T) {
 }
 
 func TestTotalAddsEveryBound(t *testing.T) {
-	var b boundSet
-	var want time.Duration
-	fields := reflect.ValueOf(&b).Elem()
-	for i := range fields.NumField() {
-		d := time.Duration(1<<i) * time.Minute
-		fields.Field(i).SetInt(int64(d))
-		want += d
-	}
-	if got := total(b); got != want {
-		t.Fatalf("total is %s, the bounds add up to %s", got, want)
+	for name, b := range map[string]any{"the join test's": &boundSet{}, "the upgrade test's": &upgradeBoundSet{}} {
+		t.Run(name, func(t *testing.T) {
+			var want time.Duration
+			fields := reflect.ValueOf(b).Elem()
+			for i := range fields.NumField() {
+				d := time.Duration(1<<i) * time.Minute
+				fields.Field(i).SetInt(int64(d))
+				want += d
+			}
+			if got := total(reflect.ValueOf(b).Elem().Interface()); got != want {
+				t.Fatalf("total is %s, the bounds add up to %s", got, want)
+			}
+		})
 	}
 }
 
@@ -503,6 +528,8 @@ func TestTheTimeoutIsTheOneOfTheTargetThatRunsTheTestsOfTheJob(t *testing.T) {
 		{"a target after it with a timeout", "e2e:\n" + suite + "test:\n\tgo test -timeout 99m ./...\n", "e2e", "e2e", 64 * time.Minute, ""},
 		{"the flags in another order", "e2e:\n\tgo test -timeout 30m -tags e2e ./test/e2e/...\n", "e2e", "e2e", 30 * time.Minute, ""},
 		{"the last line without a newline", "e2e:\n\tgo test -tags e2e -timeout 30m ./test/e2e/...", "e2e", "e2e", 30 * time.Minute, ""},
+		{"a variable of the target before its rule", "e2e-upgrade: E2E_CLUSTER = x\ne2e-upgrade: e2e-cluster\n" + upgrade, "e2e-upgrade", "e2e,upgrade", 46 * time.Minute, ""},
+		{"a variable of the target after its rule", "e2e-upgrade: e2e-cluster\n" + upgrade + "e2e-upgrade: E2E_CLUSTER = x\n", "e2e-upgrade", "e2e,upgrade", 46 * time.Minute, ""},
 		{"a comment that mentions the target", "# the e2e: target\ntest:\n\tgo test -timeout 5m -tags e2e ./...\ne2e:\n" + suite, "e2e", "e2e", 64 * time.Minute, ""},
 		{"a target with prerequisites and a comment", "e2e: e2e-cluster ## the suite\n" + suite, "e2e", "e2e", 64 * time.Minute, ""},
 		{"a blank line inside the recipe", "e2e:\n\techo a\n\n" + suite, "e2e", "e2e", 64 * time.Minute, ""},

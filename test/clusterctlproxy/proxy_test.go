@@ -527,7 +527,7 @@ func TestTheListingHoldsTheImportsOfTestFilesAndOfTheTagsItIsGiven(t *testing.T)
 }
 
 func TestNoPackageOfTheDependencyGraphBuildsClusterctlClientsFromAPath(t *testing.T) {
-	for name, tags := range map[string]string{"untagged": "", "e2e": "e2e"} {
+	for name, tags := range map[string]string{"untagged": "", "e2e": "e2e", "upgrade": "e2e,upgrade"} {
 		t.Run(name, func(t *testing.T) {
 			for _, f := range buildingClustersFromAPath(listPackages(t, moduleRoot, tags)) {
 				t.Error(f)
