@@ -5,6 +5,7 @@ package build_test
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -82,6 +83,52 @@ func TestAVerifyThatRunsNoTestsOfTheModuleWithTheAssetsOfEnvtestIsRefused(t *tes
 }
 
 var ignoreInTheMakefile = regexp.MustCompile(`(?m)^ *\.IGNORE\b`)
+
+func requireTheMakeOfTheTestsToTakeNoVariable(plan string) error {
+	for line := range strings.SplitSeq(plan, "\n") {
+		words := strings.Fields(line)
+		if len(words) == 0 || filepath.Base(words[0]) != "make" || !slices.Contains(words, "test") {
+			continue
+		}
+		if i := slices.IndexFunc(words, func(w string) bool { return strings.Contains(w, "=") }); i >= 0 {
+			return fmt.Errorf("the make that verify runs the tests in takes %s on its command line, which reaches every make that the tests run, through MAKEFLAGS and the environment: %s", words[i], line)
+		}
+		return nil
+	}
+	return errors.New("make -n verify runs no make that makes test")
+}
+
+func TestTheMakeOfTheTestsInVerifyTakesNoVariable(t *testing.T) {
+	cmd := exec.CommandContext(t.Context(), "make", "--no-print-directory", "verify")
+	cmd.Dir = root
+	if err := requireTheMakeOfTheTestsToTakeNoVariable(recipeOf(t, cmd)); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestAVerifyThatGivesTheMakeOfTheTestsAVariableIsRefused(t *testing.T) {
+	cases := []struct {
+		name, plan, want string
+	}{
+		{"no variable", "go mod tidy -diff\nmake --no-print-directory components lint test verify-release\n", ""},
+		{"the make by its path", "/usr/bin/make --no-print-directory lint test verify-release\n", ""},
+		{"a variable after the targets", "make --no-print-directory lint test release-components KO_PUSH=false\n", "takes KO_PUSH=false"},
+		{"a variable before the targets", "/usr/bin/make IMAGE_TAG=v0.0.0-verify lint test\n", "takes IMAGE_TAG=v0.0.0-verify"},
+		{"a variable on a make that does not make test", "make --no-print-directory generate GENERATED=x\nmake lint test\n", ""},
+		{"no make that makes test", "make --no-print-directory lint\n", "runs no make that makes test"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			err := requireTheMakeOfTheTestsToTakeNoVariable(c.plan)
+			switch {
+			case c.want == "" && err != nil:
+				t.Fatalf("want accepted, got %v", err)
+			case c.want != "" && (err == nil || !strings.Contains(err.Error(), c.want)):
+				t.Fatalf("want an error with %q, got %v", c.want, err)
+			}
+		})
+	}
+}
 
 func requireTheMakefileToHaveNoIgnore(makefile []byte) error {
 	if ignoreInTheMakefile.Match(makefile) {

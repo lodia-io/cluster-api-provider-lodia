@@ -111,7 +111,13 @@ verify: ## the check that says a change is done
 	[ "$$before" = "$$(cat $(GENERATED) | cksum)" ] || { echo "make generate changed the generated files: review and commit them"; exit 1; }
 	go mod tidy -diff
 	cd api && go mod tidy -diff
-	$(MAKE) --no-print-directory components upgrade-components metadata lint test release-components release-image KO_PUSH=false IMAGE_TAG=v0.0.0-verify
+	$(MAKE) --no-print-directory components upgrade-components metadata lint test verify-release
+
+# A variable on the command line of verify's make would reach, through MAKEFLAGS and the environment, every make that the tests of make test run.
+.PHONY: verify-release
+verify-release: KO_PUSH = false
+verify-release: IMAGE_TAG = v0.0.0-verify
+verify-release: release-components release-image ## the release's render and the check of its image, with no push
 
 # LC_ALL=C: a range in a case pattern follows the locale, and on macOS en_US.UTF-8 puts A in a-z.
 .PHONY: e2e-cluster
