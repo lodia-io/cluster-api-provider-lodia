@@ -25,4 +25,3 @@ rules:
   - leases
   verbs:
   - get
-  - update
