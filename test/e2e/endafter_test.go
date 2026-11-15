@@ -26,15 +26,27 @@ func identNamed(e ast.Expr, name string) bool {
 }
 
 func contextParameterOf(fn *ast.FuncDecl) string {
-	if len(fn.Type.Params.List) == 0 || len(fn.Type.Params.List[0].Names) == 0 {
-		return ""
+	for _, field := range fn.Type.Params.List {
+		if kind, ok := field.Type.(*ast.SelectorExpr); ok && identNamed(kind.X, "context") && kind.Sel.Name == "Context" && len(field.Names) > 0 {
+			return field.Names[0].Name
+		}
 	}
-	return fn.Type.Params.List[0].Names[0].Name
+	return ""
 }
 
 func isAContextMaker(callee string) bool {
-	return callee == "endAfter" || strings.HasPrefix(callee, "context.With")
+	return callee == "endAfter" || strings.HasPrefix(callee, "context.")
 }
+
+func repeats(n ast.Node) bool {
+	switch n.(type) {
+	case *ast.ForStmt, *ast.RangeStmt, *ast.FuncLit:
+		return true
+	}
+	return false
+}
+
+var contextsThatEndByADeadline = []string{"context.WithTimeout", "context.WithTimeoutCause", "context.WithDeadline", "context.WithDeadlineCause"}
 
 func problemAt(fset *token.FileSet, n ast.Node, format string, args ...any) string {
 	return fmt.Sprintf("%s: %s", fset.Position(n.Pos()), fmt.Sprintf(format, args...))
@@ -100,7 +112,7 @@ func problemsWithTheContextOfTheInstall(fset *token.FileSet, fn *ast.FuncDecl) [
 				if assigned != nil {
 					made, _ = assigned.Lhs[0].(*ast.Ident)
 				}
-				if callee != "endAfter" || !identNamed(argumentOf(n, 0), suite) || !isField || !isBoundsField(field, "bounds") || field.Sel.Name != "Install" || made == nil || bounded != "" {
+				if callee != "endAfter" || !identNamed(argumentOf(n, 0), suite) || !isField || !isBoundsField(field, "bounds") || field.Sel.Name != "Install" || made == nil || bounded != "" || slices.ContainsFunc(stack, repeats) {
 					problems = append(problems, problemAt(fset, n, "%s makes a context of %s, whose one context has to be made by endAfter(%s, bounds.Install)", callee, fn.Name.Name, suite))
 					break
 				}
@@ -146,7 +158,7 @@ func problemsWithTheCutShort(fset *token.FileSet, file *ast.File) ([]string, int
 			}
 		case *ast.CallExpr:
 			callee := calleeOf(n)
-			if callee == "cutShort" || callee == "endAfter" || slices.Contains(namesItsCause, callee) {
+			if callee == "cutShort" || callee == "endAfter" || strings.HasPrefix(callee, "context.") || slices.Contains(namesItsCause, callee) {
 				break
 			}
 			var bounded string
@@ -162,7 +174,7 @@ func problemsWithTheCutShort(fset *token.FileSet, file *ast.File) ([]string, int
 			}
 			checked++
 			if !goesThroughCutShort(stack, bounded) {
-				problems = append(problems, problemAt(fset, n, "the error of %s runs on %s, which endAfter ends, and does not go through cutShort(%s, err)", types.ExprString(n.Fun), bounded, bounded))
+				problems = append(problems, problemAt(fset, n, "the error of %s runs on %s, which endAfter ends, and does not go through cutShort(%s, err): the call is the init of an if, or is kept for the if that follows it, whose body calls cutShort(%s, err), or is an argument of cutShort(%s, …); a function that returns no error or cuts short itself goes in namesItsCause, and in cutsShortInside when its body is to be read", types.ExprString(n.Fun), bounded, bounded, bounded, bounded))
 			}
 		}
 		return true
@@ -196,10 +208,23 @@ func goesThroughCutShort(stack []ast.Node, bounded string) bool {
 		if len(stack) < 2 {
 			return false
 		}
-		failure, ok := stack[len(stack)-2].(*ast.IfStmt)
-		return ok && failure.Init == parent && cutsShortAnErrorOf(failure.Body, bounded, parent.Lhs)
+		switch container := stack[len(stack)-2].(type) {
+		case *ast.IfStmt:
+			return container.Init == parent && cutsShortAnErrorOf(container.Body, bounded, parent.Lhs)
+		case *ast.BlockStmt:
+			failure, ok := statementAfter(container, parent).(*ast.IfStmt)
+			return ok && failure.Init == nil && cutsShortAnErrorOf(failure.Body, bounded, parent.Lhs)
+		}
 	}
 	return false
+}
+
+func statementAfter(block *ast.BlockStmt, stmt ast.Stmt) ast.Stmt {
+	at := slices.Index(block.List, stmt)
+	if at < 0 || at+1 == len(block.List) {
+		return nil
+	}
+	return block.List[at+1]
 }
 
 func cutsShortAnErrorOf(body *ast.BlockStmt, bounded string, assigned []ast.Expr) bool {
@@ -211,13 +236,25 @@ func cutsShortAnErrorOf(body *ast.BlockStmt, bounded string, assigned []ast.Expr
 		}
 		for _, arg := range call.Args[1:] {
 			for inner := range ast.Preorder(arg) {
-				if ident, ok := inner.(*ast.Ident); ok && ident.Name != "_" && slices.ContainsFunc(assigned, func(e ast.Expr) bool { return identNamed(e, ident.Name) }) {
+				if ident, ok := inner.(*ast.Ident); ok && slices.ContainsFunc(assigned, func(e ast.Expr) bool { return identNamed(e, ident.Name) }) {
 					found = true
 				}
 			}
 		}
 	}
 	return found
+}
+
+func problemsWithDeadlines(fset *token.FileSet, files []*ast.File) []string {
+	var problems []string
+	for _, file := range files {
+		for n := range ast.Preorder(file) {
+			if call, ok := n.(*ast.CallExpr); ok && slices.Contains(contextsThatEndByADeadline, calleeOf(call)) {
+				problems = append(problems, problemAt(fset, call, "%s makes a context that ends by a deadline in a file of the suite, under which a request is refused by client-go's rate limiter with an error that is no context's", calleeOf(call)))
+			}
+		}
+	}
+	return problems
 }
 
 func carriesABuildTag(file *ast.File) bool {
@@ -260,6 +297,13 @@ func taggedFiles(t *testing.T) (*token.FileSet, []*ast.File) {
 func TestTheInstallRunsItsWaitsOnAContextThatEndAfterEndsAtTheBoundOfTheInstall(t *testing.T) {
 	fset, files := taggedFiles(t)
 	for _, problem := range problemsWithTheInstall(fset, files) {
+		t.Error(problem)
+	}
+}
+
+func TestNoFileWithABuildTagMakesAContextThatEndsByADeadline(t *testing.T) {
+	fset, files := taggedFiles(t)
+	for _, problem := range problemsWithDeadlines(fset, files) {
 		t.Error(problem)
 	}
 }
@@ -308,6 +352,14 @@ func TestTheCheckOfTheInstallRefusesAWaitOnAContextThatNoBoundOfTheInstallEnds(t
 		{"endAfter on a context of another origin", setup, "endAfter(ctx", "endAfter(context.Background()", "endAfter makes a context of install"},
 		{"a second context that endAfter makes", setup, "for _, component", "again, stop := endAfter(ctx, bounds.Install)\nfor _, component", "endAfter makes a context of install"},
 		{"a context made from the bounded one", setup, "for _, component", "inner, stop := context.WithCancel(bounded)\nfor _, component", "context.WithCancel makes a context of install"},
+		{"a context that endAfter makes and nothing keeps", setup, "bounded, cancel := endAfter(ctx, bounds.Install)\ndefer cancel()\n", "endAfter(ctx, bounds.Install)\n", "endAfter makes a context of install"},
+		{"a second wait on context.Background()", setup, "return ctx, nil", "if err := component.verify(context.Background(), cfg); err != nil {\nreturn ctx, err\n}\nreturn ctx, nil", "context.Background makes a context of install"},
+		{"a second wait on context.TODO() through a variable", setup, "return ctx, nil", "fresh := context.TODO()\nif err := component.verify(fresh, cfg); err != nil {\nreturn ctx, err\n}\nreturn ctx, nil", "context.TODO makes a context of install"},
+		{"the only wait on context.Background()", setup, "component.install(bounded, cfg)", "component.install(context.Background(), cfg)", "context.Background makes a context of install"},
+		{"endAfter with a bound of another value", setup, "bounds.Install", "other.Install", "endAfter makes a context of install"},
+		{"a context made once for each component, in a range", setup, "bounded, cancel := endAfter(ctx, bounds.Install)\ndefer cancel()\nfor _, component := range components {\n", "for _, component := range components {\nbounded, cancel := endAfter(ctx, bounds.Install)\ndefer cancel()\n", "endAfter makes a context of install"},
+		{"a context made in a for", setup, "bounded, cancel := endAfter(ctx, bounds.Install)\ndefer cancel()\n", "for i := 0; i < 3; i++ {\nbounded, cancel := endAfter(ctx, bounds.Install)\ndefer cancel()\n}\n", "endAfter makes a context of install"},
+		{"a context made in a function literal", setup, "bounded, cancel := endAfter(ctx, bounds.Install)\ndefer cancel()\n", "run := func() {\nbounded, cancel := endAfter(ctx, bounds.Install)\ndefer cancel()\n}\n", "endAfter makes a context of install"},
 		{"a wait on the suite's own context", setup, "component.install(bounded, cfg)", "component.install(ctx, cfg)", "component.install is given the suite's own context"},
 		{"cutShort on the suite's own context", setup, "cutShort(bounded, err)", "cutShort(ctx, err)", "cutShort is given the suite's own context"},
 		{"the bounded context replaced by the suite's own", setup, "for _, component", "bounded = ctx\nfor _, component", "bounded is assigned again"},
@@ -343,10 +395,16 @@ func TestTheCheckOfTheInstallRefusesAWaitOnAContextThatNoBoundOfTheInstallEnds(t
 func TestTheCheckOfCutShortRefusesAFailureThatReachesItsReportAsItIs(t *testing.T) {
 	made := "bounded, cancel := endAfter(ctx, bounds.Apply)\ndefer cancel()\n"
 	inAStep := func(body string) string {
-		return "package p\nfunc TestX() {\nf := func(ctx context.Context, t *testing.T) context.Context {\n" + body + "\nreturn ctx\n}\n}\n"
+		return "package p\nfunc TestX() {\nf := func(ctx context.Context, t *testing.T) {\n" + body + "\n}\n}\n"
+	}
+	inFunctionOf := func(name, parameters, body string) string {
+		return "package p\nfunc " + name + "(" + parameters + ") error {\n" + body + "\n}\n"
 	}
 	inFunction := func(name, body string) string {
-		return "package p\nfunc " + name + "(ctx context.Context, cfg *envconf.Config) error {\n" + body + "\n}\n"
+		return inFunctionOf(name, "ctx context.Context, cfg *envconf.Config", body)
+	}
+	inTwoSteps := func(first, second string) string {
+		return "package p\nfunc TestX() {\nf := func(ctx context.Context, t *testing.T) {\n" + first + "\n}\ng := func(ctx context.Context, t *testing.T) {\n" + second + "\n}\n}\n"
 	}
 	const cluster = "k8s.Status().Patch(ctx, provisioned, patch)"
 	cases := []struct {
@@ -360,22 +418,34 @@ func TestTheCheckOfCutShortRefusesAFailureThatReachesItsReportAsItIs(t *testing.
 		{"an apply on the bounded context, which names its cause itself", inAStep(made + "if err := apply(bounded, cfg, manifest); err != nil {\nt.Fatal(err)\n}"), ""},
 		{"applyTheCluster on the bounded context", inAStep(made + "if err := applyTheCluster(bounded, cfg, k8s, key); err != nil {\nt.Fatal(err)\n}"), ""},
 		{"a context that endAfter did not make", inAStep("bounded, cancel := context.WithCancel(ctx)\nif err := wait(bounded); err != nil {\nt.Fatal(err)\n}"), ""},
+		{"a context that endAfter made in another step", inTwoSteps(made+"if err := wait(bounded); err != nil {\nt.Fatal(cutShort(bounded, err))\n}", "bounded, cancel := context.WithCancel(ctx)\nif err := wait(bounded); err != nil {\nt.Fatal(err)\n}"), ""},
+		{"an error kept and cut short by the if that follows", inAStep(made + "err := wait(bounded)\nif err != nil {\nt.Fatal(cutShort(bounded, err))\n}"), ""},
+		{"an error assigned to a variable and cut short by the if that follows", inAStep(made + "var err error\nerr = wait(bounded)\nif err != nil {\nt.Fatal(cutShort(bounded, fmt.Errorf(\"wait: %w\", err)))\n}"), ""},
+		{"the cause of the bounded context in a log", inAStep(made + "if err := wait(bounded); err != nil {\nt.Fatal(cutShort(bounded, err))\n}\nt.Logf(\"ended: %v\", context.Cause(bounded))"), ""},
 		{"t.Fatal on the error as it is", inAStep(made + "if err := wait(bounded); err != nil {\nt.Fatal(err)\n}"), "the error of wait runs on bounded, which endAfter ends, and does not go through cutShort(bounded, err)"},
 		{"t.Fatal on an error that wraps it", inAStep(made + "if err := wait(bounded); err != nil {\nt.Fatal(fmt.Errorf(\"wait: %w\", err))\n}"), "does not go through cutShort(bounded, err)"},
 		{"t.FailNow after the error is logged", inAStep(made + "if err := wait(bounded); err != nil {\nt.Log(err)\nt.FailNow()\n}"), "does not go through cutShort(bounded, err)"},
 		{"require on the error", inAStep(made + "if err := wait(bounded); err != nil {\nrequire.NoError(t, err)\n}"), "does not go through cutShort(bounded, err)"},
 		{"require on an error kept for later", inAStep(made + "err := wait(bounded)\nrequire.NoError(t, err)"), "does not go through cutShort(bounded, err)"},
+		{"an error kept and reported as it is by the if that follows", inAStep(made + "err := wait(bounded)\nif err != nil {\nt.Fatal(err)\n}"), "does not go through cutShort(bounded, err)"},
+		{"an error kept and never tested", inAStep(made + "err := wait(bounded)"), "does not go through cutShort(bounded, err)"},
+		{"an error kept and followed by an if that has an init of its own", inAStep(made + "err := wait(bounded)\nif err := other(); err != nil {\nt.Fatal(cutShort(bounded, err))\n}"), "does not go through cutShort(bounded, err)"},
+		{"an error kept and followed by another statement", inAStep(made + "err := wait(bounded)\nt.Log(err)\nif err != nil {\nt.Fatal(cutShort(bounded, err))\n}"), "does not go through cutShort(bounded, err)"},
 		{"cutShort on the step's own context", inAStep(made + "if err := wait(bounded); err != nil {\nt.Fatal(cutShort(ctx, err))\n}"), "does not go through cutShort(bounded, err)"},
+		{"cutShort on the step's own context that takes the call as it is", inAStep(made + "t.Fatal(cutShort(ctx, wait(bounded)))"), "does not go through cutShort(bounded, err)"},
 		{"cutShort that does not take the error", inAStep(made + "if err := wait(bounded); err != nil {\nt.Fatal(cutShort(bounded, errors.New(\"wait\")))\n}"), "does not go through cutShort(bounded, err)"},
 		{"a call in a closure of the step", inAStep(made + "func() {\nif err := wait(bounded); err != nil {\nt.Fatal(err)\n}\n}()"), "does not go through cutShort(bounded, err)"},
 		{"an error that the step returns as it is", inAStep(made + "return wait(bounded)"), "does not go through cutShort(bounded, err)"},
 		{"a method of the receiver", inAStep(made + "if err := c.Move(bounded, options); err != nil {\nt.Fatal(err)\n}"), "the error of c.Move"},
+		{"the bounded context as a later argument of a helper", inAStep(made + "moveOrFail(t, bounded, options)"), "a function that returns no error or cuts short itself goes in namesItsCause, and in cutsShortInside when its body is to be read"},
 		{"the patch through cutShort", inFunction("applyTheCluster", "return cutShort(ctx, "+cluster+")"), ""},
 		{"an apply and then the patch through cutShort", inFunction("applyTheCluster", "if err := apply(ctx, cfg, manifest); err != nil {\nreturn err\n}\nreturn cutShort(ctx, "+cluster+")"), ""},
 		{"a render that takes no context", inFunction("applyTheCluster", "manifest, err := render(file, name)\nreturn cutShort(ctx, "+cluster+")"), ""},
 		{"the patch as it is", inFunction("applyTheCluster", "return "+cluster), "the error of k8s.Status().Patch runs on ctx, which endAfter ends, and does not go through cutShort(ctx, err)"},
 		{"the patch in an if", inFunction("applyTheCluster", "if err := "+cluster+"; err != nil {\nreturn err\n}\nreturn nil"), "does not go through cutShort(ctx, err)"},
 		{"another call on the context", inFunction("applyTheCluster", "if err := other(ctx); err != nil {\nreturn err\n}\nreturn cutShort(ctx, "+cluster+")"), "the error of other"},
+		{"the patch through cutShort where the context is not the first parameter", inFunctionOf("applyTheCluster", "t *testing.T, ctx context.Context", "return cutShort(ctx, "+cluster+")"), ""},
+		{"the patch as it is where the context is not the first parameter", inFunctionOf("applyTheCluster", "t *testing.T, ctx context.Context", "return "+cluster), "does not go through cutShort(ctx, err)"},
 		{"the patch as it is in a function that cuts nothing short", inFunction("helper", "return "+cluster), ""},
 	}
 	for _, c := range cases {
@@ -387,6 +457,37 @@ func TestTheCheckOfCutShortRefusesAFailureThatReachesItsReportAsItIs(t *testing.
 			}
 			found, _ := problemsWithTheCutShort(fset, file)
 			problems := strings.Join(found, "\n")
+			switch {
+			case c.want == "" && problems != "":
+				t.Fatalf("want accepted, got %s", problems)
+			case c.want != "" && !strings.Contains(problems, c.want):
+				t.Fatalf("want a problem with %q, got %q", c.want, problems)
+			}
+		})
+	}
+}
+
+func TestTheCheckOfDeadlinesRefusesAContextThatEndsByADeadlineWhereverItIsMade(t *testing.T) {
+	cases := []struct {
+		name, body, want string
+	}{
+		{"a context that endAfter makes", "bounded, cancel := endAfter(ctx, bounds.Apply)", ""},
+		{"contexts that end by cancelling or carry a value", "a, cancel := context.WithCancel(ctx)\nb := context.WithValue(ctx, k, v)\nc := context.WithoutCancel(ctx)", ""},
+		{"a timeout that is not a context's", "helm.WithTimeout(\"5m\")", ""},
+		{"context.WithTimeout", "bounded, cancel := context.WithTimeout(ctx, time.Minute)", "context.WithTimeout makes a context that ends by a deadline"},
+		{"context.WithDeadline", "bounded, cancel := context.WithDeadline(ctx, when)", "context.WithDeadline makes a context that ends by a deadline"},
+		{"context.WithTimeoutCause", "bounded, cancel := context.WithTimeoutCause(ctx, time.Minute, err)", "context.WithTimeoutCause makes a context that ends by a deadline"},
+		{"context.WithDeadlineCause", "bounded, cancel := context.WithDeadlineCause(ctx, when, err)", "context.WithDeadlineCause makes a context that ends by a deadline"},
+		{"a deadline inside a function that a step calls", "func() {\nctx, cancel := context.WithTimeout(ctx, time.Minute)\n}()", "context.WithTimeout makes a context that ends by a deadline"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			fset := token.NewFileSet()
+			file, err := parser.ParseFile(fset, "x.go", "package p\nfunc helper(ctx context.Context) {\n"+c.body+"\n}\n", 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			problems := strings.Join(problemsWithDeadlines(fset, []*ast.File{file}), "\n")
 			switch {
 			case c.want == "" && problems != "":
 				t.Fatalf("want accepted, got %s", problems)
