@@ -5,6 +5,7 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -252,6 +253,36 @@ func TestVerifyChecksTheImageItRenders(t *testing.T) {
 	check := strings.Index(out, "go run ./hack/releasecheck image --repository=ghcr.io/lodia-io/cluster-api-provider-lodia --tag=v0.0.0-verify out/control-plane-components.yaml")
 	if render < 0 || check < render {
 		t.Errorf("want the render of the components YAML with the tag, then the check of its image with the same tag; the render is at %d and the check at %d of:\n%s", render, check, out)
+	}
+}
+
+func TestVerifyRendersConfigDefaultOnce(t *testing.T) {
+	out, stderr, err := runMake(t, "-n", "verify")
+	if err != nil {
+		t.Fatalf("%v\n%s", err, stderr)
+	}
+
+	if got := strings.Count(out, " build config/default"); got != 1 {
+		t.Errorf("want one render of config/default in the plan of verify, got %d in:\n%s", got, out)
+	}
+}
+
+func TestAFailedRenderStopsEveryTargetThatReadsIt(t *testing.T) {
+	for _, target := range []string{"components", "upgrade-components", "release-components"} {
+		t.Run(target, func(t *testing.T) {
+			dir := t.TempDir()
+
+			out, stderr, err := runMake(t, target, "KUSTOMIZE=./no-such-package", "RENDER="+filepath.Join(dir, "default.yaml"), "RELEASE_DIR="+dir, "PIN_DIR="+dir)
+
+			if err == nil {
+				t.Fatalf("want the target to fail with a failed render, got:\n%s\n%s", out, stderr)
+			}
+			for _, name := range []string{"default.yaml", "control-plane-components.yaml"} {
+				if _, statErr := os.Stat(filepath.Join(dir, name)); !errors.Is(statErr, os.ErrNotExist) {
+					t.Errorf("the failed render left %s: %v", name, statErr)
+				}
+			}
+		})
 	}
 }
 
