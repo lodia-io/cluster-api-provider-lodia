@@ -62,10 +62,11 @@ What a release holds and why it is cut this way: [releases-through-clusterctl](d
    `make metadata`, which `make verify` runs, refuses a series that the merge base with `origin/main` has and the file lacks, a series whose contract changed, and a newest series whose contract is not the CRDs' contract label.
 2. Wait for the CI of `main` to finish on the commit: a tag pushed before it ends is refused.
 3. Tag the commit with both tags, signed and annotated: `git tag -s -m vX.Y.Z vX.Y.Z <sha>` and `git tag -s -m api/vX.Y.Z api/vX.Y.Z <sha>`.
-   Tag only a commit that has `make release-sign` and its steps in `release.yml`: a run is its tag's own commit's `release.yml` ([When a run fails](#when-a-run-fails)), so the release of an older commit has no signatures and no attestations.
+   Tag only a commit that has `make release-sign` and its steps in `release.yml`: a run is its tag's own commit's `release.yml` ([When a run fails](#when-a-run-fails)), so the release of an older commit has no signatures and no attestations; `make release-check` (step 4) refuses a tag at or below a published release of its line, which is the tag an older commit would get.
 4. `make release-check TAG=vX.Y.Z` (and `COMMIT=<sha>` for a commit other than `HEAD`) fetches `origin/main` and the tags, and refuses:
    - a tag that is not written `vMAJOR.MINOR.PATCH[-PRERELEASE]`;
    - a tag whose minor has no series in `metadata.yaml` at the commit, and any tag of the repository whose minor has none there;
+   - a tag at or below a published release of its line;
    - a commit that is not on `origin/main`;
    - a local tag `vX.Y.Z` or `api/vX.Y.Z` that is missing or is not at the commit;
    - a commit whose runs of `ci.yml` for the push to `main` are missing, unfinished or not green;

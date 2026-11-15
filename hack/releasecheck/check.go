@@ -82,7 +82,14 @@ func checkTag(ctx context.Context, dir string, ci CI, tag, commit string) (strin
 	if err := requireTags(ctx, dir, tag, sha); err != nil {
 		return "", err
 	}
-	if err := requireUpgradePin(ctx, dir, ci, v, sha); err != nil {
+	published, err := publishedReleases(ctx, ci)
+	if err != nil {
+		return "", err
+	}
+	if err := requireAbovePublished(published, v); err != nil {
+		return "", err
+	}
+	if err := requireUpgradePin(ctx, dir, published, v, sha); err != nil {
 		return "", err
 	}
 	runs, err := ci.Runs(ctx, sha)
@@ -162,22 +169,45 @@ func requireTags(ctx context.Context, dir, tag, sha string) error {
 	return errors.Join(problems...)
 }
 
+// A published release is a release, not a tag: a run that fails leaves a tag
+// without a release, since its cleanup job deletes the draft alone.
+func publishedReleases(ctx context.Context, ci CI) ([]*version.Version, error) {
+	names, err := ci.Releases(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var published []*version.Version
+	for _, name := range names {
+		if v, err := version.ParseSemantic(name); err == nil {
+			published = append(published, v)
+		}
+	}
+	return published, nil
+}
+
+// A tag at or below a published release of its line is the tag an older commit
+// gets, and the run of a tag is its own commit's release.yml, which an older
+// commit may not have signing or attestations in.
+func requireAbovePublished(published []*version.Version, tag *version.Version) error {
+	var newest *version.Version
+	for _, v := range published {
+		if v.Major() == tag.Major() && v.Minor() == tag.Minor() && !v.LessThan(tag) && (newest == nil || v.GreaterThan(newest)) {
+			newest = v
+		}
+	}
+	if newest != nil {
+		return fmt.Errorf("v%s is published in the line %d.%d, and v%s is not above it: tag the next version of the line", newest, tag.Major(), tag.Minor(), tag)
+	}
+	return nil
+}
+
 // Every release is upgrade-tested from the one before it, so the pin of the
 // upgrade e2e at the commit has to name the newest published release below the
-// tag. A published release counts, not a tag: a run that fails leaves a tag
-// without a release, since its cleanup job deletes the draft alone.
-func requireUpgradePin(ctx context.Context, dir string, ci CI, tag *version.Version, sha string) error {
-	published, err := ci.Releases(ctx)
-	if err != nil {
-		return err
-	}
+// tag.
+func requireUpgradePin(ctx context.Context, dir string, published []*version.Version, tag *version.Version, sha string) error {
 	var newest *version.Version
-	for _, name := range published {
-		v, err := version.ParseSemantic(name)
-		if err != nil || !v.LessThan(tag) {
-			continue
-		}
-		if newest == nil || v.GreaterThan(newest) {
+	for _, v := range published {
+		if v.LessThan(tag) && (newest == nil || v.GreaterThan(newest)) {
 			newest = v
 		}
 	}
