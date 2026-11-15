@@ -4,7 +4,6 @@
 package e2e
 
 import (
-	"bytes"
 	"errors"
 	"fmt"
 	"go/ast"
@@ -14,6 +13,7 @@ import (
 	"io"
 	"maps"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"regexp"
@@ -145,36 +145,30 @@ var dockerCallBound = 30 * time.Second
 
 var goTestTimeout = regexp.MustCompile(`-timeout (\d+)m\b`)
 
-func targetTimeout(makefile []byte, target, tags, test string) (time.Duration, error) {
-	rules := regexp.MustCompile(`(?m)^`+regexp.QuoteMeta(target)+`:.*\n((?:\t.*(?:\n|$)|\n)*)`).FindAllSubmatch(makefile, -1)
-	if rules == nil {
-		return 0, fmt.Errorf("the Makefile has no target %s", target)
-	}
-	var lines [][]byte
-	for _, rule := range rules {
-		for line := range bytes.SplitSeq(rule[1], []byte("\n")) {
-			if bytes.Contains(line, []byte("go test")) {
-				lines = append(lines, line)
-			}
+func targetTimeout(recipe, target, tags, test string) (time.Duration, error) {
+	var lines []string
+	for line := range strings.SplitSeq(recipe, "\n") {
+		if strings.Contains(line, "go test") {
+			lines = append(lines, line)
 		}
 	}
 	if len(lines) != 1 {
 		return 0, fmt.Errorf("the %s target has %d lines that run go test, want one", target, len(lines))
 	}
-	if !bytes.Contains(lines[0], []byte(" -tags "+tags+" ")) {
+	if !strings.Contains(lines[0], " -tags "+tags+" ") {
 		return 0, fmt.Errorf("the %s target's go test does not run -tags %s: %s", target, tags, lines[0])
 	}
-	switch only := " -run '^" + test + "$$' "; {
-	case test != "" && !bytes.Contains(lines[0], []byte(only)):
+	switch only := " -run '^" + test + "$' "; {
+	case test != "" && !strings.Contains(lines[0], only):
 		return 0, fmt.Errorf("the %s target's go test does not run %s alone, as %s: %s", target, test, strings.TrimSpace(only), lines[0])
-	case test == "" && bytes.Contains(lines[0], []byte(" -run ")):
+	case test == "" && strings.Contains(lines[0], " -run "):
 		return 0, fmt.Errorf("the %s target's go test runs a selection of the tests: %s", target, lines[0])
 	}
-	found := goTestTimeout.FindSubmatch(lines[0])
+	found := goTestTimeout.FindStringSubmatch(lines[0])
 	if found == nil {
 		return 0, fmt.Errorf("the %s target's go test has no -timeout in minutes: %s", target, lines[0])
 	}
-	n, err := strconv.Atoi(string(found[1]))
+	n, err := strconv.Atoi(found[1])
 	return time.Duration(n) * time.Minute, err
 }
 
@@ -275,11 +269,12 @@ func tenantFits(requestTimeout, workerBound, dumpBound, dump time.Duration) erro
 	return nil
 }
 
-// A job's file is the one whose tests the job compiles, and its owner the
-// variable that holds the set of bounds that the waits of that file take.
+// A job is named as its target of the Makefile and its check of ci.yml. Its
+// file is the one whose tests the job compiles, and its owner the variable that
+// holds the set of bounds that the waits of that file take.
 type job struct {
-	name, target, tags, test, file, owner string
-	set                                   any
+	name, tags, test, file, owner string
+	set                           any
 }
 
 func (j job) bounded() time.Duration {
@@ -287,20 +282,21 @@ func (j job) bounded() time.Duration {
 }
 
 var jobs = []job{
-	{"e2e", "e2e", "e2e", "", "join_test.go", "bounds", bounds},
-	{"e2e-upgrade", "e2e-upgrade", "e2e,upgrade", "TestTheProviderUpgradesFromThePreviousRelease", "upgrade_test.go", "upgradeBounds", upgradeBounds},
-	{"e2e-minor", "e2e-minor", "e2e,minor", "TestAMinorStepHoldsNewWorkersUntilLodiaRunsIt", "minor_test.go", "minorBounds", minorBounds},
+	{"e2e", "e2e", "", "join_test.go", "bounds", bounds},
+	{"e2e-upgrade", "e2e,upgrade", "TestTheProviderUpgradesFromThePreviousRelease", "upgrade_test.go", "upgradeBounds", upgradeBounds},
+	{"e2e-minor", "e2e,minor", "TestAMinorStepHoldsNewWorkersUntilLodiaRunsIt", "minor_test.go", "minorBounds", minorBounds},
 }
 
-var targetRule = regexp.MustCompile(`(?m)^([A-Za-z][\w.-]*):.*\n((?:\t.*(?:\n|$)|\n)*)`)
+var (
+	targetRule = regexp.MustCompile(`(?m)^([A-Za-z][\w.-]*(?: +[A-Za-z][\w.-]*)*) *:.*\n((?:\t.*(?:\n|$)|\n)*)`)
+	suiteRun   = regexp.MustCompile(`go test\b.*-tags (?:e2e\b|\$\(E2E_TAGS\))`)
+)
 
 func suiteTargets(makefile []byte) []string {
 	var targets []string
 	for _, rule := range targetRule.FindAllSubmatch(makefile, -1) {
-		if slices.ContainsFunc(bytes.Split(rule[2], []byte("\n")), func(line []byte) bool {
-			return bytes.Contains(line, []byte("go test")) && bytes.Contains(line, []byte("-tags e2e"))
-		}) {
-			targets = append(targets, string(rule[1]))
+		if suiteRun.Match(rule[2]) {
+			targets = append(targets, strings.Fields(string(rule[1]))...)
 		}
 	}
 	slices.Sort(targets)
@@ -322,9 +318,9 @@ func targetsMade(runs, targets []string) []string {
 
 func requireTheModelIsTheSuiteOfTheMakefileAndCI(makefile []byte, ci map[string][]string, model []job) error {
 	targets := suiteTargets(makefile)
-	var modeled []string
-	for _, j := range model {
-		modeled = append(modeled, j.target)
+	modeled := make([]string, len(model))
+	for i, j := range model {
+		modeled[i] = j.name
 	}
 	slices.Sort(modeled)
 	var errs []error
@@ -341,8 +337,8 @@ func requireTheModelIsTheSuiteOfTheMakefileAndCI(makefile []byte, ci map[string]
 		switch i := slices.IndexFunc(model, func(j job) bool { return j.name == name }); {
 		case i < 0 && len(made) > 0:
 			errs = append(errs, fmt.Errorf("the %s job of ci.yml makes %v, and the model has no job of that name", name, made))
-		case i >= 0 && !slices.Equal(made, []string{model[i].target}):
-			errs = append(errs, fmt.Errorf("the %s job of ci.yml makes %v, want make %s alone", name, made, model[i].target))
+		case i >= 0 && !slices.Equal(made, []string{name}):
+			errs = append(errs, fmt.Errorf("the %s job of ci.yml makes %v, want make %s alone", name, made, name))
 		}
 	}
 	return errors.Join(errs...)
@@ -480,6 +476,121 @@ func requireEachJobToCompileItsOwnTests(files map[string]string, model []job) er
 	return errors.Join(errs...)
 }
 
+type workflowJob struct {
+	Name           string `json:"name"`
+	TimeoutMinutes any    `json:"timeout-minutes"`
+	Strategy       struct {
+		Matrix map[string]any `json:"matrix"`
+	} `json:"strategy"`
+	Steps []struct {
+		Run string `json:"run"`
+	} `json:"steps"`
+}
+
+type check struct {
+	timeoutMinutes int
+	runs           []string
+}
+
+var (
+	matrixValue = regexp.MustCompile(`\$\{\{\s*matrix\.([A-Za-z_][\w-]*)\s*\}\}`)
+	expression  = regexp.MustCompile(`\$\{\{`)
+)
+
+func expandMatrix(text string, entry map[string]any) (string, error) {
+	var missing []string
+	expanded := matrixValue.ReplaceAllStringFunc(text, func(found string) string {
+		key := matrixValue.FindStringSubmatch(found)[1]
+		value, ok := entry[key]
+		if !ok {
+			missing = append(missing, key)
+			return found
+		}
+		return fmt.Sprint(value)
+	})
+	switch {
+	case len(missing) > 0:
+		return "", fmt.Errorf("%q reads %v, which the matrix entry %v does not have", text, missing, entry)
+	case expression.MatchString(expanded):
+		return "", fmt.Errorf("%q has an expression that is not a value of the matrix, which the model does not read", text)
+	}
+	return expanded, nil
+}
+
+func expandJob(id string, j workflowJob, entry map[string]any) (string, check, error) {
+	name := id
+	var c check
+	var err error
+	if j.Name != "" {
+		if name, err = expandMatrix(j.Name, entry); err != nil {
+			return "", c, err
+		}
+	}
+	if j.TimeoutMinutes != nil {
+		minutes, err := expandMatrix(fmt.Sprint(j.TimeoutMinutes), entry)
+		if err != nil {
+			return "", c, err
+		}
+		if c.timeoutMinutes, err = strconv.Atoi(minutes); err != nil {
+			return "", c, fmt.Errorf("the check %s has the timeout-minutes %q: %w", name, minutes, err)
+		}
+	}
+	for _, step := range j.Steps {
+		run, err := expandMatrix(step.Run, entry)
+		if err != nil {
+			return "", c, err
+		}
+		c.runs = append(c.runs, run)
+	}
+	return name, c, nil
+}
+
+func checksOf(workflow []byte) (map[string]check, error) {
+	var ci struct {
+		Jobs map[string]workflowJob `json:"jobs"`
+	}
+	if err := yaml.Unmarshal(workflow, &ci); err != nil {
+		return nil, err
+	}
+	checks := make(map[string]check, len(ci.Jobs))
+	for _, id := range slices.Sorted(maps.Keys(ci.Jobs)) {
+		j := ci.Jobs[id]
+		entries := []map[string]any{{}}
+		if j.Strategy.Matrix != nil {
+			include, _ := j.Strategy.Matrix["include"].([]any)
+			if len(j.Strategy.Matrix) != 1 || len(include) == 0 {
+				return nil, fmt.Errorf("the %s job has a matrix that is not an include list alone, which the model does not read", id)
+			}
+			if j.Name == "" {
+				return nil, fmt.Errorf("the %s job has a matrix and no name: GitHub names its checks by its id and the values of each entry, and the ruleset of main requires exact names", id)
+			}
+			entries = nil
+			for _, item := range include {
+				entry, _ := item.(map[string]any)
+				entries = append(entries, entry)
+			}
+		}
+		for _, entry := range entries {
+			name, c, err := expandJob(id, j, entry)
+			if err != nil {
+				return nil, err
+			}
+			if _, ok := checks[name]; ok {
+				return nil, fmt.Errorf("two checks of ci.yml are named %s: a ruleset that requires the name cannot tell them apart", name)
+			}
+			checks[name] = c
+		}
+	}
+	return checks, nil
+}
+
+func targetRecipe(t *testing.T, target string) string {
+	t.Helper()
+	cmd := exec.CommandContext(t.Context(), "make", "--no-print-directory", target)
+	cmd.Dir = root
+	return recipeOf(t, cmd)
+}
+
 func TestTheBoundsFitUnderTheTimeouts(t *testing.T) {
 	makefile, err := os.ReadFile("../../Makefile")
 	if err != nil {
@@ -489,22 +600,13 @@ func TestTheBoundsFitUnderTheTimeouts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var ci struct {
-		Jobs map[string]struct {
-			TimeoutMinutes int `json:"timeout-minutes"`
-			Steps          []struct {
-				Run string `json:"run"`
-			} `json:"steps"`
-		} `json:"jobs"`
-	}
-	if err := yaml.Unmarshal(workflow, &ci); err != nil {
+	checks, err := checksOf(workflow)
+	if err != nil {
 		t.Fatal(err)
 	}
-	runs := make(map[string][]string, len(ci.Jobs))
-	for name, j := range ci.Jobs {
-		for _, step := range j.Steps {
-			runs[name] = append(runs[name], step.Run)
-		}
+	runs := make(map[string][]string, len(checks))
+	for name, c := range checks {
+		runs[name] = c.runs
 	}
 	if err := requireTheModelIsTheSuiteOfTheMakefileAndCI(makefile, runs, jobs); err != nil {
 		t.Fatal(err)
@@ -518,15 +620,15 @@ func TestTheBoundsFitUnderTheTimeouts(t *testing.T) {
 	}
 	for _, j := range jobs {
 		t.Run(j.name, func(t *testing.T) {
-			timeout, err := targetTimeout(makefile, j.target, j.tags, j.test)
+			timeout, err := targetTimeout(targetRecipe(t, j.name), j.name, j.tags, j.test)
 			if err != nil {
 				t.Fatal(err)
 			}
-			limit := ci.Jobs[j.name]
-			if limit.TimeoutMinutes == 0 {
+			limit := checks[j.name]
+			if limit.timeoutMinutes == 0 {
 				t.Fatalf("the %s job has no timeout-minutes", j.name)
 			}
-			if err := fits(j.bounded(), timeout, time.Duration(limit.TimeoutMinutes)*time.Minute); err != nil {
+			if err := fits(j.bounded(), timeout, time.Duration(limit.timeoutMinutes)*time.Minute); err != nil {
 				t.Fatal(err)
 			}
 		})
@@ -898,43 +1000,34 @@ func TestTenantTimesThatDoNotFitAreRefused(t *testing.T) {
 	}
 }
 
-func TestTheTimeoutIsTheOneOfTheTargetThatRunsTheTestsOfTheJob(t *testing.T) {
+func TestTheTimeoutIsTheOneOfTheRecipeThatRunsTheTestsOfTheJob(t *testing.T) {
 	const (
-		suite   = "\tgo test -v -tags e2e -count=1 -timeout 64m ./test/e2e/...; status=$$?; \\\n"
-		upgrade = "\tgo test -v -tags e2e,upgrade -count=1 -timeout 46m -run '^TestUpgrade$$' ./test/e2e/...; status=$$?; \\\n"
+		cleanup = "docker ps --all --quiet --filter label=io.x-k8s.kind.cluster=capl-e2e-w | xargs -r docker rm --force --volumes && E2E_KUBECONFIG=/work/e2e/capl-e2e/kubeconfig "
+		suite   = cleanup + "go test -v -tags e2e -count=1 -timeout 64m  ./test/e2e/...; status=$?; \\\n"
+		upgrade = cleanup + "go test -v -tags e2e,upgrade -count=1 -timeout 46m -run '^TestUpgrade$' ./test/e2e/...; status=$?; \\\n"
+		other   = "mkdir -p /work/e2e/capl-e2e\nrm -rf /work/e2e/capl-e2e/artifacts\n"
 	)
 	cases := []struct {
-		name, makefile, target, tags string
-		want                         time.Duration
-		failure                      string
+		name, recipe, target, tags string
+		want                       time.Duration
+		failure                    string
 	}{
-		{"the e2e target's alone", "e2e:\n" + suite, "e2e", "e2e", 64 * time.Minute, ""},
-		{"a target before it with a longer timeout", "test:\n\tgo test -timeout 99m ./...\ne2e:\n" + suite, "e2e", "e2e", 64 * time.Minute, ""},
-		{"a target before it with a shorter timeout", "test:\n\tgo test -timeout 5m ./...\ne2e:\n" + suite, "e2e", "e2e", 64 * time.Minute, ""},
-		{"a target after it with a timeout", "e2e:\n" + suite + "test:\n\tgo test -timeout 99m ./...\n", "e2e", "e2e", 64 * time.Minute, ""},
-		{"the flags in another order", "e2e:\n\tgo test -timeout 30m -tags e2e ./test/e2e/...\n", "e2e", "e2e", 30 * time.Minute, ""},
-		{"the last line without a newline", "e2e:\n\tgo test -tags e2e -timeout 30m ./test/e2e/...", "e2e", "e2e", 30 * time.Minute, ""},
-		{"a variable of the target before its rule", "e2e-upgrade: E2E_CLUSTER = x\ne2e-upgrade: e2e-cluster\n" + upgrade, "e2e-upgrade", "e2e,upgrade", 46 * time.Minute, ""},
-		{"a variable of the target after its rule", "e2e-upgrade: e2e-cluster\n" + upgrade + "e2e-upgrade: E2E_CLUSTER = x\n", "e2e-upgrade", "e2e,upgrade", 46 * time.Minute, ""},
-		{"a comment that mentions the target", "# the e2e: target\ntest:\n\tgo test -timeout 5m -tags e2e ./...\ne2e:\n" + suite, "e2e", "e2e", 64 * time.Minute, ""},
-		{"a target with prerequisites and a comment", "e2e: e2e-cluster ## the suite\n" + suite, "e2e", "e2e", 64 * time.Minute, ""},
-		{"a blank line inside the recipe", "e2e:\n\techo a\n\n" + suite, "e2e", "e2e", 64 * time.Minute, ""},
-		{"the upgrade target after the e2e's", "e2e:\n" + suite + "e2e-upgrade:\n" + upgrade, "e2e-upgrade", "e2e,upgrade", 46 * time.Minute, ""},
-		{"the e2e target before the upgrade's", "e2e:\n" + suite + "e2e-upgrade:\n" + upgrade, "e2e", "e2e", 64 * time.Minute, ""},
-		{"the upgrade target before the e2e's", "e2e-upgrade:\n" + upgrade + "e2e:\n" + suite, "e2e", "e2e", 64 * time.Minute, ""},
-		{"the upgrade's tags in the e2e target", "e2e:\n" + upgrade, "e2e", "e2e", 0, "does not run -tags e2e"},
-		{"the e2e's tags in the upgrade target", "e2e-upgrade:\n" + suite, "e2e-upgrade", "e2e,upgrade", 0, "does not run -tags e2e,upgrade"},
-		{"no timeout", "e2e:\n\tgo test -tags e2e ./test/e2e/...\n", "e2e", "e2e", 0, "no -timeout in minutes"},
-		{"a timeout in seconds", "e2e:\n\tgo test -tags e2e -timeout 3600s ./test/e2e/...\n", "e2e", "e2e", 0, "no -timeout in minutes"},
-		{"no target", "test:\n\tgo test ./...\n", "e2e", "e2e", 0, "no target e2e"},
-		{"a target of a longer name only", "e2e-upgrade:\n" + upgrade, "e2e", "e2e", 0, "no target e2e"},
-		{"the upgrade target that runs every test", "e2e-upgrade:\n\tgo test -v -tags e2e,upgrade -count=1 -timeout 46m ./test/e2e/...\n", "e2e-upgrade", "e2e,upgrade", 0, "does not run TestUpgrade alone"},
-		{"the upgrade target that runs another test", "e2e-upgrade:\n\tgo test -v -tags e2e,upgrade -count=1 -timeout 46m -run '^TestOther$$' ./test/e2e/...\n", "e2e-upgrade", "e2e,upgrade", 0, "does not run TestUpgrade alone"},
-		{"the upgrade target that runs the tests of a prefix", "e2e-upgrade:\n\tgo test -v -tags e2e,upgrade -count=1 -timeout 46m -run 'TestUpgrade' ./test/e2e/...\n", "e2e-upgrade", "e2e,upgrade", 0, "does not run TestUpgrade alone"},
-		{"the e2e target that runs a selection of the tests", "e2e:\n\tgo test -v -tags e2e -count=1 -timeout 64m -run TestOther ./test/e2e/...\n", "e2e", "e2e", 0, "runs a selection of the tests"},
-		{"no line for the suite", "e2e:\n\techo a\n", "e2e", "e2e", 0, "0 lines"},
-		{"two lines for the suite", "e2e:\n" + suite + suite, "e2e", "e2e", 0, "2 lines"},
-		{"a line of another target is not the target's", "e2e:\n\techo a\ntest:\n" + suite, "e2e", "e2e", 0, "0 lines"},
+		{"the e2e recipe", suite, "e2e", "e2e", 64 * time.Minute, ""},
+		{"the upgrade recipe", upgrade, "e2e-upgrade", "e2e,upgrade", 46 * time.Minute, ""},
+		{"lines before and after the one that runs go test", other + suite + "\tgo tool kind delete cluster --name capl-e2e; exit $status\n", "e2e", "e2e", 64 * time.Minute, ""},
+		{"the flags in another order", "go test -timeout 30m -tags e2e ./test/e2e/...\n", "e2e", "e2e", 30 * time.Minute, ""},
+		{"the last line without a newline", "go test -tags e2e -timeout 30m ./test/e2e/...", "e2e", "e2e", 30 * time.Minute, ""},
+		{"the upgrade's tags in the e2e recipe", upgrade, "e2e", "e2e", 0, "does not run -tags e2e"},
+		{"the e2e's tags in the upgrade recipe", suite, "e2e-upgrade", "e2e,upgrade", 0, "does not run -tags e2e,upgrade"},
+		{"no tags", "go test -timeout 30m ./test/e2e/...\n", "e2e", "e2e", 0, "does not run -tags e2e"},
+		{"no timeout", "go test -tags e2e ./test/e2e/...\n", "e2e", "e2e", 0, "no -timeout in minutes"},
+		{"a timeout in seconds", "go test -tags e2e -timeout 3600s ./test/e2e/...\n", "e2e", "e2e", 0, "no -timeout in minutes"},
+		{"the upgrade recipe that runs every test", "go test -v -tags e2e,upgrade -count=1 -timeout 46m  ./test/e2e/...\n", "e2e-upgrade", "e2e,upgrade", 0, "does not run TestUpgrade alone"},
+		{"the upgrade recipe that runs another test", "go test -v -tags e2e,upgrade -count=1 -timeout 46m -run '^TestOther$' ./test/e2e/...\n", "e2e-upgrade", "e2e,upgrade", 0, "does not run TestUpgrade alone"},
+		{"the upgrade recipe that runs the tests of a prefix", "go test -v -tags e2e,upgrade -count=1 -timeout 46m -run 'TestUpgrade' ./test/e2e/...\n", "e2e-upgrade", "e2e,upgrade", 0, "does not run TestUpgrade alone"},
+		{"the e2e recipe that runs a selection of the tests", "go test -v -tags e2e -count=1 -timeout 64m -run TestOther ./test/e2e/...\n", "e2e", "e2e", 0, "runs a selection of the tests"},
+		{"no line for the suite", other, "e2e", "e2e", 0, "0 lines"},
+		{"two lines for the suite", suite + suite, "e2e", "e2e", 0, "2 lines"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -942,7 +1035,7 @@ func TestTheTimeoutIsTheOneOfTheTargetThatRunsTheTestsOfTheJob(t *testing.T) {
 			if c.tags == "e2e,upgrade" {
 				test = "TestUpgrade"
 			}
-			got, err := targetTimeout([]byte(c.makefile), c.target, c.tags, test)
+			got, err := targetTimeout(c.recipe, c.target, c.tags, test)
 			switch {
 			case c.failure == "" && err != nil:
 				t.Fatalf("want accepted, got %v", err)
@@ -957,12 +1050,11 @@ func TestTheTimeoutIsTheOneOfTheTargetThatRunsTheTestsOfTheJob(t *testing.T) {
 
 func TestTheModelHoldsEveryTargetThatRunsTheSuiteAndEveryJobThatMakesOne(t *testing.T) {
 	const (
-		suite   = "\tgo test -v -tags e2e -count=1 -timeout 64m ./test/e2e/...; status=$$?; \\\n"
-		upgrade = "\tgo test -v -tags e2e,upgrade -count=1 -timeout 46m -run '^TestUpgrade$$' ./test/e2e/...; status=$$?; \\\n"
-		both    = ".PHONY: e2e\ne2e: e2e-cluster ## the suite\n\t$(MAKE) e2e-lodia\n" + suite + "\ne2e-upgrade: E2E_CLUSTER = x\ne2e-upgrade: e2e-cluster\n" + upgrade + "\nverify:\n\tgo test ./...\n"
-		again   = "e2e-again:\n\tgo test -v -tags e2e -count=1 -timeout 200m ./test/e2e/...\n"
+		suite = "\tgo test -v -tags $(E2E_TAGS) -count=1 -timeout $(E2E_TIMEOUT) $(E2E_RUN) ./test/e2e/...; status=$$?; \\\n"
+		both  = "e2e: E2E_TAGS = e2e\ne2e-upgrade: E2E_TAGS = e2e,upgrade\n\n.PHONY: e2e e2e-upgrade\ne2e e2e-upgrade: e2e-cluster ## the suite\n\t$(MAKE) e2e-lodia\n" + suite + "\nverify:\n\tgo test ./...\n"
+		again = "e2e-again:\n\tgo test -v -tags e2e -count=1 -timeout 200m ./test/e2e/...\n"
 	)
-	model := []job{{name: "e2e", target: "e2e"}, {name: "e2e-upgrade", target: "e2e-upgrade"}}
+	model := []job{{name: "e2e"}, {name: "e2e-upgrade"}}
 	ok := map[string][]string{"verify": {"make verify"}, "e2e": {"", "make e2e-lodia", "make e2e"}, "e2e-upgrade": {"make e2e-lodia\nmake e2e-upgrade\n"}}
 	with := func(name string, runs ...string) map[string][]string {
 		jobs := maps.Clone(ok)
@@ -981,12 +1073,14 @@ func TestTheModelHoldsEveryTargetThatRunsTheSuiteAndEveryJobThatMakesOne(t *test
 		want           string
 	}{
 		{"the targets and jobs as they are", both, ok, model, ""},
+		{"targets with a rule each", strings.Replace(strings.Replace(both, "e2e e2e-upgrade: e2e-cluster", "e2e: e2e-cluster", 1), "\nverify:", "e2e-upgrade: e2e-cluster\n"+suite+"\nverify:", 1), ok, model, ""},
 		{"a job that makes its target with a flag", both, with("e2e", "make --no-print-directory e2e"), model, ""},
 		{"a job that makes its target and something else in one step", both, with("e2e", "make e2e-lodia && make e2e"), model, ""},
 		{"a job that makes its target after a semicolon with no space", both, with("e2e", "echo start;make e2e"), model, ""},
 		{"a job that is not the model's and makes no target of the suite", both, with("lint", "make lint"), model, ""},
 		{"a target that runs the suite and has no job in the model", both + again, ok, model, "each target that runs the suite needs a job"},
 		{"a target that runs the suite and has no job in the model, with a job of ci.yml for it", both + again, with("e2e-again", "make e2e-again"), model, "each target that runs the suite needs a job"},
+		{"a target of the rule that the suite's recipe serves and has no job in the model", strings.Replace(both, "e2e e2e-upgrade: e2e-cluster", "e2e e2e-upgrade e2e-again: e2e-cluster", 1), ok, model, "each target that runs the suite needs a job"},
 		{"a job of the model that has no target", "e2e:\n" + suite, ok, model, "each target that runs the suite needs a job"},
 		{"a job of the model that ci.yml lacks", both, without("e2e-upgrade"), model, "ci.yml has no job e2e-upgrade"},
 		{"the upgrade job missing from the model", both, ok, model[:1], "each target that runs the suite needs a job"},
@@ -1006,6 +1100,53 @@ func TestTheModelHoldsEveryTargetThatRunsTheSuiteAndEveryJobThatMakesOne(t *test
 				t.Fatalf("want accepted, got %v", err)
 			case c.want != "" && (err == nil || !strings.Contains(err.Error(), c.want)):
 				t.Fatalf("want an error with %q, got %v", c.want, err)
+			}
+		})
+	}
+}
+
+func TestTheChecksOfCIAreTheNamesOfItsJobsAndOfTheEntriesOfItsMatrix(t *testing.T) {
+	const (
+		verify = "  verify:\n    timeout-minutes: 30\n    steps:\n      - run: make verify\n"
+		suite  = "  e2e:\n    name: ${{ matrix.target }}\n    timeout-minutes: ${{ matrix.timeout }}\n    strategy:\n      fail-fast: false\n      matrix:\n        include:\n          - target: e2e\n            timeout: 74\n          - target: e2e-upgrade\n            timeout: 56\n    steps:\n      - run: make e2e-lodia\n      - run: make ${{ matrix.target }}\n"
+	)
+	workflow := func(jobs ...string) string { return "jobs:\n" + strings.Join(jobs, "") }
+	inSuite := func(old, replacement string) string { return strings.Replace(suite, old, replacement, 1) }
+	cases := []struct {
+		name, workflow string
+		want           map[string]check
+		failure        string
+	}{
+		{"a job and the entries of a matrix", workflow(verify, suite), map[string]check{
+			"verify":      {30, []string{"make verify"}},
+			"e2e":         {74, []string{"make e2e-lodia", "make e2e"}},
+			"e2e-upgrade": {56, []string{"make e2e-lodia", "make e2e-upgrade"}},
+		}, ""},
+		{"a job with no timeout", workflow(strings.Replace(verify, "    timeout-minutes: 30\n", "", 1)), map[string]check{"verify": {0, []string{"make verify"}}}, ""},
+		{"a timeout written in the entry", workflow(inSuite("timeout-minutes: ${{ matrix.timeout }}", "timeout-minutes: 80")), map[string]check{
+			"e2e":         {80, []string{"make e2e-lodia", "make e2e"}},
+			"e2e-upgrade": {80, []string{"make e2e-lodia", "make e2e-upgrade"}},
+		}, ""},
+		{"two entries of one target", workflow(inSuite("target: e2e-upgrade", "target: e2e")), nil, "two checks of ci.yml are named e2e"},
+		{"a name that is the id of another job", workflow(strings.Replace(verify, "  verify:\n", "  other:\n    name: e2e\n", 1), suite), nil, "two checks of ci.yml are named e2e"},
+		{"a matrix and no name", workflow(inSuite("    name: ${{ matrix.target }}\n", "")), nil, "has a matrix and no name"},
+		{"a name from a value that an entry lacks", workflow(inSuite("name: ${{ matrix.target }}", "name: ${{ matrix.suite }}")), nil, "does not have"},
+		{"a step that reads another context", workflow(inSuite("make ${{ matrix.target }}", "make ${{ github.job }}")), nil, "not a value of the matrix"},
+		{"a name that reads another context", workflow(inSuite("name: ${{ matrix.target }}", "name: ${{ github.job }}")), nil, "not a value of the matrix"},
+		{"a dimension beside the include list", workflow(inSuite("        include:", "        os: [a]\n        include:")), nil, "not an include list alone"},
+		{"a matrix with no entry", workflow(inSuite("        include:\n          - target: e2e\n            timeout: 74\n          - target: e2e-upgrade\n            timeout: 56\n", "        include: []\n")), nil, "not an include list alone"},
+		{"a timeout that is not a number", workflow(inSuite("timeout: 74", "timeout: soon")), nil, "has the timeout-minutes"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got, err := checksOf([]byte(c.workflow))
+			switch {
+			case c.failure == "" && err != nil:
+				t.Fatalf("want accepted, got %v", err)
+			case c.failure != "" && (err == nil || !strings.Contains(err.Error(), c.failure)):
+				t.Fatalf("want an error with %q, got %v", c.failure, err)
+			case c.failure == "" && !reflect.DeepEqual(got, c.want):
+				t.Errorf("got %+v, want %+v", got, c.want)
 			}
 		})
 	}

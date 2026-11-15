@@ -127,34 +127,23 @@ e2e-lodia: ## fetch Lodia at LODIA_COMMIT, the commit go.mod pins, into $(LODIA_
 	git -C $(LODIA_DIR) fetch --quiet --depth 1 https://github.com/lodia-io/lodia.git $(LODIA_COMMIT)
 	git -C $(LODIA_DIR) checkout --quiet --force --detach $(LODIA_COMMIT)
 
-.PHONY: e2e
-e2e: e2e-cluster ## the e2e suite, on a kind cluster of its own that e2e-cluster accepts, that it deletes afterwards with the containers of the Cluster the suite creates
-	$(MAKE) --no-print-directory e2e-lodia
-	mkdir -p $(E2E_DIR)
-	go tool kind create cluster --name $(E2E_CLUSTER) --kubeconfig $(E2E_DIR)/kubeconfig --config test/e2e/testdata/kind.yaml
-	rm -rf $(E2E_DIR)/artifacts
-	$(REMOVE_WORKERS) && E2E_KUBECONFIG=$(E2E_DIR)/kubeconfig go test -v -tags e2e -count=1 -timeout 64m ./test/e2e/...; status=$$?; \
-	$(REMOVE_WORKERS) || status=1; \
-	go tool kind delete cluster --name $(E2E_CLUSTER) --kubeconfig $(E2E_DIR)/kubeconfig; exit $$status
-
-.PHONY: e2e-upgrade
+e2e: E2E_TAGS = e2e
+e2e: E2E_TIMEOUT = 64m
 e2e-upgrade: E2E_CLUSTER = $(E2E_UPGRADE_CLUSTER)
-e2e-upgrade: e2e-cluster ## the upgrade e2e: the previous release that test/pin names installed through clusterctl, a worker that joins, and clusterctl's upgrade to the tree's build, on a kind cluster of its own that e2e-cluster accepts, that it deletes afterwards with the containers of the Cluster the suite creates
-	$(MAKE) --no-print-directory e2e-lodia
-	mkdir -p $(E2E_DIR)
-	go tool kind create cluster --name $(E2E_CLUSTER) --kubeconfig $(E2E_DIR)/kubeconfig --config test/e2e/testdata/kind.yaml
-	rm -rf $(E2E_DIR)/artifacts
-	$(REMOVE_WORKERS) && E2E_KUBECONFIG=$(E2E_DIR)/kubeconfig go test -v -tags e2e,upgrade -count=1 -timeout 46m -run '^TestTheProviderUpgradesFromThePreviousRelease$$' ./test/e2e/...; status=$$?; \
-	$(REMOVE_WORKERS) || status=1; \
-	go tool kind delete cluster --name $(E2E_CLUSTER) --kubeconfig $(E2E_DIR)/kubeconfig; exit $$status
-
-.PHONY: e2e-minor
+e2e-upgrade: E2E_TAGS = e2e,upgrade
+e2e-upgrade: E2E_TIMEOUT = 46m
+e2e-upgrade: E2E_RUN = -run '^TestTheProviderUpgradesFromThePreviousRelease$$'
 e2e-minor: E2E_CLUSTER = $(E2E_MINOR_CLUSTER)
-e2e-minor: e2e-cluster ## the minor step e2e: a Cluster at v1.36.4 with a worker that joined, its control plane stepped to v1.37.0 by Lodia while a second MachineDeployment at v1.37.0 waits for it, on a kind cluster of its own that e2e-cluster accepts, that it deletes afterwards with the containers of the Cluster the suite creates
+e2e-minor: E2E_TAGS = e2e,minor
+e2e-minor: E2E_TIMEOUT = 47m
+e2e-minor: E2E_RUN = -run '^TestAMinorStepHoldsNewWorkersUntilLodiaRunsIt$$'
+
+.PHONY: e2e e2e-upgrade e2e-minor
+e2e e2e-upgrade e2e-minor: e2e-cluster ## the suite of the target, with the tags, -timeout and -run of its variables, on a kind cluster of its own that e2e-cluster accepts, which it deletes afterwards with the containers of the Cluster the suite creates
 	$(MAKE) --no-print-directory e2e-lodia
 	mkdir -p $(E2E_DIR)
 	go tool kind create cluster --name $(E2E_CLUSTER) --kubeconfig $(E2E_DIR)/kubeconfig --config test/e2e/testdata/kind.yaml
 	rm -rf $(E2E_DIR)/artifacts
-	$(REMOVE_WORKERS) && E2E_KUBECONFIG=$(E2E_DIR)/kubeconfig go test -v -tags e2e,minor -count=1 -timeout 47m -run '^TestAMinorStepHoldsNewWorkersUntilLodiaRunsIt$$' ./test/e2e/...; status=$$?; \
+	$(REMOVE_WORKERS) && E2E_KUBECONFIG=$(E2E_DIR)/kubeconfig go test -v -tags $(E2E_TAGS) -count=1 -timeout $(E2E_TIMEOUT) $(E2E_RUN) ./test/e2e/...; status=$$?; \
 	$(REMOVE_WORKERS) || status=1; \
 	go tool kind delete cluster --name $(E2E_CLUSTER) --kubeconfig $(E2E_DIR)/kubeconfig; exit $$status
