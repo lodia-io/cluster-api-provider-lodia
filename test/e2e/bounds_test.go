@@ -8,8 +8,10 @@ import (
 	"errors"
 	"fmt"
 	"go/ast"
+	"go/build"
 	"go/parser"
 	"go/token"
+	"io"
 	"maps"
 	"os"
 	"path/filepath"
@@ -367,20 +369,60 @@ func testsOf(file *ast.File) []string {
 	return tests
 }
 
-func testsOfThePackage() ([]string, error) {
+func testFilesOfThePackage() (map[string]string, error) {
 	names, err := filepath.Glob("*_test.go")
 	if err != nil {
 		return nil, err
 	}
-	var tests []string
+	files := make(map[string]string, len(names))
 	for _, name := range names {
-		file, err := parser.ParseFile(token.NewFileSet(), name, nil, parser.SkipObjectResolution)
+		src, err := os.ReadFile(name)
 		if err != nil {
 			return nil, err
 		}
-		tests = append(tests, testsOf(file)...)
+		files[name] = string(src)
 	}
-	return tests, nil
+	return files, nil
+}
+
+func requireEachJobToCompileItsOwnTests(files map[string]string, model []job) error {
+	names := slices.Sorted(maps.Keys(files))
+	tests := make(map[string][]string, len(names))
+	tagged := make(map[string]bool, len(names))
+	for _, name := range names {
+		file, err := parser.ParseFile(token.NewFileSet(), name, files[name], parser.ParseComments)
+		if err != nil {
+			return err
+		}
+		tests[name], tagged[name] = testsOf(file), carriesABuildTag(file)
+	}
+	compiledBy := make(map[string][]string, len(names))
+	var errs []error
+	for _, j := range model {
+		ctxt := build.Default
+		ctxt.BuildTags = strings.Split(j.tags, ",")
+		ctxt.OpenFile = func(name string) (io.ReadCloser, error) { return io.NopCloser(strings.NewReader(files[name])), nil }
+		declared := false
+		for _, name := range names {
+			compiled, err := ctxt.MatchFile("", name)
+			if err != nil {
+				return err
+			}
+			if compiled {
+				compiledBy[name] = append(compiledBy[name], j.name)
+				declared = declared || slices.Contains(tests[name], j.test)
+			}
+		}
+		if j.test != "" && !declared {
+			errs = append(errs, fmt.Errorf("the %s job runs %s alone, and no file that its build tags %s compile declares it: go test would run nothing and pass", j.name, j.test, j.tags))
+		}
+	}
+	for _, name := range names {
+		if tagged[name] && len(tests[name]) > 0 && len(compiledBy[name]) != 1 {
+			errs = append(errs, fmt.Errorf("%s declares %v, and the jobs %v compile it, want exactly one: a job that compiles another job's test runs it on its own cluster beside its own, and a test that no job compiles runs nowhere", name, tests[name], compiledBy[name]))
+		}
+	}
+	return errors.Join(errs...)
 }
 
 func TestTheBoundsFitUnderTheTimeouts(t *testing.T) {
@@ -412,15 +454,15 @@ func TestTheBoundsFitUnderTheTimeouts(t *testing.T) {
 	if err := requireTheModelIsTheSuiteOfTheMakefileAndCI(makefile, runs, jobs); err != nil {
 		t.Fatal(err)
 	}
-	tests, err := testsOfThePackage()
+	files, err := testFilesOfThePackage()
 	if err != nil {
+		t.Fatal(err)
+	}
+	if err := requireEachJobToCompileItsOwnTests(files, jobs); err != nil {
 		t.Fatal(err)
 	}
 	for _, j := range jobs {
 		t.Run(j.name, func(t *testing.T) {
-			if j.test != "" && !slices.Contains(tests, j.test) {
-				t.Fatalf("the %s job runs %s alone, which the package does not declare: go test would run nothing and pass", j.name, j.test)
-			}
 			timeout, err := targetTimeout(makefile, j.target, j.tags, j.test)
 			if err != nil {
 				t.Fatal(err)
@@ -803,17 +845,54 @@ func TestTheModelHoldsEveryTargetThatRunsTheSuiteAndEveryJobThatMakesOne(t *test
 	}
 }
 
-func TestTheTestsOfThePackageHoldTheOnesOfTheTaggedFilesAndNotItsTestMain(t *testing.T) {
-	tests, err := testsOfThePackage()
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, name := range []string{"TestTheProviderUpgradesFromThePreviousRelease", "TestAMinorStepHoldsNewWorkersUntilLodiaRunsIt", "TestTheBoundsFitUnderTheTimeouts"} {
-		if !slices.Contains(tests, name) {
-			t.Errorf("the package declares no %s: %v", name, tests)
+func TestEachJobIsHeldToTheTestsOfTheFilesItsBuildTagsCompile(t *testing.T) {
+	source := func(constraint string, tests ...string) string {
+		src := "package e2e\n"
+		if constraint != "" {
+			src = "//go:build " + constraint + "\n\n" + src
 		}
+		for _, test := range tests {
+			src += "func " + test + "(t *testing.T) {}\n"
+		}
+		return src
 	}
-	if slices.Contains(tests, "TestMain") {
-		t.Errorf("TestMain is not a test that -run selects: %v", tests)
+	model := []job{{name: "e2e", tags: "e2e"}, {name: "e2e-upgrade", tags: "e2e,upgrade", test: "TestUpgrade"}, {name: "e2e-minor", tags: "e2e,minor", test: "TestMinor"}}
+	cases := []struct {
+		name   string
+		change map[string]string
+		want   string
+	}{
+		{"the files as they are", nil, ""},
+		{"the minor test behind e2e alone", map[string]string{"minor_test.go": source("e2e", "TestMinor")}, "minor_test.go declares [TestMinor], and the jobs [e2e e2e-upgrade e2e-minor] compile it"},
+		{"the join test without !minor", map[string]string{"join_test.go": source("e2e && !upgrade", "TestJoin")}, "join_test.go declares [TestJoin], and the jobs [e2e e2e-minor] compile it"},
+		{"the join test without !upgrade", map[string]string{"join_test.go": source("e2e && !minor", "TestJoin")}, "join_test.go declares [TestJoin], and the jobs [e2e e2e-upgrade] compile it"},
+		{"the join test behind a tag that no job sets", map[string]string{"join_test.go": source("e2e && upgrade && minor", "TestJoin")}, "join_test.go declares [TestJoin], and the jobs [] compile it"},
+		{"the minor test behind the upgrade's tags", map[string]string{"minor_test.go": source("e2e && upgrade", "TestMinor")}, "the e2e-minor job runs TestMinor alone, and no file that its build tags e2e,minor compile declares it"},
+		{"the upgrade test behind e2e alone", map[string]string{"upgrade_test.go": source("e2e", "TestUpgrade")}, "upgrade_test.go declares [TestUpgrade], and the jobs [e2e e2e-upgrade e2e-minor] compile it"},
+		{"the upgrade test behind the minor's tags", map[string]string{"upgrade_test.go": source("e2e && minor", "TestUpgrade")}, "the e2e-upgrade job runs TestUpgrade alone, and no file that its build tags e2e,upgrade compile declares it"},
+		{"a test that no file declares", map[string]string{"minor_test.go": source("e2e && minor")}, "the e2e-minor job runs TestMinor alone"},
+		{"a constraint that does not parse", map[string]string{"minor_test.go": source("e2e &&", "TestMinor")}, "minor_test.go"},
+		{"a file that does not parse", map[string]string{"minor_test.go": "package e2e\nfunc ("}, "minor_test.go"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			files := map[string]string{
+				"suite_test.go":      source("e2e", "TestMain"),
+				"steps_test.go":      source("e2e"),
+				"join_test.go":       source("e2e && !upgrade && !minor", "TestJoin"),
+				"lodia_join_test.go": source("e2e && !upgrade"),
+				"upgrade_test.go":    source("e2e && upgrade", "TestUpgrade"),
+				"minor_test.go":      source("e2e && minor", "TestMinor"),
+				"bounds_test.go":     source("", "TestBounds"),
+			}
+			maps.Copy(files, c.change)
+			err := requireEachJobToCompileItsOwnTests(files, model)
+			switch {
+			case c.want == "" && err != nil:
+				t.Fatalf("want accepted, got %v", err)
+			case c.want != "" && (err == nil || !strings.Contains(err.Error(), c.want)):
+				t.Fatalf("want an error with %q, got %v", c.want, err)
+			}
+		})
 	}
 }
