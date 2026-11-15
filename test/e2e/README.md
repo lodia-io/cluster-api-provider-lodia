@@ -29,7 +29,7 @@ In this order:
 | Lodia and etcd-druid | the chart of the [Lodia commit](https://github.com/lodia-io/lodia/tree/f91168b1248dc18151a0c2d442fe2050593a0866) that `go.mod` pins, fetched by `make e2e-lodia` into `work/lodia`, with images built by ko into the kind cluster | helm, with `--wait` |
 | Cluster API and its kubeadm bootstrap provider v1.15.0-beta.0 | their release YAMLs | clusterctl's `Init` |
 | Cluster API provider Docker v1.15.0-beta.0 | the release's `infrastructure-components-development.yaml`, whose image is built for the [staging registry](https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/Makefile#L1071-L1074) | clusterctl's `Init` |
-| this provider | `make release-components`, the target that renders the release's components YAML, with the image repository `kind.local/cluster-api-provider-lodia` and the host's one platform, so that ko loads the image into the kind cluster | clusterctl's `Init` |
+| this provider | `make release-components`, the target that renders the release's components YAML, with the image repository `kind.local/cluster-api-provider-lodia` and the host's one platform, so that ko loads the image into the kind cluster, and the render of `config/default` in the target's own directory, which two targets on one host do not share | clusterctl's `Init` |
 
 `make e2e-upgrade` installs the previous release of the provider in place of the last row, and the tree's build beside it in the repository, as [the upgrade test](#the-upgrade-test) says.
 `make e2e-minor` installs what `make e2e` does.

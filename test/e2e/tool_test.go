@@ -33,7 +33,7 @@ var (
 
 func releaseComponentsCommand(ctx context.Context, cluster, dir string) *exec.Cmd {
 	cmd := exec.CommandContext(ctx, "make", "--no-print-directory", "release-components",
-		"IMAGE_REPOSITORY="+kindImageRepository, "PLATFORMS=linux/"+goruntime.GOARCH, "RELEASE_DIR="+dir)
+		"IMAGE_REPOSITORY="+kindImageRepository, "PLATFORMS=linux/"+goruntime.GOARCH, "RELEASE_DIR="+dir, "RENDER="+filepath.Join(dir, "default.yaml"))
 	cmd.Dir = root
 	cmd.Env = koEnv(os.Environ(), cluster)
 	return cmd
@@ -155,7 +155,7 @@ func recipeOf(t *testing.T, cmd *exec.Cmd) string {
 func TestTheSuiteRendersTheProviderWithTheTargetTheReleaseUses(t *testing.T) {
 	const dir = "/work/e2e/capl-e2e/release"
 	suite := recipeOf(t, releaseComponentsCommand(t.Context(), "capl-e2e", dir))
-	release := exec.CommandContext(t.Context(), "make", "--no-print-directory", "release-components")
+	release := exec.CommandContext(t.Context(), "make", "--no-print-directory", "release-components", "RENDER=out/default.yaml")
 	release.Dir = root
 	released := recipeOf(t, release)
 	if !strings.Contains(suite, "KO_DOCKER_REPO="+kindImageRepository+" go run "+koModule+" resolve") {
