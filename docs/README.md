@@ -459,6 +459,10 @@ For any release tag, drop `--source-ref`: the commands then accept `release.yml`
 For the same reason a management cluster that runs an older Cluster API takes [the version the provider needs](#the-cluster-api-version) by name: `clusterctl upgrade apply --core cluster-api:v1.15.0-beta.0 --bootstrap kubeadm:v1.15.0-beta.0` ([flags](https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/cmd/clusterctl/cmd/upgrade_apply.go#L78-L85)).
 With cluster-api-operator, set `spec.version`, of the provider and of Cluster API's core and kubeadm bootstrap providers.
 Keep the variables as [above](#variables) for either.
+clusterctl's upgrade deletes the provider's namespaced objects and keeps the CRDs, the Namespace, the inventory and every cluster-scoped object whose name does not start with the provider's namespace and a dash ([delete](https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/cmd/clusterctl/client/cluster/components.go#L153-L199)); that is all five ClusterRoles and ClusterRoleBindings of the manifest, the grant's binding among them.
+It then creates each object of the new release or merge-patches it over what is there ([create](https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/cmd/clusterctl/client/cluster/components.go#L95-L131)), so the five keep their UIDs and take the new release's content, a binding whose `roleRef` a release changes fails the upgrade, since the field is immutable ([validation](https://github.com/kubernetes/kubernetes/blob/v1.37.2/pkg/apis/rbac/validation/validation.go#L206)), and an object that a release drops stays in every management cluster that was upgraded.
+The new Deployment is `Available` when clusterctl returns, and its manager leads once the old manager's Lease of one minute has expired ([the check](https://github.com/kubernetes/client-go/blob/v0.37.2/tools/leaderelection/leaderelection.go#L485-L494)), so the objects are reconciled again about a minute later.
+[`make verify`](../CONTRIBUTING.md#build-and-test) holds the manifest of each change to the previous release's, and [the upgrade e2e](../test/e2e/README.md#the-upgrade-test) runs the upgrade from it.
 `upgrade plan` reads the repository of every provider of the management cluster, and fails when one has no entry in the configuration of the machine it runs on, so every machine that upgrades the management cluster needs the `providers:` entry ([provider info](https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/cmd/clusterctl/client/cluster/upgrader_info.go#L51-L123)).
 
 ## `clusterctl move`
@@ -531,7 +535,7 @@ To give the copy a new, empty control plane, remove its annotation `controlplane
 - [no-admission-webhooks](decisions/no-admission-webhooks.md) — CEL only, Lodia's spec rules repeated and held by a test, the network's rules left to Lodia.
 - [least-privilege-rbac](decisions/least-privilege-rbac.md) — RBAC from markers, leader election in the manager's namespace on its own Lease.
 - [releases-through-clusterctl](decisions/releases-through-clusterctl.md) — a GitHub release with the two files clusterctl reads, the image on ghcr.io by digest, keyless signatures and attestations of the image and both files, signed tags by hand with the API module's beside them, pre-releases until Cluster API v1.15.0.
-- [e2e-on-a-named-cluster](decisions/e2e-on-a-named-cluster.md) — the suite's own kind cluster, installed through clusterctl, a worker that joins, every wait bounded.
+- [e2e-on-a-named-cluster](decisions/e2e-on-a-named-cluster.md) — the suite's own kind cluster, installed through clusterctl, a worker that joins, an upgrade from the previous release, every wait bounded.
 
 ## Contracts this provider implements
 

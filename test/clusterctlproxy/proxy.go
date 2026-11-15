@@ -144,15 +144,9 @@ func (p *proxy) CheckClusterAvailable(context.Context) error {
 	return errors.New("CheckClusterAvailable is not on the path of Init, Move or ApplyUpgrade")
 }
 
-// ListResources lists what clusterctl's own proxy does, which ApplyUpgrade and
-// Delete ask for: the objects with the labels, in the namespaces for the
-// namespaced kinds and in the cluster for the others, of every kind that
-// supports list and delete but the kinds of the CRDs that belong to a provider,
-// or to cert-manager when the labels are its own. Discovery goes through a
-// client of the discovery timeout, and both it and the lists end with the
-// context, which clusterctl's discovery does not. clusterctl also retries each
-// read, which the suite's Proxy does for none.
-// https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/cmd/clusterctl/client/cluster/proxy.go#L206-L309
+// ListResources lists as clusterctl's own proxy does, except that its discovery
+// ends with the context and that no read is retried.
+// https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/cmd/clusterctl/client/cluster/proxy.go#L207-L308
 func (p *proxy) ListResources(ctx context.Context, labels map[string]string, namespaces ...string) ([]unstructured.Unstructured, error) {
 	cfg := rest.CopyConfig(p.cfg)
 	cfg.Timeout = p.discoveryTimeout

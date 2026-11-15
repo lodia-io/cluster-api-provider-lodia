@@ -50,9 +50,6 @@ func Previous() (Release, error) {
 	return Parse(previous)
 }
 
-// Parse reads a pin, and refuses a field it does not know, a version that is
-// not written vMAJOR.MINOR.PATCH[-PRERELEASE] and a sum that is not a lower
-// case sha256.
 func Parse(raw []byte) (Release, error) {
 	var r Release
 	if err := yaml.UnmarshalStrict(raw, &r); err != nil {

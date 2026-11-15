@@ -115,9 +115,6 @@ var dockerCallBound = 30 * time.Second
 
 var goTestTimeout = regexp.MustCompile(`-timeout (\d+)m\b`)
 
-// A job of ci.yml runs one target of the Makefile, whose one go test line
-// carries the build tags of the job's test and the -timeout the model fits
-// under.
 func targetTimeout(makefile []byte, target, tags string) (time.Duration, error) {
 	rules := regexp.MustCompile(`(?m)^`+regexp.QuoteMeta(target)+`:.*\n((?:\t.*(?:\n|$)|\n)*)`).FindAllSubmatch(makefile, -1)
 	if rules == nil {
@@ -242,8 +239,6 @@ func tenantFits(requestTimeout, workerBound, dumpBound, dump time.Duration) erro
 	return nil
 }
 
-// A job's steps run its target alone, so that the -timeout and the
-// timeout-minutes that the model is fitted to are the ones of the job's test.
 func runsTarget(runs []string, target string) bool {
 	return slices.ContainsFunc(runs, func(run string) bool { return strings.TrimSpace(run) == "make "+target })
 }

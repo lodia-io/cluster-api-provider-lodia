@@ -5,6 +5,7 @@ The prefix is not Lodia's `lodia-e2e`: this guard refuses Lodia's own e2e cluste
 It also refuses to start while a `HELM_KUBE*` variable is set, since helm [lays them over](https://github.com/helm/helm/blob/v4.3.1/pkg/cli/environment.go#L97-L130) `--kubeconfig`.
 
 `make e2e` creates the kind cluster `capl-e2e`, runs the suite and deletes the cluster.
+`make e2e-upgrade` runs [the upgrade test](#the-upgrade-test) the same way on the kind cluster `capl-e2e-upgrade`, in `work/e2e/capl-e2e-upgrade`, so that the two targets share neither a cluster nor a directory; `E2E_UPGRADE_CLUSTER` changes its name, and `E2E_CLUSTER` on the command line overrides it.
 `E2E_CLUSTER` changes the name.
 `make e2e` refuses, before it creates anything, a name that does not start with `capl-e2e`, that has a character outside `a-z`, `0-9` and `-`, that ends in `-w` or that is longer than 30 characters.
 The prefix is the one the guard wants, and a name ending in `-w` is refused because a run named `x` removes the containers labelled `x-w`, which are also the nodes of a kind cluster named `x-w`.
@@ -29,6 +30,7 @@ In this order:
 | Cluster API provider Docker v1.15.0-beta.0 | the release's `infrastructure-components-development.yaml`, whose image is built for the [staging registry](https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/Makefile#L1071-L1074) | clusterctl's `Init` |
 | this provider | `make release-components`, the target that renders the release's components YAML, with the image repository `kind.local/cluster-api-provider-lodia` and the host's one platform, so that ko loads the image into the kind cluster | clusterctl's `Init` |
 
+`make e2e-upgrade` installs the previous release of the provider in place of the last row, and the tree's build beside it in the repository, as [the upgrade test](#the-upgrade-test) says.
 Lodia goes in before the providers because the provider's watches need Lodia's CRDs.
 The four providers go in through one `Init` of clusterctl's library, with `WaitProviders`, which waits up to 2 minutes for each of their Deployments, on a local repository that the suite lays out in `work/e2e/<E2E_CLUSTER>/repository` as Cluster API's [`CreateRepository`](https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/test/framework/clusterctl/repository.go#L104-L158) does:
 - Cluster API's three releases are there under their own version, each with the `metadata.yaml` of that release;
@@ -207,6 +209,90 @@ The `DevCluster` carries the annotation `cluster.x-k8s.io/managed-by`, which Clu
 The infrastructure contract [gives](https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/docs/book/src/developer/providers/contracts/infra-cluster.md?plain=1#L475-L490) the rest to whoever manages such an infrastructure, so the suite patches the one field `DevCluster.status.initialization.provisioned` once.
 No assertion reads it.
 
+## The upgrade test
+
+`make e2e-upgrade` runs `TestTheProviderUpgradesFromThePreviousRelease` with the build tags `e2e` and `upgrade`, on the kind cluster `capl-e2e-upgrade` that it creates and deletes as `make e2e` does its own; CI runs it as the job `e2e-upgrade`, on every pull request and every push to `main`, beside the job `e2e`.
+The tags split the two tests: `join_test.go` is behind `e2e` and not `upgrade`, `upgrade_test.go` and `lodia_upgrade_test.go` behind both, and `suite_test.go`, `install_test.go` and `steps_test.go`, which hold the install and the steps that the two tests share, behind `e2e`.
+`lodia_join_test.go` gives the install the tree's build, and `lodia_upgrade_test.go` the release and the tree's build.
+It is a job of its own, and not a step of the join test or a test on its cluster:
+- the join test's Cluster is made by the tree's build that `Init` installs, and an upgrade from a release needs the release running when the Cluster is made, so installing the release there would leave the tree's `Init` and its creation of the `ControlPlane` and the Secrets untested ([the decision](../../docs/decisions/e2e-on-a-named-cluster.md));
+- a management cluster holds one instance of the provider, which clusterctl's upgrade [checks](https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/cmd/clusterctl/client/cluster/upgrader.go#L375-L379), so the release could follow the join test on its cluster only after a `clusterctl delete` and an `Init` of the release, a downgrade that no user runs, and the two tests would depend on their order;
+- Cluster API runs each of its upgrade specs on a management cluster of its own, a [kind cluster](https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/test/e2e/clusterctl_upgrade.go#L283-L296) or a workload cluster made into one.
+
+The two jobs run on two runners in parallel, so the join job keeps its 64 and 74 minutes.
+
+### What it installs
+
+Cert-manager, Lodia and etcd-druid, Cluster API, its kubeadm bootstrap provider and CAPD are as under "What it installs".
+The provider is the release that [`test/pin/previous-release.yaml`](../pin/previous-release.yaml) names, `Init`ed as `lodia:<version>`, beside the tree's build, which goes into the repository under `v<major>.<minor>.99` as before and is built into the kind cluster by the same `make release-components`:
+- the pin holds the version and the sha256 of the release's `control-plane-components.yaml` and `metadata.yaml`; the suite downloads each from the GitHub release, as it does Cluster API's, checks it against the sum and keeps it in `work/e2e/<cluster>/<version>`, and refuses a file with another sum;
+- the components name the image by its digest, which the kind node pulls from ghcr.io without credentials ([releases-through-clusterctl](../../docs/decisions/releases-through-clusterctl.md)), so the sum of the file pins the image, and `requireDigests` takes a reference that carries its digest as it is, where it wants a table entry for every other;
+- the repository holds the release under `control-plane-lodia/<version>/` beside `v<major>.<minor>.99`, and clusterctl ranks `v<major>.<minor>.99` above the release for `latest` ([versions](https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/cmd/clusterctl/client/repository/repository_versions.go#L116-L128)), so what the join job reads as `latest` stays the tree's;
+- the clusterctl variables are the join job's, `LODIA_KUBEADM_BOOTSTRAP_SA_NAMESPACE` and `LODIA_KUBEADM_BOOTSTRAP_SA_NAME`, and the install fails before it starts when the environment sets a variable that the release's components reference, as for the other components.
+
+Lodia and Cluster API stay at the tree's pins whatever the release was built against: a release that does not run on the tree's Lodia fails the install, before the upgrade.
+The pin moves by hand, in a pull request after each release is published, since the sums exist only then: [CONTRIBUTING](../../CONTRIBUTING.md#release-a-version) says how, and `make release-check` refuses a tag while the pin is not the newest published release below it.
+`make verify` also downloads the release's components once, into `work/pin`, and compares them with the render of `config/default` ([`test/components`](../components/upgrade.go)): that names in seconds a cluster-scoped object that clusterctl's upgrade would leave behind, a binding whose `roleRef` it would fail on and a CRD version it would stop serving, which the job shows on real objects.
+
+### The steps
+
+The steps are numbered here apart from the join test's, which is named where one is meant.
+The first six are the join test's apply, its steps 1, 4 and 6, the `Machine` of its step 5 and its step 9, under the release, and the others follow:
+
+1. The objects of [`testdata`](testdata) are applied in `capi-join`, and the `DevCluster` is marked provisioned.
+2. `Cluster` `ControlPlaneInitialized`.
+3. kindnet is applied in the tenant through `<cluster>-kubeconfig`.
+4. The `Machine` is `Running` with a `nodeRef`.
+5. The tenant's Node has the `DevMachine`'s `providerID`, has lost the `uninitialized` taint and is `Ready`.
+6. `Cluster` `Available`.
+7. The inventory says the release's version and the manager of the Deployment runs the image that the release's components name, and the suite reads what the new manager has to leave as it is: the Deployment's and the grant's binding's UIDs, the UIDs of the `LodiaControlPlane`, Lodia's `ControlPlane` and the two copied Secrets, the `Machine`'s UID and `nodeRef`, and the time of the last transition of `Available` on the `Cluster` and on the `LodiaControlPlane`.
+8. `clusterctl upgrade apply --control-plane lodia:v<major>.<minor>.99`, as `ApplyUpgrade` with `WaitProviders`: the `Deployment` is `Available` within clusterctl's 2 minutes.
+9. The inventory says the tree's version, the Deployment has a new UID and runs the image that the tree's components name, and a SubjectAccessReview still finds `get` alone for the kubeadm bootstrap provider, as after the install.
+10. The grant's binding has the UID of before the upgrade.
+11. The Lease `controlplane.lodia.io` is held by a pod that a ReplicaSet of the new Deployment controls.
+12. With the `Cluster` paused and nothing else done, `Paused` is `True` on the `LodiaControlPlane` and then, after the unpause, `False`, and the `Cluster`'s `Available` is recomputed, as in step 11 of the join test.
+13. The `LodiaControlPlane`, Lodia's `ControlPlane`, `<cluster>-kubeconfig` and `<cluster>-ca` have the UIDs of before the upgrade, the two copies hold Lodia's bytes as in step 3 of the join test, neither `Ready` nor `Available` of the `LodiaControlPlane` has the reason `CopyOfAnotherObject`, and the `Available` of the `Cluster` and of the `LodiaControlPlane` has the time of last transition of before the upgrade.
+14. The `Machine` has the UID and the `nodeRef` of before the upgrade, the tenant is opened again from `<cluster>-kubeconfig` as the provider holds it now and answers a list of its Nodes, and the Node is `Ready` with the `DevMachine`'s `providerID`.
+15. The objects of the graph stop changing, as in step 22 of the join test.
+16. They stay as they are for 2 minutes, as in step 23.
+17. Deleting the `Cluster` removes what the old manager made, as in step 24.
+
+The reasons for the checks:
+- clusterctl deletes the namespaced objects of the provider and the ServiceAccount among them, and keeps the CRDs, the Namespace, the inventory and every cluster-scoped object whose name does not start with the provider's namespace and a dash ([delete](https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/cmd/clusterctl/client/cluster/components.go#L153-L199)), which are all five ClusterRoles and ClusterRoleBindings of the render, the grant's among them; it creates each object or merge-patches it over what is there ([create](https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/cmd/clusterctl/client/cluster/components.go#L95-L131)), so the CRDs and the five keep their UIDs and take the tree's content, and a binding whose `roleRef` changes fails the upgrade;
+- no storage migration runs for a provider's CRDs, since clusterctl's migrator [serves](https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/cmd/clusterctl/client/cluster/cert_manager.go#L298-L305) cert-manager alone, so a stored version has to stay served;
+- the `readyz` of the manager is a ping, so clusterctl returns when the new Deployment is `Available`, before the new manager leads: the old manager keeps its Lease, since the manager sets no `LeaderElectionReleaseOnCancel`, and the new one waits out a lease of 1 minute from its first read of the record ([the check](https://github.com/kubernetes/client-go/blob/v0.37.2/tools/leaderelection/leaderelection.go#L485-L494), [the lease](https://github.com/kubernetes/client-go/blob/v0.37.2/tools/leaderelection/leaderelection.go#L548-L554), the duration in [`main.go`](../../cmd/cluster-api-provider-lodia/main.go)), and then up to a retry period of 5 seconds;
+- the holder of the Lease is the pod's host name, which is its name, and a UUID ([source](https://github.com/kubernetes-sigs/controller-runtime/blob/v0.25.2/pkg/leaderelection/leader_election.go#L93-L97)), and the old pod can still be terminating, for its 10 seconds of grace ([`manager.yaml`](../../config/manager/manager.yaml)), when the old Deployment reports no replica, so this test's step 11 orders the pause after the new manager;
+- the pause cycle shows the new manager reconciling the same `LodiaControlPlane`: its writes are where the tree's schema first meets an object that the release wrote;
+- the times of last transition of `Available` are kept by anything that does not flap: a poll could miss a flap, the time cannot;
+- Cluster API checks the same of its own upgrade, [no unexpected rollouts](https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/test/e2e/clusterctl_upgrade.go#L677-L679) and [the resourceVersions stable](https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/test/e2e/clusterctl_upgrade.go#L746-L753) after the last upgrade, so a new manager that rewrites what the old one wrote fails steps 15 and 16;
+- the suite's `LODIA_*` variables equal the defaults in the manifest, so the job cannot tell a variable that clusterctl processed from the default that [`docs/README.md`](../../docs/README.md#variables) warns of; `TestTheRepositoryIsWhatClusterctlReadsBack` reads the release back with other values.
+
+What the test holds today is clusterctl's mechanics and the adoption of the release's objects by a new pod; its reach grows with every change of the manifests, the CRDs and the controller on `main`.
+A call that clusterctl's own proxy answers and the suite's [Proxy](../clusterctlproxy/proxy.go) refused, `ListResources`, is the Proxy's now, listing as clusterctl's does but through the context of the call, which clusterctl's discovery takes none of ([the call](https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/cmd/clusterctl/client/cluster/proxy.go#L206-L309)).
+
+### The bounds
+
+The upgrade has a set of bounds of its own, `upgradeBounds` in [`bounds_test.go`](bounds_test.go), and the job's `-timeout` and `timeout-minutes` are fitted to `Install` and `Dump` of the join test's set and to these:
+
+| field | bound | what it covers |
+|---|---|---|
+| `Apply`, `Initialized`, `Kindnet`, `Running`, `Ready`, `Available` | 1, 4, 1, 3, 3 and 1 minutes | steps 1 to 6, the join test's waits under the release |
+| `Upgrade` | 4 minutes | the scale-down of the old Deployment, up to about 84 seconds, the deletes and creates, and the 2 minutes of `WaitProviders` inside |
+| `Leader` | 2 minutes | the lease's minute, up to 5 seconds of retry after it, and the new pod's start |
+| `Paused` | 30 seconds | the pause cycle of step 12; its unpause keeps `unpauseBound` |
+| `Settled`, `Stable` | 2 and 2 minutes | steps 15 and 16, Cluster API's |
+| `Deleted` | 3 minutes | step 17 |
+
+They add up to 26.5 minutes, and with `Install` and `Dump` to 43.5, which `TestTheBoundsFitUnderTheTimeouts` fits under `-timeout 46m` of `make e2e-upgrade` and `timeout-minutes: 56` of the job, as it fits the join test's under 64 and 74.
+About 12 minutes after the install is an estimate, not a measurement.
+The release's image comes from ghcr.io, which the suite's pulls of quay.io, registry.k8s.io and gcr.io did not include; the pull is inside `Init`'s wait for the Deployment, and the digest fixes what comes.
+`TestEveryWaitOfTheUpgradeTestIsBoundedByAFieldOfItsOwnBoundsThatNoOtherWaitTakes` holds every wait of `upgrade_test.go` to a field of `upgradeBounds` that no other wait takes, as the check for the join test does for `bounds`, and `TestEachTargetThatRunsTheSuiteCreatesAClusterOfItsOwnThatTheGuardAccepts` that the two targets share no cluster and no directory.
+`ApplyUpgrade` is among the calls whose timeouts the Proxy's and the suite's tests hold: `TestEveryCallAgainstAClusterThatDoesNotAnswerEndsWithinItsBoundAndOneDiscoveryTimeout`, `TestTheClusterctlClientEndsItsCallsAtTheSuitesTimeouts` and `TestTheClusterctlClientsRequestsAskForTheirOwnTimeouts`.
+The checks of steps 7 to 14 are plain functions that `upgraded_test.go` holds on fake clients; nothing but a run of the job holds that the steps call them.
+
+A failed upgrade leaves the provider scaled down or deleted, so the deletion of step 17 cannot pass; the dump still runs, and `make e2e-upgrade` removes the containers and the cluster.
+It writes to `work/e2e/capl-e2e-upgrade/artifacts`, which CI uploads as `e2e-upgrade-artifacts`.
+
 ## On failure
 
 The suite writes to `work/e2e/<E2E_CLUSTER>/artifacts`, and CI uploads it: the objects above with their conditions and Lodia's `Etcd`, the metadata of the Secrets and ConfigMaps of `capi-join`, without data or annotations, and of the CRDs, the pods, logs and events of cert-manager, of the managers of Cluster API, CAPD, Lodia and the provider, and of the control plane in `capi-join`, through `<cluster>-kubeconfig` once it exists the tenant's Nodes, DaemonSets, Deployments and ReplicaSets, and the pods and events of `kube-system` and `default`, and from the worker container `journalctl -u kubelet -u containerd` and `crictl ps -a`.
@@ -228,7 +314,7 @@ The suite gives clusterctl a [Proxy of its own](../clusterctlproxy/proxy.go) ins
 `TestEveryClusterctlClientIsBuiltThroughTheFactory` fails, outside the Proxy's [`proxy.go`](../clusterctlproxy/proxy.go) and the trap's [`trap_test.go`](../clusterctlproxy/trap_test.go), which builds clusterctl's own proxy to see that the trap holds it, every call into clusterctl's `client` and `client/cluster` packages but for `cluster.InjectProxy` and `cluster.InjectYamlProcessor`, `cluster.GetOwnerGraph`, which makes clusterctl's own proxy from a kubeconfig path, among them, and a walk that reads no Go file in a directory that holds a package of the module.
 `TestNoPackageOfTheDependencyGraphBuildsClusterctlClientsFromAPath` fails, with and without the `e2e` tag, a package of Cluster API's `test/e2e` or `test/framework` in the dependency graph under any import name, since their clients take a kubeconfig path too, and any other package outside the module and clusterctl's own that imports clusterctl's `client` or `client/cluster`.
 Every test outside the suite's tagged files that builds a clusterctl client through the factory, the envtest `Move` among them, first calls [`TrapTheDefaultKubeconfig`](../clusterctlproxy/trap.go), which points `KUBECONFIG` at a kubeconfig of a cluster that never answers and fails the test if that cluster is asked anything, so that a factory that falls back to clusterctl's own proxy fails the tests and does not reach the developer's current context.
-The suite's tagged files, `install_test.go` and `join_test.go`, build theirs on the rest config of the cluster that the guard accepted and call no trap.
+The suite's tagged files, those with the build tag `e2e`, build theirs on the rest config of the cluster that the guard accepted and call no trap.
 `TestTheTrapIsWhatClientGoAndClusterctlsOwnProxyLoadWhereNoKubeconfigIsNamed` holds that client-go's default loading rules and clusterctl's own proxy, with no context and with `Kubeconfig`'s, load the trap's cluster, and `TestTheTrapFailsTheTestOnlyWhenItsClusterIsAsked` that a test that reaches it fails.
 `TestTheClusterctlClientEndsItsCallsAtTheSuitesTimeouts` holds that `Init`, `Move` and `ApplyUpgrade` through the suite's own wiring of the two timeouts end within their bound and one discovery timeout, and `TestTheClusterctlClientsRequestsAskForTheirOwnTimeouts` that the version check and the discovery of an `Init`, and the discovery of an `ApplyUpgrade`, ask for the discovery timeout, and the inventory's request of the one and the Cluster CRD's of the other for the client's.
 A kind cluster that does not answer ends a wait of a step at most one discovery after its bound, and a call between the waits within a discovery, three requests of 10 seconds, and then the 75 seconds.
