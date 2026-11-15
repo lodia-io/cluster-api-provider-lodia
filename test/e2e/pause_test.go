@@ -36,17 +36,18 @@ func setClusterPaused(ctx context.Context, c client.Client, key client.ObjectKey
 // Cluster left paused would hold every controller of the suite.
 var unpauseBound = 30 * time.Second
 
-// pauseCycle is the pause of steps 11, 19 and 21. It waits until both
-// controllers report Paused True, runs act, unpauses by dropping spec.paused as
-// clusterctl does, and requires that both controllers ran after it. Both stop
-// at Paused while it is True, so the Paused False it waits for is a write of a
-// controller that has read the Cluster unpaused, and not the False of before
-// the pause: a LodiaControlPlane that misses the unpause stays True. The
-// Cluster's Available is recomputed only by the full pass that follows, which
-// stamps it with the Cluster's generation, so it has to be True at the
-// generation that the unpause produced or a later one. The LodiaControlPlane's
-// generation does not move with the Cluster's, so nothing beyond its Paused
-// going True and then False shows that the provider resumed.
+// pauseCycle is the pause of steps 11, 19 and 21 of the join test and step 12
+// of the upgrade test. It waits until both controllers report Paused True, runs
+// act, unpauses by dropping spec.paused as clusterctl does, and requires that
+// both controllers ran after it. Both stop at Paused while it is True, so the
+// Paused False it waits for is a write of a controller that has read the
+// Cluster unpaused, and not the False of before the pause: a LodiaControlPlane
+// that misses the unpause stays True. The Cluster's Available is recomputed
+// only by the full pass that follows, which stamps it with the Cluster's
+// generation, so it has to be True at the generation that the unpause produced
+// or a later one. The LodiaControlPlane's generation does not move with the
+// Cluster's, so nothing beyond its Paused going True and then False shows that
+// the provider resumed.
 // The pause, both waits and act, which gets their context, share bound. The
 // unpause has unpauseBound of its own, and no deadline of its caller's, so that
 // it goes out when bound has ended.
