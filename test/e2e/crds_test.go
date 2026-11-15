@@ -4,12 +4,12 @@
 package e2e
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -91,52 +91,48 @@ func TestEveryObjectOfTheTestdataIsAcceptedByTheCRDOfItsKind(t *testing.T) {
 	}
 }
 
-func requireTheTestTargetToSetTheAssetsOfEnvtest(makefile []byte) error {
-	for _, rule := range targetRule.FindAllSubmatch(makefile, -1) {
-		if string(rule[1]) != "test" {
-			continue
-		}
-		for line := range bytes.SplitSeq(rule[2], []byte("\n")) {
-			if line = bytes.TrimSpace(line); bytes.HasPrefix(line, []byte("KUBEBUILDER_ASSETS=")) && bytes.Contains(line, []byte(" go test ./...")) {
-				return nil
-			}
-		}
-		return errors.New("no line of the test target sets KUBEBUILDER_ASSETS for the go test of every package of the module")
+var assetsOfEnvtest = regexp.MustCompile(`^assets="\$\(go tool setup-envtest use \S+ -p path\)" && KUBEBUILDER_ASSETS="\$assets" go test \./\.\.\.$`)
+
+func requireVerifyToRunTheTestsOfTheModuleWithTheAssetsOfEnvtest(plan string) error {
+	if !slices.ContainsFunc(strings.Split(plan, "\n"), assetsOfEnvtest.MatchString) {
+		return errors.New("make -n verify has no line that runs the go test of every package of the module with KUBEBUILDER_ASSETS taken from setup-envtest, and only when setup-envtest succeeds")
 	}
-	return errors.New("the Makefile has no target test")
+	return nil
 }
 
-func TestTheTestTargetThatMakeVerifyRunsSetsTheAssetsOfEnvtest(t *testing.T) {
-	makefile, err := os.ReadFile("../../Makefile")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := requireTheTestTargetToSetTheAssetsOfEnvtest(makefile); err != nil {
+func TestMakeVerifyRunsTheTestsOfTheModuleWithTheAssetsOfEnvtest(t *testing.T) {
+	cmd := exec.CommandContext(t.Context(), "make", "--no-print-directory", "verify")
+	cmd.Dir = root
+	if err := requireVerifyToRunTheTestsOfTheModuleWithTheAssetsOfEnvtest(recipeOf(t, cmd)); err != nil {
 		t.Fatal(err)
 	}
 }
 
-func TestATestTargetThatSetsNoAssetsForTheModuleIsRefused(t *testing.T) {
+func TestAVerifyThatRunsNoTestsOfTheModuleWithTheAssetsOfEnvtestIsRefused(t *testing.T) {
 	const (
-		module = "\tKUBEBUILDER_ASSETS=\"$$(go tool setup-envtest use $(ENVTEST_K8S_VERSION) -p path)\" go test ./...\n"
-		api    = "\tcd api && go test ./...\n"
-		bare   = "\tgo test ./...\n"
+		module = `assets="$(go tool setup-envtest use 1.35.0 -p path)" && KUBEBUILDER_ASSETS="$assets" go test ./...` + "\n"
+		api    = "cd api && go test ./...\n"
+		other  = "go mod tidy -diff\ngolangci-lint run ./...\n"
 	)
 	cases := []struct {
-		name, makefile, want string
+		name, plan, want string
 	}{
-		{"the assets for the module and none for the API's", "test:\n" + module + api, ""},
-		{"the assets for the module after the API's", "test:\n" + api + module, ""},
-		{"a target after the test", "test:\n" + module + "components:\n" + bare, ""},
-		{"no assets", "test:\n" + bare + api, "sets KUBEBUILDER_ASSETS"},
-		{"the assets for the API's module alone", "test:\n" + bare + "\tcd api && KUBEBUILDER_ASSETS=x go test ./...\n", "sets KUBEBUILDER_ASSETS"},
-		{"the assets for a part of the module", "test:\n\tKUBEBUILDER_ASSETS=x go test ./internal/...\n", "sets KUBEBUILDER_ASSETS"},
-		{"the assets in another target", "verify:\n" + module + "test:\n" + bare, "sets KUBEBUILDER_ASSETS"},
-		{"no test target", "verify:\n" + module, "no target test"},
+		{"the assets for the module and none for the API's", other + module + api, ""},
+		{"the assets for the module after the API's", other + api + module, ""},
+		{"another version of Kubernetes", other + strings.Replace(module, "1.35.0", "1.36.1", 1) + api, ""},
+		{"no tests", other + api, "has no line"},
+		{"no plan", "", "has no line"},
+		{"an empty assignment", other + "KUBEBUILDER_ASSETS= go test ./...\n" + api, "has no line"},
+		{"an assignment that runs go test whether setup-envtest succeeds or not", other + `KUBEBUILDER_ASSETS="$(go tool setup-envtest use 1.35.0 -p path)" go test ./...` + "\n" + api, "has no line"},
+		{"go test after a semicolon, whatever setup-envtest did", other + `assets="$(go tool setup-envtest use 1.35.0 -p path)"; KUBEBUILDER_ASSETS="$assets" go test ./...` + "\n" + api, "has no line"},
+		{"assets that setup-envtest did not give", other + `assets="/opt/envtest" && KUBEBUILDER_ASSETS="$assets" go test ./...` + "\n" + api, "has no line"},
+		{"a variable that the test does not get", other + `assets="$(go tool setup-envtest use 1.35.0 -p path)" && KUBEBUILDER_ASSETS= go test ./...` + "\n" + api, "has no line"},
+		{"a part of the module", other + strings.Replace(module, "./...", "./internal/...", 1) + api, "has no line"},
+		{"the assets for the API's module alone", other + "cd api && " + module + "go test ./...\n", "has no line"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			err := requireTheTestTargetToSetTheAssetsOfEnvtest([]byte(c.makefile))
+			err := requireVerifyToRunTheTestsOfTheModuleWithTheAssetsOfEnvtest(c.plan)
 			switch {
 			case c.want == "" && err != nil:
 				t.Fatalf("want accepted, got %v", err)
