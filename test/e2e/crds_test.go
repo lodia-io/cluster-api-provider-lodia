@@ -4,7 +4,6 @@
 package e2e
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"os"
@@ -134,81 +133,6 @@ func TestAVerifyThatRunsNoTestsOfTheModuleWithTheAssetsOfEnvtestIsRefused(t *tes
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			err := requireVerifyToRunTheTestsOfTheModuleWithTheAssetsOfEnvtest(c.plan)
-			switch {
-			case c.want == "" && err != nil:
-				t.Fatalf("want accepted, got %v", err)
-			case c.want != "" && (err == nil || !strings.Contains(err.Error(), c.want)):
-				t.Fatalf("want an error with %q, got %v", c.want, err)
-			}
-		})
-	}
-}
-
-var (
-	assetsLineOfTheTestRule = regexp.MustCompile(`^\tassets="\$\$\(go tool setup-envtest use \S+ -p path\)" && KUBEBUILDER_ASSETS="\$\$assets" go test \./\.\.\.$`)
-	ruleThatIgnoresFailures = regexp.MustCompile(`(?m)^ *\.IGNORE\b`)
-)
-
-func requireTheTestRuleToStopWhenSetupEnvtestFails(makefile []byte) error {
-	if ruleThatIgnoresFailures.Match(makefile) {
-		return errors.New("the Makefile has .IGNORE, with which make goes on past a failed line, so make verify passes whatever setup-envtest and the tests do")
-	}
-	for _, rule := range targetRule.FindAllSubmatch(makefile, -1) {
-		if string(rule[1]) != "test" {
-			continue
-		}
-		for line := range bytes.SplitSeq(rule[2], []byte("\n")) {
-			if assetsLineOfTheTestRule.Match(line) {
-				return nil
-			}
-		}
-		return errors.New("no line of the test rule has, right after its tab, the assets of setup-envtest and the go test of every package of the module that runs only when it succeeds: a - before it makes make ignore its failure")
-	}
-	return errors.New("the Makefile has no rule test")
-}
-
-func TestMakeVerifyRunsATestRuleThatStopsWhenSetupEnvtestFails(t *testing.T) {
-	makefile, err := os.ReadFile("../../Makefile")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := requireTheTestRuleToStopWhenSetupEnvtestFails(makefile); err != nil {
-		t.Fatal(err)
-	}
-}
-
-func TestAVerifyWhoseTestRuleMakeMayIgnoreAFailureOfIsRefused(t *testing.T) {
-	const (
-		module = "\tassets=\"$$(go tool setup-envtest use $(ENVTEST_K8S_VERSION) -p path)\" && KUBEBUILDER_ASSETS=\"$$assets\" go test ./...\n"
-		api    = "\tcd api && go test ./...\n"
-	)
-	cases := []struct {
-		name, makefile, want string
-	}{
-		{"the assets for the module and none for the API's", "test:\n" + module + api, ""},
-		{"the assets after the API's", "test:\n" + api + module, ""},
-		{"a comment on the rule", "test: ## unit and envtest tests\n" + module + api, ""},
-		{"a target after the test", "test:\n" + module + "components:\n\t-go run ./test/components\n", ""},
-		{"a version of Kubernetes written out", "test:\n" + strings.Replace(module, "$(ENVTEST_K8S_VERSION)", "1.35.0", 1) + api, ""},
-		{"a comment that names .IGNORE", "# .IGNORE: test\ntest:\n" + module + api, ""},
-		{"a recipe line that names .IGNORE", "test:\n" + module + "\techo .IGNORE: test\n", ""},
-		{"a dash before the assets", "test:\n\t-" + module[1:] + api, "no line of the test rule"},
-		{"a dash after an at sign", "test:\n\t@-" + module[1:] + api, "no line of the test rule"},
-		{"an at sign after a dash", "test:\n\t-@" + module[1:] + api, "no line of the test rule"},
-		{".IGNORE for the test target", ".IGNORE: test\n.PHONY: test\ntest:\n" + module + api, "has .IGNORE"},
-		{".IGNORE for every target", "test:\n" + module + api + ".IGNORE:\n", "has .IGNORE"},
-		{".IGNORE with a space before its colon", ".IGNORE : test\ntest:\n" + module + api, "has .IGNORE"},
-		{".IGNORE after a space", " .IGNORE: test\ntest:\n" + module + api, "has .IGNORE"},
-		{"no assets", "test:\n\tgo test ./...\n" + api, "no line of the test rule"},
-		{"a semicolon where the && was", "test:\n\tassets=\"$$(go tool setup-envtest use $(ENVTEST_K8S_VERSION) -p path)\"; KUBEBUILDER_ASSETS=\"$$assets\" go test ./...\n" + api, "no line of the test rule"},
-		{"a failure of go test that the line hides", "test:\n" + strings.Replace(module, "\n", " || true\n", 1) + api, "no line of the test rule"},
-		{"a part of the module", "test:\n" + strings.Replace(module, "./...", "./internal/...", 1) + api, "no line of the test rule"},
-		{"the assets in another rule", "verify:\n" + module + "test:\n" + api, "no line of the test rule"},
-		{"no test rule", "verify:\n" + module, "no rule test"},
-	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			err := requireTheTestRuleToStopWhenSetupEnvtestFails([]byte(c.makefile))
 			switch {
 			case c.want == "" && err != nil:
 				t.Fatalf("want accepted, got %v", err)

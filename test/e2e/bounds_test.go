@@ -586,6 +586,77 @@ func TestTheBoundsFitUnderTheTimeouts(t *testing.T) {
 	}
 }
 
+func requireTheVerifyJobToRunMakeTestWithAVersionSetupEnvtestRejectsAfterMakeVerify(runs []string) error {
+	verify := slices.IndexFunc(runs, func(run string) bool { return strings.TrimSpace(run) == "make verify" })
+	if verify < 0 {
+		return errors.New("the verify job has no step that runs make verify")
+	}
+	check := slices.IndexFunc(runs, func(run string) bool {
+		return strings.Contains(run, "make test ENVTEST_K8S_VERSION=not-a-version")
+	})
+	switch {
+	case check < 0:
+		return errors.New("the verify job has no step that runs make test with a version that setup-envtest rejects: a Makefile that makes make ignore the failure of setup-envtest would pass make verify")
+	case check < verify:
+		return errors.New("the step of the verify job that runs make test with a version that setup-envtest rejects comes before make verify, and has to follow it")
+	}
+	return nil
+}
+
+func TestTheVerifyJobRunsMakeTestWithAVersionSetupEnvtestRejectsAfterMakeVerify(t *testing.T) {
+	workflow, err := os.ReadFile("../../.github/workflows/ci.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ci struct {
+		Jobs map[string]struct {
+			Steps []struct {
+				Run string `json:"run"`
+			} `json:"steps"`
+		} `json:"jobs"`
+	}
+	if err := yaml.Unmarshal(workflow, &ci); err != nil {
+		t.Fatal(err)
+	}
+	var runs []string
+	for _, step := range ci.Jobs["verify"].Steps {
+		runs = append(runs, step.Run)
+	}
+	if err := requireTheVerifyJobToRunMakeTestWithAVersionSetupEnvtestRejectsAfterMakeVerify(runs); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestAVerifyJobThatDoesNotRunMakeTestWithAVersionSetupEnvtestRejectsAfterMakeVerifyIsRefused(t *testing.T) {
+	const check = "if make test ENVTEST_K8S_VERSION=not-a-version; then\n  exit 1\nfi\n"
+	cases := []struct {
+		name string
+		runs []string
+		want string
+	}{
+		{"the check right after make verify", []string{"", "make verify", check}, ""},
+		{"the check after another step", []string{"make verify", "echo done", check}, ""},
+		{"make verify with a newline", []string{"make verify\n", check}, ""},
+		{"no check", []string{"", "make verify"}, "has no step that runs make test"},
+		{"make test with the Makefile's own version", []string{"make verify", "make test"}, "has no step that runs make test"},
+		{"make test with another version", []string{"make verify", "make test ENVTEST_K8S_VERSION=1.35.0"}, "has no step that runs make test"},
+		{"the check before make verify", []string{check, "make verify"}, "comes before make verify"},
+		{"no make verify", []string{check}, "has no step that runs make verify"},
+		{"no steps", nil, "has no step that runs make verify"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			err := requireTheVerifyJobToRunMakeTestWithAVersionSetupEnvtestRejectsAfterMakeVerify(c.runs)
+			switch {
+			case c.want == "" && err != nil:
+				t.Fatalf("want accepted, got %v", err)
+			case c.want != "" && (err == nil || !strings.Contains(err.Error(), c.want)):
+				t.Fatalf("want an error with %q, got %v", c.want, err)
+			}
+		})
+	}
+}
+
 func TestEveryJobIsLintedWithItsBuildTags(t *testing.T) {
 	makefile, err := os.ReadFile("../../Makefile")
 	if err != nil {

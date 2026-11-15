@@ -23,6 +23,7 @@ The repository holds two Go modules, the manager at the root and the API in `api
 `make lint`, `make test` and `make verify` run both; `go test ./...` from the root does not reach `api/`, so run it there too.
 
 CI runs `make verify`, `make e2e`, `make e2e-upgrade` and `make e2e-minor` on every pull request and every push to `main`.
+After `make verify`, its `verify` job runs `make test` with a version that `setup-envtest` rejects and fails when that exits 0, since a `Makefile` that ignores errors would pass `make verify` ([why](test/e2e/README.md#the-test)).
 
 The envtest suite starts its own API server and etcd; nothing in it reads a kubeconfig.
 
