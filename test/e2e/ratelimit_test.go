@@ -47,6 +47,10 @@ func TestTheConfigOfTheDumpHasNoRateLimiter(t *testing.T) {
 	requireNoRateLimiter(t, dumpRESTConfig(configFor(t, "https://unused.invalid")))
 }
 
+func TestTheClientOfTheEnvironmentHasNoRateLimiter(t *testing.T) {
+	requireNoRateLimiter(t, configFor(t, "https://unused.invalid").Client().Resources().GetConfig())
+}
+
 func TestTheConfigOfATenantHasNoRateLimiter(t *testing.T) {
 	key := client.ObjectKey{Namespace: namespace, Name: "c-w"}
 	k8s := fake.NewClientBuilder().WithObjects(&corev1.Secret{
@@ -61,8 +65,9 @@ func TestTheConfigOfATenantHasNoRateLimiter(t *testing.T) {
 }
 
 var (
-	sourcesOfAConfig = []string{"clientcmd.RESTConfigFromKubeConfig", "clientcmd.BuildConfigFromFlags", "rest.InClusterConfig", "rest.CopyConfig"}
+	sourcesOfAConfig = []string{"clientcmd.RESTConfigFromKubeConfig", "clientcmd.BuildConfigFromFlags", "conf.New", "rest.InClusterConfig", "rest.CopyConfig"}
 	takeAConfig      = []string{"clusterctlproxy.New", "clusterctlproxy.NewClient"}
+	makeAnEnvconf    = []string{"envconf.New", "envconf.NewWithKubeConfig", "envconf.NewFromFlags"}
 )
 
 func isNoRateLimit(e ast.Expr) bool {
@@ -110,23 +115,43 @@ func isARestConfig(n ast.Node) bool {
 	return slices.Contains(sourcesOfAConfig, callee)
 }
 
+func isARestConfigLiteral(n ast.Node) bool {
+	lit, ok := n.(*ast.CompositeLit)
+	if !ok {
+		return false
+	}
+	sel, ok := lit.Type.(*ast.SelectorExpr)
+	return ok && types.ExprString(sel) == "rest.Config"
+}
+
+func isAnEnvconf(n ast.Node) bool {
+	call, ok := n.(*ast.CallExpr)
+	return ok && slices.Contains(makeAnEnvconf, calleeOf(call))
+}
+
 func problemsWithTheRateLimiters(fset *token.FileSet, files []*ast.File) []string {
 	var problems []string
 	for _, file := range files {
 		ast.PreorderStack(file, nil, func(n ast.Node, stack []ast.Node) bool {
+			var fn *ast.FuncDecl
+			for _, outer := range slices.Backward(stack) {
+				if decl, ok := outer.(*ast.FuncDecl); ok {
+					fn = decl
+					break
+				}
+			}
+			if isARestConfigLiteral(n) && (fn == nil || fn.Recv != nil || !strings.HasPrefix(fn.Name.Name, "Test")) {
+				problems = append(problems, problemAt(fset, n, "a rest.Config literal outside a Test function, which keeps client-go's rate limiter unless it sets its QPS to clusterctlproxy.NoRateLimit: write it in a test of a fake, or take the config from a constructor that sets it"))
+			}
+			if isAnEnvconf(n) && (fn == nil || fn.Name.Name != "newEnvconf") {
+				problems = append(problems, problemAt(fset, n, "an envconf whose client keeps client-go's rate limiter, since envconf's Client builds one with the default QPS: make it with newEnvconf"))
+			}
 			if !isARestConfig(n) {
 				return true
 			}
 			if len(stack) > 0 {
 				if call, ok := stack[len(stack)-1].(*ast.CallExpr); ok && slices.Contains(takeAConfig, calleeOf(call)) {
 					return true
-				}
-			}
-			var fn *ast.FuncDecl
-			for _, outer := range slices.Backward(stack) {
-				if decl, ok := outer.(*ast.FuncDecl); ok {
-					fn = decl
-					break
 				}
 			}
 			if fn == nil || !setsNoRateLimit(fn) {
@@ -186,6 +211,18 @@ func TestTheCheckOfTheRESTConfigsRefusesOneThatKeepsTheRateLimiter(t *testing.T)
 		{"the in-cluster config", "func helper() {\ncfg, err := rest.InClusterConfig()\n}", refused},
 		{"the config of the environment's client, kept", "func helper() {\ncfg := env.Client().RESTConfig()\n}", refused},
 		{"the config of the environment's client, handed to another function", "func helper() {\nuse(env.Client().RESTConfig())\n}", refused},
+		{"a config of conf.New whose QPS is set", "func newEnvconf() {\ncfg, err := conf.New(path)\ncfg.QPS = clusterctlproxy.NoRateLimit\n}", ""},
+		{"a config of conf.New whose QPS is not set", "func helper() {\ncfg, err := conf.New(path)\n}", refused},
+		{"a rest.Config literal in a Test function", "func TestX(t *testing.T) {\nuse(&rest.Config{Host: \"https://unused.invalid\"})\n}", ""},
+		{"a rest.Config literal in a function literal of a Test function", "func TestX(t *testing.T) {\nt.Run(\"a\", func(t *testing.T) {\nuse(rest.Config{})\n})\n}", ""},
+		{"a rest.Config literal in a helper", "func helper() {\nuse(&rest.Config{Host: \"https://unused.invalid\"})\n}", refused},
+		{"a rest.Config literal in a method named like a Test", "func (s suite) TestX() {\nuse(&rest.Config{})\n}", refused},
+		{"a rest.Config literal outside a function", "var cfg = &rest.Config{}", refused},
+		{"an envconf made by newEnvconf", "func newEnvconf(path string) {\nuse(envconf.NewWithKubeConfig(path))\n}", ""},
+		{"an envconf of NewWithKubeConfig outside newEnvconf", "func TestMain(m *testing.M) {\ntestenv = env.NewWithConfig(envconf.NewWithKubeConfig(path))\n}", refused},
+		{"an envconf of New outside newEnvconf", "func helper() {\nuse(envconf.New())\n}", refused},
+		{"an envconf of NewFromFlags outside newEnvconf", "func helper() {\nuse(envconf.NewFromFlags())\n}", refused},
+		{"an envconf outside a function", "var cfg = envconf.New()", refused},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

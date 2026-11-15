@@ -30,6 +30,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
+	"sigs.k8s.io/e2e-framework/klient"
+	"sigs.k8s.io/e2e-framework/klient/conf"
 	"sigs.k8s.io/e2e-framework/klient/decoder"
 	"sigs.k8s.io/e2e-framework/klient/k8s"
 	"sigs.k8s.io/e2e-framework/pkg/envconf"
@@ -43,6 +45,23 @@ var clientScheme = func() *runtime.Scheme {
 	utilruntime.Must(apiextensionsv1.AddToScheme(s))
 	return s
 }()
+
+// envconf's Client builds, on every call, a client of a config that keeps client-go's rate limiter
+// https://github.com/kubernetes-sigs/e2e-framework/blob/v0.7.0/pkg/envconf/config.go#L130-L143
+// https://github.com/kubernetes-sigs/e2e-framework/blob/v0.7.0/klient/client.go#L60-L67
+// unless WithClient gave it one.
+func newEnvconf(kubeconfig string) (*envconf.Config, error) {
+	restConfig, err := conf.New(kubeconfig)
+	if err != nil {
+		return nil, err
+	}
+	restConfig.QPS = clusterctlproxy.NoRateLimit
+	k, err := klient.New(restConfig)
+	if err != nil {
+		return nil, err
+	}
+	return envconf.NewWithKubeConfig(kubeconfig).WithClient(k), nil
+}
 
 func newClient(cfg *envconf.Config) (client.Client, error) {
 	return clusterctlproxy.NewClient(cfg.Client().RESTConfig(), clientScheme, clientRequestTimeout, discoveryTimeout)

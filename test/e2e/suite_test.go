@@ -26,7 +26,12 @@ func TestMain(m *testing.M) {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
-	testenv = env.NewWithConfig(envconf.NewWithKubeConfig(path))
+	cfg, err := newEnvconf(path)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	testenv = env.NewWithConfig(cfg)
 	testenv.Setup(install)
 	os.Exit(testenv.Run(m))
 }

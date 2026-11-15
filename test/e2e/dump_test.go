@@ -380,7 +380,11 @@ func configFor(t *testing.T, server string) *envconf.Config {
 	if err := os.WriteFile(kubeconfig, serverKubeconfig(t, server, "kind-capl-e2e"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	return envconf.NewWithKubeConfig(kubeconfig)
+	cfg, err := newEnvconf(kubeconfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return cfg
 }
 
 var dumpScheme = func() *runtime.Scheme {
