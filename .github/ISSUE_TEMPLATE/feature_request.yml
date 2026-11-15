@@ -1,0 +1,16 @@
+name: Feature request
+description: Something the provider should do and does not.
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What you are trying to do, and why the provider does not let you today.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What you propose
+      description: If it goes against one of the [decisions](https://github.com/lodia-io/cluster-api-provider-lodia/tree/main/docs/decisions), name it.
