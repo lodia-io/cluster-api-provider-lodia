@@ -14,6 +14,7 @@ Every other tool runs through `go tool` or `go run`; `make e2e` also needs what 
 | `make verify` | the check that says a change is done: generated files current, both modules tidy, `config/default` rendered and checked for a non-empty default on every variable, one Namespace holding every namespaced object, the provider label on every object and a `manager` container as rendered, and for the roles that reach the manager's ServiceAccount on what clusterctl installs with the defaults and with explicit values, the render against the components of the release that [`test/pin`](test/pin/previous-release.yaml) names (a cluster-scoped object that clusterctl's upgrade would leave behind, a `roleRef` it would fail on, a CRD version it would stop serving; the first run downloads them into `work/pin`), `metadata.yaml` against the CRDs' contract label and the merge base with `origin/main` (fetch it first), the release's render with no push, lint and unit and envtest tests of both modules; the render has ko build both platforms and pull the base image from gcr.io, which takes minutes when the Go caches are cold |
 | `make e2e` | the [end-to-end suite](test/e2e/README.md) on a kind cluster of its own |
 | `make e2e-upgrade` | the [upgrade test](test/e2e/README.md#the-upgrade-test): the release that [`test/pin/previous-release.yaml`](test/pin/previous-release.yaml) names, installed through clusterctl and upgraded to the tree's build, on a kind cluster of its own |
+| `make e2e-minor` | the [minor step test](test/e2e/README.md#the-minor-step-test): a Cluster at v1.36.4 with a worker that joined, its control plane stepped to v1.37.0 by Lodia while a second MachineDeployment at v1.37.0 waits for it, on a kind cluster of its own |
 | `make release-components` | `config/default` with the manager's image built by ko for `PLATFORMS`, pushed to `IMAGE_REPOSITORY` unless `KO_PUSH=false` and named by digest, written to `out/control-plane-components.yaml`; the release and the e2e use it |
 | `make release-image` | prints the image that `out/control-plane-components.yaml` names, after requiring it to be the only one and to read `IMAGE_REPOSITORY:IMAGE_TAG@sha256:<digest>` |
 | `make release-check TAG=vX.Y.Z` | refuses a tag before it is pushed, as [the release steps](#release-a-version) say |
@@ -21,7 +22,7 @@ Every other tool runs through `go tool` or `go run`; `make e2e` also needs what 
 The repository holds two Go modules, the manager at the root and the API in `api/` ([project-home](docs/decisions/project-home.md)).
 `make lint`, `make test` and `make verify` run both; `go test ./...` from the root does not reach `api/`, so run it there too.
 
-CI runs `make verify`, `make e2e` and `make e2e-upgrade` on every pull request and every push to `main`.
+CI runs `make verify`, `make e2e`, `make e2e-upgrade` and `make e2e-minor` on every pull request and every push to `main`.
 
 The envtest suite starts its own API server and etcd; nothing in it reads a kubeconfig.
 

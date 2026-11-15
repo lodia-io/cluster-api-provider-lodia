@@ -253,6 +253,7 @@ sequenceDiagram
    A Cluster without `infrastructureRef` counts as provisioned ([no infra][cl-noinfra]); with an InfraCluster, that one must leave the endpoint empty.
 3. CAPI sets `ControlPlaneInitialized` on the Cluster ([status][cs-init]); its ClusterCache connects with `<cluster>-kubeconfig` once the infrastructure is provisioned, and refuses exec or auth-provider credentials ([cluster_cache.go][cache-infra], [REST config][cache-rest]); Lodia's admin kubeconfig carries client certificates.
 4. The MachineSet controller creates Machines only while the control plane is neither provisioning (no reported version) nor upgrading (`spec.version` above it), and, with `KubeadmConfigTemplate`, only for the control plane's minor ([preflight][ms-preflight], [kubeadm skew][ms-kubeadm], gate on by default: [feature.go][feature], [contract state][ct-state]).
+   The [minor step e2e](../test/e2e/README.md#the-minor-step-test) holds the upgrading half against a real Lodia.
 5. CABPK waits for `ControlPlaneInitialized` ([gate][cabpk-gate]), reads `<cluster>-ca`, pins every certificate in `tls.crt`, takes `apiServerEndpoint` from the Cluster, and creates a bootstrap token in the tenant through the ClusterCache ([joinWorker][cabpk-worker], [reconcileDiscovery][cabpk-discovery], [token.go][cabpk-token]); kubeadm join reads `cluster-info`, waits for its JWS signature from Lodia's bootstrap signer, checks any CA against the pins and bootstraps against the server `cluster-info` names ([discovery][kubeadm-discovery], [pins][kubeadm-pins], [JWS wait][kubeadm-jws]).
 
 **Upgrade.**
@@ -264,6 +265,7 @@ A plan skips no minor ([plan][topo-plan-minors]): without `kubernetesVersions` i
 So under a ClusterClass every write is at most one minor ahead of the control plane, and the minors Lodia steps through are Cluster API's.
 A Cluster without a topology takes the `spec.version` a person writes, several minors ahead included, and Lodia steps through them on its own.
 Lodia's `status.kubernetes.version` is the oldest version that its API server, controller manager, scheduler and addons run, and becomes a step's version once every part runs it ([target][lo-upgrade-target], [the steps][lo-upgrade-steps]), so `status.version` stays behind `spec.version` until the last step is done, and CAPI holds new workers as "upgrading" until then ([contract state][ct-state]).
+The [minor step e2e](../test/e2e/README.md#the-minor-step-test) holds that against a real Lodia: a MachineDeployment at the new minor gets no Machine until `status.versions` says the new version and Lodia reports every part at it, and the worker of the old minor stays.
 The MachineDeployments follow under a ClusterClass, where the topology controller moves them once the control plane is stable ([MachineDeployment version][topo-md-version]); without one a person moves them, and until then the kubeadm skew preflight holds the new Machines of a MachineDeployment that is not on the control plane's minor ([kubeadm skew][ms-kubeadm]).
 Why a step waits is in the `Progressing` of Lodia's `ControlPlane`, which the provider does not mirror ([Progressing][lo-upgrade-progressing]).
 
@@ -283,6 +285,7 @@ Why a step waits is in the `Progressing` of Lodia's `ControlPlane`, which the pr
 
 With no `status.versions` and no `status.version`, the contract reads the control plane as provisioning; with `spec.version` above the reported one, as upgrading ([contract state][ct-state]).
 Either holds every new Machine in the MachineSet preflight `ControlPlaneIsStable`, which runs by default ([preflight][ms-preflight], [feature.go][feature]), and the topology controller uses the same checks for ClusterClass upgrades.
+The [minor step e2e](../test/e2e/README.md#the-minor-step-test) holds that this lasts until Lodia has run every part.
 Without a version, no worker is ever created.
 Lodia's `status.kubernetes.version` is what the provider copies: the oldest version any part of the control plane runs ([field reference][lo-ref-kubernetes]).
 With `maintenance.autoUpdate.kubernetesPatch`, which the provider passes through, that version can be above `spec.version`: a new `ControlPlane` starts at the newer of `spec.version` and the table's latest patch of its minor, and the target only moves up while the field is on ([field reference][lo-ref-patch], [patch updates][lo-upgrade-patch]).

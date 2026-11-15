@@ -6,6 +6,7 @@ It also refuses to start while a `HELM_KUBE*` variable is set, since helm [lays 
 
 `make e2e` creates the kind cluster `capl-e2e`, runs the suite and deletes the cluster.
 `make e2e-upgrade` runs [the upgrade test](#the-upgrade-test) the same way on the kind cluster `capl-e2e-upgrade`, in `work/e2e/capl-e2e-upgrade`, so that the two targets share neither a cluster nor a directory; `E2E_UPGRADE_CLUSTER` changes its name, and `E2E_CLUSTER` on the command line overrides it.
+`make e2e-minor` runs [the minor step test](#the-minor-step-test) the same way on the kind cluster `capl-e2e-minor`, in `work/e2e/capl-e2e-minor`, so that no two targets share a cluster or a directory; `E2E_MINOR_CLUSTER` changes its name, and `E2E_CLUSTER` on the command line overrides it.
 `E2E_CLUSTER` changes the name.
 `make e2e` refuses, before it creates anything, a name that does not start with `capl-e2e`, that has a character outside `a-z`, `0-9` and `-`, that ends in `-w` or that is longer than 30 characters.
 The prefix is the one the guard wants, and a name ending in `-w` is refused because a run named `x` removes the containers labelled `x-w`, which are also the nodes of a kind cluster named `x-w`.
@@ -31,6 +32,7 @@ In this order:
 | this provider | `make release-components`, the target that renders the release's components YAML, with the image repository `kind.local/cluster-api-provider-lodia` and the host's one platform, so that ko loads the image into the kind cluster | clusterctl's `Init` |
 
 `make e2e-upgrade` installs the previous release of the provider in place of the last row, and the tree's build beside it in the repository, as [the upgrade test](#the-upgrade-test) says.
+`make e2e-minor` installs what `make e2e` does.
 Lodia goes in before the providers because the provider's watches need Lodia's CRDs.
 The four providers go in through one `Init` of clusterctl's library, with `WaitProviders`, which waits up to 2 minutes for each of their Deployments, on a local repository that the suite lays out in `work/e2e/<E2E_CLUSTER>/repository` as Cluster API's [`CreateRepository`](https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/test/framework/clusterctl/repository.go#L104-L158) does:
 - Cluster API's three releases are there under their own version, each with the `metadata.yaml` of that release;
@@ -224,8 +226,8 @@ No assertion reads it.
 ## The upgrade test
 
 `make e2e-upgrade` runs `TestTheProviderUpgradesFromThePreviousRelease` alone, with `-run` and the build tags `e2e` and `upgrade`, on the kind cluster `capl-e2e-upgrade` that it creates and deletes as `make e2e` does its own; CI runs it as the job `e2e-upgrade`, on every pull request and every push to `main`, beside the job `e2e`.
-The tags split the two tests: `join_test.go` is behind `e2e` and not `upgrade`, `upgrade_test.go` and `lodia_upgrade_test.go` behind both, and `suite_test.go`, `install_test.go` and `steps_test.go`, which hold the install and the steps that the two tests share, behind `e2e`.
-`lodia_join_test.go` gives the install the tree's build, and `lodia_upgrade_test.go` the release and the tree's build.
+The tags split the tests: `join_test.go` is behind `e2e` and neither `upgrade` nor `minor`, `upgrade_test.go` and `lodia_upgrade_test.go` behind both `e2e` and `upgrade`, `minor_test.go` behind `e2e` and `minor`, and `suite_test.go`, `install_test.go` and `steps_test.go`, which hold the install and the steps that the two tests share, behind `e2e`.
+`lodia_join_test.go`, behind `e2e` and not `upgrade`, gives the install the tree's build for the join test and for the minor step test, and `lodia_upgrade_test.go` the release and the tree's build.
 It is a job of its own, and not a step of the join test or a test on its cluster:
 - the join test's Cluster is made by the tree's build that `Init` installs, and an upgrade from a release needs the release running when the Cluster is made, so installing the release there would leave the tree's `Init` and its creation of the `ControlPlane` and the Secrets untested ([the decision](../../docs/decisions/e2e-on-a-named-cluster.md));
 - a management cluster holds one instance of the provider, which clusterctl's upgrade [checks](https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/cmd/clusterctl/client/cluster/upgrader.go#L375-L379), so the release could follow the join test on its cluster only after a `clusterctl delete` and an `Init` of the release, a downgrade that no user runs, and the two tests would depend on their order;
@@ -233,7 +235,7 @@ It is a job of its own, and not a step of the join test or a test on its cluster
 
 The unit tests of the package, about a minute of them on CI, run in `make verify` and in the join job, so the upgrade job leaves them out and its bounds need no time for them.
 `TestTheBoundsFitUnderTheTimeouts` holds the `-run` of the target and that the package declares the test, since `go test` with a pattern that matches nothing passes.
-The two jobs run on two runners in parallel, so the join job keeps its 64 and 74 minutes.
+The three jobs run on three runners in parallel, so the join job keeps its 64 and 74 minutes.
 
 ### What it installs
 
@@ -310,6 +312,96 @@ The checks of steps 7 to 14 are plain functions that `upgraded_test.go` holds on
 
 A failed upgrade leaves the provider scaled down or deleted, so the deletion of step 17 cannot pass; the dump still runs, and `make e2e-upgrade` removes the containers and the cluster.
 It writes to `work/e2e/capl-e2e-upgrade/artifacts`, which CI uploads as `e2e-upgrade-artifacts`.
+
+## The minor step test
+
+`make e2e-minor` runs `TestAMinorStepHoldsNewWorkersUntilLodiaRunsIt` alone, with `-run` and the build tags `e2e` and `minor`, on the kind cluster `capl-e2e-minor` that it creates and deletes as `make e2e` does its own; CI runs it as the job `e2e-minor`, on every pull request and every push to `main`, beside the jobs `e2e` and `e2e-upgrade` ([the decision](../../docs/decisions/e2e-on-a-named-cluster.md)).
+`minor_test.go` is behind `e2e` and `minor`; the checks that it calls are in [`stepped_test.go`](stepped_test.go), which has no tag and holds them on fake clients, as `upgraded_test.go` does for the upgrade test.
+It is a job of its own, and not a step of another test:
+- the join test would start its Cluster at v1.36.4, so its fresh join would no longer be at the newest minor, and the step would lengthen the job that sets CI's wall time;
+- the upgrade test's Cluster is made by the release, and a failed provider upgrade leaves the provider scaled down or deleted, so a minor step could not run behind it.
+
+No other test holds this.
+The envtest suite runs neither Lodia nor Cluster API's controllers, so it holds the copy of a fake Lodia status and that an edit of `spec.version` leaves `status.versions` alone ([`TestTheVersionIsLodiasAndFollowsItPastTheFirstCopy`](../../internal/controller/report_test.go)), and the join test reads the version once, at creation.
+A provider that copied Lodia's `status.target.version`, which moves before the parts roll ([the target](https://github.com/lodia-io/lodia/blob/f91168b1248dc18151a0c2d442fe2050593a0866/docs/decisions/upgrades-and-maintenance-windows.md?plain=1#L10-L17), [the steps](https://github.com/lodia-io/lodia/blob/f91168b1248dc18151a0c2d442fe2050593a0866/docs/decisions/upgrades-and-maintenance-windows.md?plain=1#L19-L31)), would let a worker of the new minor join an API server of the old one.
+
+### What it installs
+
+Everything of the join job, under "What it installs": the tree's build of the provider through `Init`, and a class, `e2e-capi` in [`testdata/cluster.yaml`](testdata/cluster.yaml), with no backup store, and a `LodiaControlPlane` with no `maintenance`.
+The Cluster and `md-0`, one replica, are rendered from `testdata/cluster.yaml` and [`testdata/workers.yaml`](testdata/workers.yaml) with the variable `KUBERNETES_VERSION` at v1.36.4, which the join and the upgrade tests set to v1.37.0; `md-1`, one replica, from [`testdata/workers-next.yaml`](testdata/workers-next.yaml) at v1.37.0.
+A new bound is a field of `minorBounds`, as the join test's are of `bounds`.
+
+### The steps
+
+The steps are numbered here apart from the join test's.
+The first six are the join test's apply and its steps 1, 4, 5, 6 and 9, with the Cluster at v1.36.4 and the kubelet's version asserted:
+
+1. The objects of [`testdata`](testdata) are applied in `capi-join`, and the `DevCluster` is marked provisioned.
+2. `Cluster` `ControlPlaneInitialized`.
+3. kindnet is applied in the tenant through `<cluster>-kubeconfig`.
+4. The `Machine` of `md-0` is `Running` with a `nodeRef`.
+5. Its Node has the `DevMachine`'s `providerID`, has lost the `uninitialized` taint, is `Ready` and runs kubelet v1.36.4.
+6. `Cluster` `Available`.
+7. `LodiaControlPlane.spec.version` is patched to v1.37.0, `md-1` is created, and the wait that follows ends once the `LodiaControlPlane`'s `status.versions` says v1.37.0, as long as no read of a poll breaks the rules under "The reads of step 7".
+8. The `Machine` of `md-1` is `Running` with a `nodeRef`.
+9. Its Node has the `DevMachine`'s `providerID`, has lost the `uninitialized` taint, is `Ready` and runs kubelet v1.37.0.
+10. The tenant is opened again from `<cluster>-kubeconfig` as the provider holds it now, and the `Machine` of `md-0` has the UID and the `nodeRef` it had, and is `Running`; its Node is `Ready` and runs kubelet v1.36.4 through that tenant; the `Cluster` and the `LodiaControlPlane` are `Available`.
+11. Deleting the `Cluster`, once the etcd claim and the two copied Secrets exist and exactly two containers are labelled for the `Cluster`, removes the `LodiaControlPlane`, Lodia's `ControlPlane`, the etcd claim, the two Secrets and both workers' containers.
+
+The `Cluster`'s `Available` is read before `md-1` exists, in step 6, and after its `Machine` is up, in step 10, and not in between, since it is not `True` while `md-1` has no `Machine`: a MachineDeployment is available only with its replicas less `maxUnavailable` ([MachineDeployment](https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/core/reconcilers/machinedeployment/machinedeployment_status.go#L162-L170)), and the `Cluster`'s `Available` takes `WorkersAvailable` ([the gates](https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/core/reconcilers/cluster/cluster_controller_status.go#L1167-L1176)).
+The edit comes after the Node is `Ready` and the `Cluster` `Available`, since a minor step waits for `status.nodes`, which Health writes once it lists the tenant's nodes, every 30 seconds ([the preflight](https://github.com/lodia-io/lodia/blob/f91168b1248dc18151a0c2d442fe2050593a0866/internal/controller/lifecycle/decide.go#L388-L400), [Health](https://github.com/lodia-io/lodia/blob/f91168b1248dc18151a0c2d442fe2050593a0866/docs/api/controlplane.md?plain=1#L102)).
+
+### The reads of step 7
+
+The `LodiaControlPlane` copies Lodia's `status.kubernetes.version`, the oldest version of the API server, the controller manager, the scheduler and the addons, which moves once the last of them is done and in the same write that removes `status.kubernetes.upgrade` ([the version](https://github.com/lodia-io/lodia/blob/f91168b1248dc18151a0c2d442fe2050593a0866/docs/decisions/upgrades-and-maintenance-windows.md?plain=1#L16-L17), [the status](https://github.com/lodia-io/lodia/blob/f91168b1248dc18151a0c2d442fe2050593a0866/internal/controller/lifecycle/decide.go#L121-L123), [the fields](https://github.com/lodia-io/lodia/blob/f91168b1248dc18151a0c2d442fe2050593a0866/api/v1alpha1/controlplane_types.go#L809-L822)).
+Each poll of the wait reads in this order: it lists the `Machine`s of `md-1`, then reads the `LodiaControlPlane`, then Lodia's `ControlPlane`.
+- A `Machine` of `md-1` while the `LodiaControlPlane` read after it says v1.36.4 fails the step.
+  The MachineSet creates a `Machine` only while no entry of `status.versions` is below `spec.version` ([the check](https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/core/reconcilers/machineset/machineset_preflight.go#L186-L197), [upgrading](https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/internal/contract/controlplane.go#L295-L353)), and the copy only moves forward, so a `Machine` that exists before the copy read after it says v1.37.0 was created under an upgrade.
+- A `LodiaControlPlane` of v1.37.0 while Lodia's `ControlPlane` read after it still has `status.kubernetes.upgrade` or a part that does not run v1.37.0, among `status.components.apiServer`, `controllerManager`, `scheduler` and `status.addons`, fails the step.
+  Lodia's report only moves forward as well, so a read made after the copy shows at least what the copy was made from.
+  A provider that copies a version before Lodia has rolled every part fails here.
+- The MachineSet of `md-1` has to say once that the control plane is upgrading: its `ScalingUp` names `ControlPlaneIsStable` and "is upgrading" ([the message](https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/core/reconcilers/machineset/machineset_controller_status.go#L111-L175), [the check](https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/core/reconcilers/machineset/machineset_preflight.go#L196)).
+  The absence of a `Machine` alone would also be that of a MachineSet that scales up nothing, so this is the positive proof of the hold.
+  The message is Cluster API's text, so a bump that changes it fails every run, and a control plane that reports no version at all holds the MachineSet as "provisioning" ([the check](https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/core/reconcilers/machineset/machineset_preflight.go#L186-L188)) and fails it too.
+- A failure of the wait carries what the last poll read: the version the `LodiaControlPlane` reports, the parts of Lodia's `ControlPlane` that are behind, and its `Progressing`, which says why a step waits ([Progressing](https://github.com/lodia-io/lodia/blob/f91168b1248dc18151a0c2d442fe2050593a0866/docs/decisions/upgrades-and-maintenance-windows.md?plain=1#L117)).
+
+A read that breaks a rule ends the wait from inside its check, with the violation kept, and the step fails after the wait, so the waits stay plain `until`s on fields of `minorBounds`, which the check of the waits holds.
+No sleep and no window of its own is needed: the hold lasts as long as the roll, and a poll comes every 2 seconds.
+The MachineSet comes back to the hold every 15 seconds ([the requeue](https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/core/reconcilers/machineset/machineset_controller.go#L1045-L1057), [the period](https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/core/reconcilers/machineset/machineset_preflight.go#L45-L47)) and watches no control plane ([the watches](https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/core/reconcilers/machineset/machineset_controller.go#L156-L178)), so `md-1`'s `Machine` comes up to 15 seconds after the version is reported.
+The `Ready` of the `LodiaControlPlane` may read `Unknown` with `LatestGenerationNotObserved` between the edit and Lodia's next report ([`report`](../../internal/controller/lodiacontrolplane.go)): the step logs each change of it and asserts nothing of it.
+
+### Why `md-1`, and why these versions
+
+- A scale-up of `md-0` would prove nothing: from the edit on, the kubeadm check holds new `Machine`s of v1.36.4 for good, during the roll and after it, since it wants the control plane's minor ([the check](https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/core/reconcilers/machineset/machineset_preflight.go#L218-L236)).
+  `md-1` at v1.37.0 is held by the Kubernetes check before the edit ([the check](https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/core/reconcilers/machineset/machineset_preflight.go#L202-L216)), by `ControlPlaneIsStable` alone during the roll, and by nothing after it.
+- The running worker is left alone: `md-0`'s template does not change, so nothing rolls it out, and Lodia moves kube-proxy, CoreDNS and konnectivity-agent onto its Node without waiting for them and counts its kubelet as outdated ([the steps](https://github.com/lodia-io/lodia/blob/f91168b1248dc18151a0c2d442fe2050593a0866/docs/decisions/upgrades-and-maintenance-windows.md?plain=1#L27-L30), [`status.nodes`](https://github.com/lodia-io/lodia/blob/f91168b1248dc18151a0c2d442fe2050593a0866/docs/api/controlplane.md?plain=1#L102)).
+- v1.36.4 to v1.37.0 are two minors of Lodia's table ([the table](https://github.com/lodia-io/lodia/blob/f91168b1248dc18151a0c2d442fe2050593a0866/internal/versions/versions.go#L36-L40)), and a v1.36 kubelet under a v1.37 API server is inside the skew that Lodia's preflight and Cluster API's Kubernetes check apply ([Lodia](https://github.com/lodia-io/lodia/blob/f91168b1248dc18151a0c2d442fe2050593a0866/internal/controller/lifecycle/decide.go#L401-L407), [Cluster API](https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/core/reconcilers/machineset/machineset_preflight.go#L202-L216)).
+  A pin of Lodia whose table lacks v1.36 leaves the Cluster at step 2 with `Unsupported` in `Progressing` ([the condition](https://github.com/lodia-io/lodia/blob/f91168b1248dc18151a0c2d442fe2050593a0866/docs/api/controlplane.md?plain=1#L129)), and the pair then moves to the two newest minors.
+- CAPD takes a worker's image from the `Machine`'s version ([the create](https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/test/infrastructure/docker/internal/docker/machine.go#L224-L250)), from the digests that its mapper holds for both versions ([the mapper](https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/test/infrastructure/kind/mapper.go#L84-L94)); a patch it has no digest for gets a bare tag ([`GetMapping`](https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/test/infrastructure/kind/mapper.go#L643-L690)), so the pair stays on mapped patches and needs no `customImage`.
+  The mapper is in CAPD's release, whose manager the suite pins by digest.
+- A class without a backup store holds nothing: the `Backup` reports `NoBackupStore` on its first pass, before any credential is read, and Lifecycle moves the target on it ([the report](https://github.com/lodia-io/lodia/blob/f91168b1248dc18151a0c2d442fe2050593a0866/internal/controller/datastore/backup.go#L196-L198), [the target](https://github.com/lodia-io/lodia/blob/f91168b1248dc18151a0c2d442fe2050593a0866/internal/controller/lifecycle/decide.go#L457-L462)).
+  The suite sets no `maintenance`: patch updates are off by default ([the field](https://github.com/lodia-io/lodia/blob/f91168b1248dc18151a0c2d442fe2050593a0866/docs/api/controlplane.md?plain=1#L55)), and on they would start the tenant above `spec.version` ([a version in status](../../docs/README.md#a-version-in-status)).
+
+### The bounds
+
+`minorBounds` in [`bounds_test.go`](bounds_test.go), with `Install` and `Dump` of the join test's set, fit the job's `-timeout` and `timeout-minutes`:
+
+| field | bound | what it covers |
+|---|---|---|
+| `Apply`, `Initialized`, `Kindnet`, `Running`, `Ready`, `Available` | 1, 4, 1, 3, 3 and 1 minutes | steps 1 to 6, the join test's waits at v1.36.4; the image of v1.36.4, which the mapper names without a registry, so that docker pulls it from Docker Hub, is pulled inside `Running`, which no run has measured |
+| `Stepped` | 5 minutes | step 7, from the edit to the version the `LodiaControlPlane` reports, with Lodia's parts, which Lodia's own job waits for up to 10 minutes each ([the waits](https://github.com/lodia-io/lodia/blob/f91168b1248dc18151a0c2d442fe2050593a0866/test/e2e/upgrade_test.go#L116-L144)) |
+| `NextRunning`, `NextReady` | 3 and 3 minutes | steps 8 and 9, as `Running` and `Ready`, with up to 15 seconds of requeue before the `Machine` |
+| `Kept` | 1 minute | step 10 |
+| `Deleted` | 3 minutes | step 11 |
+
+They add up to 28 minutes, and with `Install` and `Dump` to 45, which `TestTheBoundsFitUnderTheTimeouts` fits under `-timeout 47m` of `make e2e-minor` and `timeout-minutes: 57` of the job, as it fits the other two.
+Both fit with no spare minute: the 45 and the 2 minutes of calls without a bound are the 47, and the 47 and the 10 minutes outside the binary are the 57.
+`TestEveryWaitOfTheMinorTestIsBoundedByAFieldOfItsOwnBoundsThatNoOtherWaitTakes` holds every wait of `minor_test.go` to a field of `minorBounds` that no other wait takes, and `TestEachTargetThatRunsTheSuiteCreatesAClusterOfItsOwnThatTheGuardAccepts` that the three targets share no cluster and no directory.
+About 6 minutes of test after the install is an estimate, not a measurement.
+
+The checks of steps 5 to 10 are plain functions that `stepped_test.go` holds on fake clients: `TestAMinorStepIsHeldOrBrokenAsTheOrderedReadsOfEachPollSayAndTheHoldIsSeenOnce` holds the rules of step 7 on a script of what each read finds, with the order of the reads, `TestAPollListsTheMachinesThenReadsTheCopyThenLodiasReport` and the tests beside it.
+Nothing but a run of the job holds that the steps call them.
+It writes to `work/e2e/capl-e2e-minor/artifacts` on failure, which CI uploads as `e2e-minor-artifacts`.
 
 ## On failure
 
