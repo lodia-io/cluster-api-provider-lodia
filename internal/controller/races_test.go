@@ -164,13 +164,8 @@ func behindTheCache(t *testing.T, hides func(client.Object) bool) *controller.Re
 }
 
 func isControlPlane(obj client.Object) bool {
-	switch o := obj.(type) {
-	case *unstructured.Unstructured:
-		return o.GetKind() == "ControlPlane"
-	case *lodiav1alpha1.ControlPlane:
-		return true
-	}
-	return false
+	u, ok := obj.(*unstructured.Unstructured)
+	return ok && u.GetKind() == "ControlPlane"
 }
 
 func TestAStaleCacheDoesNotHideALeftoverControlPlane(t *testing.T) {

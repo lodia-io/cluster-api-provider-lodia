@@ -535,20 +535,21 @@ func (e *controlledElsewhereError) Error() string {
 // reconcileDelete keeps the finalizer until the ControlPlane is gone, which
 // Lodia's own finalizer decides.
 func (r *Reconciler) reconcileDelete(ctx context.Context, cluster *clusterv1.Cluster, lcp *v1alpha1.LodiaControlPlane) error {
-	cp := &lodiav1alpha1.ControlPlane{}
-	err := r.APIReader.Get(ctx, client.ObjectKey{Namespace: cluster.Namespace, Name: cluster.Name}, cp)
+	cp, err := r.currentControlPlane(ctx, cluster, lcp)
+	var elsewhere *controlledElsewhereError
 	switch {
-	case apierrors.IsNotFound(err) || err == nil && !metav1.IsControlledBy(cp, lcp):
+	case cp == nil && (err == nil || errors.As(err, &elsewhere)):
 		controllerutil.RemoveFinalizer(lcp, v1alpha1.Finalizer)
 		return nil
 	case err != nil:
 		return err
 	}
-	if cp.DeletionTimestamp.IsZero() {
-		if err := r.Delete(ctx, cp, client.Preconditions{UID: &cp.UID}); err != nil && !apierrors.IsNotFound(err) {
+	if cp.GetDeletionTimestamp().IsZero() {
+		uid := cp.GetUID()
+		if err := r.Delete(ctx, cp, client.Preconditions{UID: &uid}); err != nil && !apierrors.IsNotFound(err) {
 			return err
 		}
 	}
-	setDown(lcp, clusterv1.DeletingReason, fmt.Sprintf("waiting for ControlPlane %s to be deleted", cp.Name))
+	setDown(lcp, clusterv1.DeletingReason, fmt.Sprintf("waiting for ControlPlane %s to be deleted", cp.GetName()))
 	return nil
 }

@@ -169,7 +169,7 @@ func TestAReadErrorWhileDeletingKeepsTheFinalizer(t *testing.T) {
 	}
 	unavailable := direct(t, interceptor.Funcs{
 		Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
-			if _, ok := obj.(*lodiav1alpha1.ControlPlane); ok {
+			if isControlPlane(obj) {
 				return apierrors.NewServiceUnavailable("the API server is restarting")
 			}
 			return c.Get(ctx, key, obj, opts...)
