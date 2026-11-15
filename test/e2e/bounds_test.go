@@ -653,6 +653,81 @@ func TestTheBoundsFitUnderTheTimeouts(t *testing.T) {
 	}
 }
 
+func problemsWithTheSetsOfTheJobs(fset *token.FileSet, file *ast.File) []string {
+	var problems []string
+	var found bool
+	for n := range ast.Preorder(file) {
+		spec, ok := n.(*ast.ValueSpec)
+		if !ok || len(spec.Names) != 1 || spec.Names[0].Name != "jobs" || len(spec.Values) != 1 {
+			continue
+		}
+		table, ok := spec.Values[0].(*ast.CompositeLit)
+		if !ok {
+			continue
+		}
+		found = true
+		for _, row := range table.Elts {
+			lit, ok := row.(*ast.CompositeLit)
+			if !ok || len(lit.Elts) != 6 {
+				problems = append(problems, problemAt(fset, row, "a job that is not written with its six fields in order, whose set and owner the check cannot read"))
+				continue
+			}
+			owner, _ := lit.Elts[4].(*ast.BasicLit)
+			set, _ := lit.Elts[5].(*ast.Ident)
+			if owner == nil || set == nil || owner.Kind != token.STRING || owner.Value != strconv.Quote(set.Name) {
+				problems = append(problems, problemAt(fset, lit.Elts[5], "the set of a job is not the variable that its owner names, so the model would sum bounds that its waits do not take"))
+			}
+		}
+	}
+	if !found {
+		problems = append(problems, "the check found no literal of jobs")
+	}
+	return problems
+}
+
+func TestEveryJobHoldsTheSetItsOwnerNames(t *testing.T) {
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, "bounds_test.go", nil, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, problem := range problemsWithTheSetsOfTheJobs(fset, file) {
+		t.Error(problem)
+	}
+}
+
+func TestTheCheckOfTheSetsOfTheJobsRefusesASetThatIsNotItsOwners(t *testing.T) {
+	const refused = "not the variable that its owner names"
+	cases := []struct {
+		name, source, want string
+	}{
+		{"every set its owner's", "var jobs = []job{\n{\"e2e\", \"e2e\", \"\", \"join_test.go\", \"bounds\", bounds},\n{\"e2e-minor\", \"e2e,minor\", \"T\", \"minor_test.go\", \"minorBounds\", minorBounds},\n}", ""},
+		{"the set of another job", "var jobs = []job{\n{\"e2e-minor\", \"e2e,minor\", \"T\", \"minor_test.go\", \"minorBounds\", upgradeBounds},\n}", refused},
+		{"a literal of the set", "var jobs = []job{\n{\"e2e-minor\", \"e2e,minor\", \"T\", \"minor_test.go\", \"minorBounds\", minorBoundSet{time.Second}},\n}", refused},
+		{"a field of another set", "var jobs = []job{\n{\"e2e-minor\", \"e2e,minor\", \"T\", \"minor_test.go\", \"minorBounds\", other.minorBounds},\n}", refused},
+		{"an owner that is no string", "var jobs = []job{\n{\"e2e-minor\", \"e2e,minor\", \"T\", \"minor_test.go\", minorBounds, minorBounds},\n}", refused},
+		{"a row of fewer fields", "var jobs = []job{\n{\"e2e-minor\", minorBounds},\n}", "six fields"},
+		{"a row that is not a literal", "var jobs = []job{\nminor,\n}", "six fields"},
+		{"no table", "var other = []job{}", "no literal of jobs"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			fset := token.NewFileSet()
+			file, err := parser.ParseFile(fset, "x.go", "package p\n"+c.source+"\n", 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			problems := strings.Join(problemsWithTheSetsOfTheJobs(fset, file), "\n")
+			switch {
+			case c.want == "" && problems != "":
+				t.Fatalf("want accepted, got %s", problems)
+			case c.want != "" && !strings.Contains(problems, c.want):
+				t.Fatalf("want a problem with %q, got %q", c.want, problems)
+			}
+		})
+	}
+}
+
 func TestEveryJobIsLintedWithItsBuildTags(t *testing.T) {
 	makefile, err := os.ReadFile("../../Makefile")
 	if err != nil {
