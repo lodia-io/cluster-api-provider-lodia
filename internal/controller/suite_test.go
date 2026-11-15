@@ -68,7 +68,7 @@ func TestMain(m *testing.M) {
 	}
 	env := &envtest.Environment{
 		CRDDirectoryPaths: []string{
-			filepath.Join("..", "..", "config", "crd", "bases"),
+			filepath.Join("..", "..", "api", "crds"),
 			filepath.Join(strings.TrimSpace(string(capi)), "core", "config", "crd", "bases"),
 		},
 		CRDs:                  lodiaCRDs,

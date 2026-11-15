@@ -56,8 +56,9 @@ No admission webhooks: [no-admission-webhooks](decisions/no-admission-webhooks.m
 ### The API module
 
 The types are the Go module `go.lodia.io/cluster-api-provider-lodia/api` ([project-home](decisions/project-home.md)): the package `v1alpha1`, and the package `crds`, which holds the two CRDs as `crds.FS`.
-`make generate` writes the CRDs from the types' markers into `api/crds` and copies them into `config/crd/bases`, which `config/default` reads: kustomize loads no file outside the kustomization's root by default ([load restrictor][ks-restrictor]).
-`make verify` fails when either is stale.
+`make generate` writes the CRDs from the types' markers into `api/crds`, and `config/default` reads that directory through `api/crds/Kustomization`, which has no extension so that the `*.yaml` pattern of `crds.FS` skips it.
+kustomize keeps the files of a kustomization inside its root by default ([load restrictor][ks-restrictor]), and a directory resource gets a loader of its own, rooted at that directory ([New][ks-new], [Load][ks-load]), so the CRDs need no copy under `config/`.
+`make verify` fails when they are stale.
 A platform that imports the types requires `go.lodia.io/cluster-api-provider-lodia/api` alone, and gets no controller-runtime and no `sigs.k8s.io/cluster-api`.
 It does get `k8s.io/client-go` through `k8s.io/apiextensions-apiserver`, and `k8s.io/*` at v0.37.2 or later, the floor of Cluster API v1.15.0-beta.0's API module ([why](decisions/project-home.md#why)).
 It never requires `go.lodia.io/cluster-api-provider-lodia`: `v0.1.0-alpha.1` of that module holds the same package, and a build that requires both fails with an ambiguous import ([ambiguous imports](https://go.dev/ref/mod#resolve-pkg-mod)).
@@ -633,6 +634,8 @@ To give the copy a new, empty control plane, remove its annotation `controlplane
 
 <!-- kustomize v5.7.0 -->
 [ks-restrictor]: https://github.com/kubernetes-sigs/kustomize/blob/kustomize/v5.7.0/kustomize/commands/build/flagloadrestrictor.go#L16-L25
+[ks-new]: https://github.com/kubernetes-sigs/kustomize/blob/kustomize/v5.7.0/api/internal/loader/fileloader.go#L150-L182
+[ks-load]: https://github.com/kubernetes-sigs/kustomize/blob/kustomize/v5.7.0/api/internal/loader/fileloader.go#L290-L305
 
 <!-- controller-runtime, kubeadm, Kubernetes -->
 [cr-fail-on-missing]: https://github.com/kubernetes-sigs/controller-runtime/blob/v0.25.2/pkg/cache/cache.go#L130-L137

@@ -41,7 +41,7 @@ func TestEveryObjectOfTheTestdataIsAcceptedByTheCRDOfItsKind(t *testing.T) {
 			filepath.Join(capi, "core", "config", "crd", "bases"),
 			filepath.Join(capi, "bootstrap", "kubeadm", "config", "crd", "bases"),
 			filepath.Join(moduleDir(t, "go.lodia.io/lodia/api"), "crds"),
-			filepath.Join("..", "..", "config", "crd", "bases"),
+			filepath.Join("..", "..", "api", "crds"),
 		},
 		ErrorIfCRDPathMissing: true,
 		UseExistingCluster:    new(false),

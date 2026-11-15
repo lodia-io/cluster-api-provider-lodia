@@ -46,7 +46,7 @@ Decided 2026-10-26.
 ## Code
 
 - `go.mod` — the module path, the two imports, and the require and the replace of the API module; `api/go.mod` — the API module.
-- `api/crds/crds.go` — `crds.FS`; `Makefile` — `generate`, which writes the CRDs into `api/crds` and copies them into `config/crd/bases` for kustomize ([the copy](../README.md#the-api-module)).
+- `api/crds/crds.go` — `crds.FS`; `api/crds/Kustomization` — the list of the CRDs that `config/default` reads; `Makefile` — `generate`, which writes the CRDs into `api/crds` ([where the CRDs come from](../README.md#the-api-module)).
 - `test/build/pin_test.go` — `TestTheAPIModulePinsWhatTheMainModuleDoes`.
 - `api/v1alpha1/groupversion_info.go` — the group and the version; `api/v1alpha1/lodiacontrolplane_types.go` has the finalizer and the annotation names.
 - `config/default/kustomization.yaml` — the provider label.

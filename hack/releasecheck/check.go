@@ -28,7 +28,7 @@ import (
 
 const (
 	metadataFile = "metadata.yaml"
-	crdsDir      = "config/crd/bases"
+	crdsDir      = "api/crds"
 	originMain   = "refs/remotes/origin/main"
 
 	completed = "completed"

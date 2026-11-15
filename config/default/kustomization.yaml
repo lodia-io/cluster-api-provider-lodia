@@ -3,7 +3,7 @@ kind: Kustomization
 namespace: cluster-api-provider-lodia-system
 namePrefix: cluster-api-provider-lodia-
 resources:
-- ../crd
+- ../../api/crds
 - ../rbac
 - ../manager
 labels:

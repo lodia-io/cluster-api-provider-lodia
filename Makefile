@@ -21,13 +21,12 @@ RELEASE_IMAGE = go run ./hack/releasecheck image --repository=$(IMAGE_REPOSITORY
 RELEASE_WORKFLOW = $(GITHUB_REPO)/.github/workflows/release.yml
 VERIFY_IDENTITY = --certificate-identity https://github.com/$(RELEASE_WORKFLOW)@refs/tags/$(IMAGE_TAG) --certificate-oidc-issuer https://token.actions.githubusercontent.com
 VERIFY_ATTESTATION = -R $(GITHUB_REPO) --signer-workflow $(RELEASE_WORKFLOW) --source-ref refs/tags/$(IMAGE_TAG)
-GENERATED = api/v1alpha1/zz_generated.deepcopy.go api/crds/*.yaml config/crd/bases/*.yaml config/rbac/role.yaml
+GENERATED = api/v1alpha1/zz_generated.deepcopy.go api/crds/*.yaml config/rbac/role.yaml
 
 .PHONY: generate
-generate: ## regenerate deepcopy functions, the CRDs in api/crds with the copy kustomize reads in config/crd/bases, and the controller's ClusterRole
+generate: ## regenerate deepcopy functions, the CRDs in api/crds, and the controller's ClusterRole
 	go tool controller-gen object:headerFile=hack/boilerplate.go.txt paths=./api/...
 	go tool controller-gen crd paths=./api/... output:crd:artifacts:config=api/crds
-	rm -f config/crd/bases/*.yaml && cp api/crds/*.yaml config/crd/bases/
 	go tool controller-gen rbac:roleName=manager-role paths=./internal/... output:rbac:artifacts:config=config/rbac
 
 .PHONY: lint
