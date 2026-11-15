@@ -201,7 +201,7 @@ func TestTheProviderUpgradesFromThePreviousRelease(t *testing.T) {
 			return ctx
 		}).
 		Assess("the Machine is the one of before, the tenant accepts the credential as the provider holds it now, and the Node is Ready", func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
-			kept, err := requireTheMachineKept(ctx, k8s, key, workersName(key.Name), before.worker)
+			kept, err := requireTheOnlyMachineKept(ctx, k8s, key, before.worker)
 			if err != nil {
 				t.Fatal(err)
 			}

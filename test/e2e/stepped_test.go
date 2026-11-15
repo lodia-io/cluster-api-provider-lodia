@@ -8,6 +8,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"os"
 	"path/filepath"
 	"slices"
@@ -68,6 +71,13 @@ func requireTheMachineKept(ctx context.Context, k8s client.Reader, key client.Ob
 		return nil, fmt.Errorf("Machine %s of %s has the UID %s and the nodeRef %s, and it had %s and %s: it was replaced", m.Name, deployment, m.UID, m.Status.NodeRef.Name, kept.UID, kept.Status.NodeRef.Name)
 	}
 	return m, nil
+}
+
+func requireTheOnlyMachineKept(ctx context.Context, k8s client.Reader, key client.ObjectKey, kept *clusterv1.Machine) (*clusterv1.Machine, error) {
+	if _, err := runningWorkers(ctx, k8s, key, 1); err != nil {
+		return nil, err
+	}
+	return requireTheMachineKept(ctx, k8s, key, workersName(key.Name), kept)
 }
 
 func requireKubelet(node *corev1.Node, version string) error {
@@ -388,6 +398,48 @@ func TestAMachineIsKeptWhenItsDeploymentHoldsItAloneWithTheUIDAndTheNodeRefItHad
 				t.Errorf("returned %v", machine)
 			}
 		})
+	}
+}
+
+func TestTheOnlyMachineOfTheClusterIsKeptWhenNoOtherMachineOfItIsBesideIt(t *testing.T) {
+	deployment := workersName(scaleKey.Name)
+	kept := machineOfDeployment("a", "ua", "na", deployment)
+	cases := []struct {
+		name    string
+		objects []client.Object
+		failure string
+	}{
+		{"the same Machine", []client.Object{kept.DeepCopy()}, ""},
+		{"a Machine made again", []client.Object{machineOfDeployment("a", "again", "na", deployment)}, "it was replaced"},
+		{"a Machine of the Cluster of no Deployment beside it", []client.Object{kept.DeepCopy(), workerMachine("b", "ub", "nb")}, "2 Machines, want 1"},
+		{"a Machine of another Deployment beside it", []client.Object{kept.DeepCopy(), machineOfDeployment("b", "ub", "nb", nextWorkersName(scaleKey.Name))}, "2 Machines, want 1"},
+		{"a Machine of another Cluster beside it", []client.Object{kept.DeepCopy(), mutated(workerMachine("b", "ub", "nb"), func(m *clusterv1.Machine) { m.Labels[clusterv1.ClusterNameLabel] = "other" })}, ""},
+		{"no Machine", nil, "0 Machines, want 1"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			machine, err := requireTheOnlyMachineKept(t.Context(), managementOf(c.objects...), scaleKey, kept)
+			requireFailure(t, err, c.failure)
+			if c.failure == "" && (machine == nil || machine.Name != "a") {
+				t.Errorf("returned %v", machine)
+			}
+		})
+	}
+}
+
+func TestTheUpgradeKeepsTheOnlyMachineOfTheCluster(t *testing.T) {
+	file, err := parser.ParseFile(token.NewFileSet(), "upgrade_test.go", nil, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var callees []string
+	for n := range ast.Preorder(file) {
+		if call, ok := n.(*ast.CallExpr); ok {
+			callees = append(callees, calleeOf(call))
+		}
+	}
+	if !slices.Contains(callees, "requireTheOnlyMachineKept") || slices.Contains(callees, "requireTheMachineKept") {
+		t.Error("the upgrade's step of the Machine has to call requireTheOnlyMachineKept and not requireTheMachineKept, which counts only the Machines of one Deployment")
 	}
 }
 
