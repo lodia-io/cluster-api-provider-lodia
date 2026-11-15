@@ -137,6 +137,7 @@ e2e-lodia: ## fetch Lodia at LODIA_COMMIT, the commit go.mod pins, into $(LODIA_
 
 e2e: E2E_TAGS = e2e
 e2e: E2E_TIMEOUT = 64m
+e2e: E2E_RUN =
 e2e-upgrade: E2E_CLUSTER = $(E2E_UPGRADE_CLUSTER)
 e2e-upgrade: E2E_TAGS = e2e,upgrade
 e2e-upgrade: E2E_TIMEOUT = 46m

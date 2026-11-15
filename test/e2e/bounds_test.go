@@ -591,6 +591,28 @@ func targetRecipe(t *testing.T, target string) string {
 	return recipeOf(t, cmd)
 }
 
+func goTestOf(recipe string) string {
+	for line := range strings.SplitSeq(recipe, "\n") {
+		if strings.Contains(line, "go test") {
+			return strings.TrimSpace(line)
+		}
+	}
+	return recipe
+}
+
+func TestNoTargetOfTheSuiteTakesItsSelectionOfTestsFromTheEnvironment(t *testing.T) {
+	for _, j := range jobs {
+		t.Run(j.name, func(t *testing.T) {
+			cmd := exec.CommandContext(t.Context(), "make", "--no-print-directory", j.name)
+			cmd.Dir = root
+			cmd.Env = append(os.Environ(), "E2E_RUN=-run TestOfTheEnvironment")
+			if got, want := recipeOf(t, cmd), targetRecipe(t, j.name); got != want {
+				t.Errorf("an E2E_RUN in the environment changes what %s runs, to\n%s\nwant\n%s", j.name, goTestOf(got), goTestOf(want))
+			}
+		})
+	}
+}
+
 func TestTheBoundsFitUnderTheTimeouts(t *testing.T) {
 	makefile, err := os.ReadFile("../../Makefile")
 	if err != nil {
