@@ -654,6 +654,78 @@ func TestEveryClusterctlClientIsBuiltThroughTheFactory(t *testing.T) {
 	}
 }
 
+func proxiesMadeOutsideNewProxy(path string, src any) ([]string, error) {
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, path, src, parser.SkipObjectResolution)
+	if err != nil {
+		return nil, err
+	}
+	var found []string
+	ast.PreorderStack(file, nil, func(n ast.Node, stack []ast.Node) bool {
+		lit, ok := n.(*ast.CompositeLit)
+		if !ok {
+			return true
+		}
+		if ident, ok := lit.Type.(*ast.Ident); !ok || ident.Name != "proxy" {
+			return true
+		}
+		for _, outer := range slices.Backward(stack) {
+			if fn, ok := outer.(*ast.FuncDecl); ok && fn.Name.Name == "newProxy" {
+				return true
+			}
+		}
+		found = append(found, fmt.Sprintf("%s makes a proxy", fset.Position(lit.Pos())))
+		return true
+	})
+	return found, nil
+}
+
+func TestTheScanRefusesAProxyThatNewProxyDidNotMake(t *testing.T) {
+	cases := []struct {
+		name, src string
+		want      int
+	}{
+		{"the literal of newProxy", "package p\nfunc newProxy() *proxy { return &proxy{cfg: nil} }\n", 0},
+		{"a literal in New", "package p\nfunc New() { p := &proxy{cfg: nil}; use(p) }\n", 1},
+		{"a literal that is no pointer", "package p\nfunc New() { use(proxy{}) }\n", 1},
+		{"a literal outside a function", "package p\nvar p = &proxy{}\n", 1},
+		{"a literal of a method", "package p\nfunc (p *proxy) NewClient() { use(&proxy{}) }\n", 1},
+		{"a call of newProxy", "package p\nfunc New() { use(newProxy(nil, 0, 0)) }\n", 0},
+		{"a literal of another type", "package p\nfunc New() { use(&server{}) }\n", 0},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			found, err := proxiesMadeOutsideNewProxy("p.go", c.src)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(found) != c.want {
+				t.Errorf("the scan found %d, want %d: %v", len(found), c.want, found)
+			}
+		})
+	}
+}
+
+func TestEveryProxyIsMadeByNewProxy(t *testing.T) {
+	files, err := filepath.Glob("*.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	files = slices.DeleteFunc(files, func(name string) bool { return strings.HasSuffix(name, "_test.go") })
+	if !slices.Contains(files, "proxy.go") {
+		t.Fatalf("the scan reads %v, and not proxy.go", files)
+	}
+	for _, name := range files {
+		found, err := proxiesMadeOutsideNewProxy(name, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, f := range found {
+			t.Errorf("%s outside newProxy, which sets the QPS that gives its clients no rate limiter", f)
+		}
+	}
+}
+
 type listRequest struct{ path, selector string }
 
 func (r listRequest) String() string { return r.path + "?" + r.selector }

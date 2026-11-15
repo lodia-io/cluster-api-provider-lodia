@@ -124,7 +124,7 @@ type proxy struct {
 	requestTimeout, discoveryTimeout time.Duration
 }
 
-var _ cluster.Proxy = &proxy{}
+var _ cluster.Proxy = (*proxy)(nil)
 
 // The kinds of clusterctl's own scheme, which is in an internal package:
 // https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/cmd/clusterctl/internal/scheme/scheme.go#L41-L50
