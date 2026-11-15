@@ -463,7 +463,7 @@ func report(lcp *v1alpha1.LodiaControlPlane, u *unstructured.Unstructured, secre
 	if secretsCopied && meta.IsStatusConditionTrue(cp.Status.Conditions, lodiav1alpha1.ConditionReady) {
 		lcp.Status.Initialization.ControlPlaneInitialized = new(true)
 	}
-	if k := cp.Status.Kubernetes; k != nil && k.Version != "" {
+	if k := cp.Status.Kubernetes; k != nil && k.Version != "" && lcp.Status.Version == "" {
 		lcp.Status.Version = k.Version
 		lcp.Status.Versions = []clusterv1.StatusVersion{{Version: k.Version}}
 	}
