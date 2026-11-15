@@ -104,6 +104,7 @@ func TestTheReleaseWorkflowSetsNoEnvironmentAboveItsSteps(t *testing.T) {
 func TestTheReleaseWorkflowPullsTheImageThatTheMakefileChecks(t *testing.T) {
 	var order []string
 	var withs []map[string]any
+	var usesEnvs []map[string]string
 	runs := map[string]string{}
 	envs := map[string]map[string]string{}
 	ids := map[string]string{}
@@ -123,13 +124,14 @@ func TestTheReleaseWorkflowPullsTheImageThatTheMakefileChecks(t *testing.T) {
 			action, _, _ := strings.Cut(step.Uses, "@")
 			order = append(order, action)
 			withs = append(withs, step.With)
+			usesEnvs = append(usesEnvs, step.Env)
 		default:
 			t.Errorf("an unnamed step that runs %q", step.Run)
 		}
 	}
 
 	const (
-		checkout, setupGo, cosign, attest = "actions/checkout", "actions/setup-go", "sigstore/cosign-installer", "actions/attest-build-provenance"
+		checkout, setupGo, cosign, attest = "actions/checkout", "actions/setup-go", "sigstore/cosign-installer", "actions/attest"
 		tagCheck, login, render, pull     = "Check the tag", "Log in to the registry", "Push the image and render the components YAML", "Check the image and pull it without credentials"
 		sign, verifySigned, nameImage     = "Sign the image and the release files", "Verify the signatures as a user does", "Name the image by its digest"
 		verifyAttested, publish           = "Verify the attestations as a user does", "Publish the release"
@@ -146,6 +148,9 @@ func TestTheReleaseWorkflowPullsTheImageThatTheMakefileChecks(t *testing.T) {
 		{"subject-path": "out/control-plane-components.yaml\nmetadata.yaml\n"},
 	}, withs); diff != "" {
 		t.Errorf("the inputs of the unnamed steps, in order (-want +got):\n%s", diff)
+	}
+	if diff := cmp.Diff([]map[string]string{nil, nil, nil, {"NODE_OPTIONS": "--max-http-header-size=32768"}, nil}, usesEnvs); diff != "" {
+		t.Errorf("the environments of the unnamed steps, in order (-want +got):\n%s", diff)
 	}
 	if diff := cmp.Diff(map[string]string{nameImage: "image"}, ids); diff != "" {
 		t.Errorf("the ids of the named steps, which the attestation's inputs name (-want +got):\n%s", diff)
