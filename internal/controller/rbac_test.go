@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"github.com/google/go-cmp/cmp"
-	lodiav1alpha1 "go.lodia.io/lodia/api/v1alpha1"
 	authenticationv1 "k8s.io/api/authentication/v1"
 	authorizationv1 "k8s.io/api/authorization/v1"
 	coordinationv1 "k8s.io/api/coordination/v1"
@@ -23,15 +22,11 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/runtime/serializer"
 	"k8s.io/client-go/kubernetes/scheme"
-	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
-	"sigs.k8s.io/cluster-api/util/flags"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	"go.lodia.io/cluster-api-provider-lodia/api/v1alpha1"
 	"go.lodia.io/cluster-api-provider-lodia/internal/controller"
 )
 
@@ -242,58 +237,5 @@ func TestALeaseUnderAFreeNameCanBeCreatedButAnotherControllersCannotBeReadChange
 	}
 	if err := c.Delete(t.Context(), other); !apierrors.IsForbidden(err) {
 		t.Errorf("delete of another controller's Lease: %v, want forbidden", err)
-	}
-}
-
-func TestTheManagerIsLeaderElectedSecuredAndBuiltOnTheCacheOptions(t *testing.T) {
-	for _, c := range []controller.Config{
-		{Diagnostics: flags.ManagerOptions{DiagnosticsAddress: ":9443"}, HealthAddr: ":9081"},
-		{Diagnostics: flags.ManagerOptions{DiagnosticsAddress: "127.0.0.1:9444"}, HealthAddr: "127.0.0.1:9082", LeaderElect: true, Namespace: "tenants"},
-	} {
-		options, err := controller.ManagerOptions(c)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if options.LeaderElection != c.LeaderElect || options.LeaderElectionID != "controlplane.lodia.io" {
-			t.Errorf("leader election %v with ID %q, want %v", options.LeaderElection, options.LeaderElectionID, c.LeaderElect)
-		}
-		if options.LeaderElectionNamespace != "" {
-			t.Errorf("leader election in the namespace %q, want the Pod's", options.LeaderElectionNamespace)
-		}
-		if m := options.Metrics; m.BindAddress != c.Diagnostics.DiagnosticsAddress || !m.SecureServing || m.FilterProvider == nil {
-			t.Errorf("metrics %+v: want them on %q over HTTPS behind a filter", m, c.Diagnostics.DiagnosticsAddress)
-		}
-		if options.HealthProbeBindAddress != c.HealthAddr {
-			t.Errorf("probes on %q, want %q", options.HealthProbeBindAddress, c.HealthAddr)
-		}
-	}
-
-	options, err := controller.ManagerOptions(controller.Config{SyncPeriod: 10 * time.Minute})
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, kind := range []schema.GroupVersionKind{
-		v1alpha1.GroupVersion.WithKind("LodiaControlPlane"),
-		lodiav1alpha1.GroupVersion.WithKind("ControlPlane"),
-		clusterv1.GroupVersion.WithKind("Cluster"),
-	} {
-		if options.Scheme == nil || !options.Scheme.Recognizes(kind) {
-			t.Errorf("the scheme does not recognize %s", kind)
-		}
-	}
-	if period := options.Cache.SyncPeriod; period == nil || *period != 10*time.Minute {
-		t.Errorf("sync period %v", period)
-	}
-	if len(options.Cache.DefaultNamespaces) != 0 {
-		t.Errorf("the cache is limited to the namespaces %v", options.Cache.DefaultNamespaces)
-	}
-	selectors := 0
-	for object, byObject := range options.Cache.ByObject {
-		if _, ok := object.(*corev1.Secret); ok && byObject.Label != nil && byObject.Label.String() == lodiav1alpha1.ControlPlaneLabel {
-			selectors++
-		}
-	}
-	if selectors != 1 {
-		t.Errorf("%d Secret selectors on Lodia's label, want 1", selectors)
 	}
 }

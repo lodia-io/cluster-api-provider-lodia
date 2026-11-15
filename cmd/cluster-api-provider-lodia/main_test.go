@@ -20,16 +20,20 @@ import (
 
 	"github.com/google/go-cmp/cmp"
 	"github.com/spf13/pflag"
+	lodiav1alpha1 "go.lodia.io/lodia/api/v1alpha1"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	utilyaml "k8s.io/apimachinery/pkg/util/yaml"
 	logsv1 "k8s.io/component-base/logs/api/v1"
 	"k8s.io/klog/v2"
+	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	"sigs.k8s.io/cluster-api/cmd/clusterctl/client/yamlprocessor"
 	ctrl "sigs.k8s.io/controller-runtime"
 
+	"go.lodia.io/cluster-api-provider-lodia/api/v1alpha1"
 	"go.lodia.io/cluster-api-provider-lodia/internal/controller"
 )
 
@@ -255,9 +259,48 @@ func TestTheFlagsDefaultToClusterAPIsValues(t *testing.T) {
 	}
 }
 
-func TestTheCacheFailsAReadOfATypeItHasNoInformerFor(t *testing.T) {
-	if !parsed(t).manager.Cache.ReaderFailOnMissingInformer {
+func TestTheCacheKeepsLodiasSecretsAndFailsAReadOfATypeItHasNoInformerFor(t *testing.T) {
+	options := parsed(t).manager.Cache
+	if !options.ReaderFailOnMissingInformer {
 		t.Error("a typed read of a type with no informer starts one, which for a Secret holds the data of every one labelled for Lodia")
+	}
+	selectors := 0
+	for object, byObject := range options.ByObject {
+		if _, ok := object.(*corev1.Secret); ok && byObject.Label != nil && byObject.Label.String() == lodiav1alpha1.ControlPlaneLabel {
+			selectors++
+		}
+	}
+	if selectors != 1 {
+		t.Errorf("%d Secret selectors on Lodia's label, want 1", selectors)
+	}
+}
+
+func TestTheManagerLeadsOnTheLeaseTheRoleNamesInThePodsNamespace(t *testing.T) {
+	options := parsed(t, "--leader-elect=true").manager
+	if options.LeaderElectionID != "controlplane.lodia.io" {
+		t.Errorf("leader election ID %q, want the Lease that the leader election Role names", options.LeaderElectionID)
+	}
+	if options.LeaderElectionNamespace != "" {
+		t.Errorf("leader election in the namespace %q, want the Pod's", options.LeaderElectionNamespace)
+	}
+}
+
+func TestTheMetricsAreServedBehindAFilter(t *testing.T) {
+	if parsed(t).manager.Metrics.FilterProvider == nil {
+		t.Error("the metrics server has no filter provider")
+	}
+}
+
+func TestTheSchemeRecognizesTheKindsTheControllerReadsAndWrites(t *testing.T) {
+	scheme := parsed(t).manager.Scheme
+	for _, kind := range []schema.GroupVersionKind{
+		v1alpha1.GroupVersion.WithKind("LodiaControlPlane"),
+		lodiav1alpha1.GroupVersion.WithKind("ControlPlane"),
+		clusterv1.GroupVersion.WithKind("Cluster"),
+	} {
+		if scheme == nil || !scheme.Recognizes(kind) {
+			t.Errorf("the scheme does not recognize %s", kind)
+		}
 	}
 }
 
