@@ -10,7 +10,7 @@ import (
 )
 
 // Finalizer holds a LodiaControlPlane until its ControlPlane is gone.
-const Finalizer = "controlplane.lodia.io/lodiacontrolplane"
+const Finalizer = "controlplane.lodia.io/lodiacontrolplane-renamed"
 
 // UIDAnnotation holds the UID that a LodiaControlPlane had when the provider
 // first reconciled it. clusterctl's move and restore keep annotations and give
