@@ -276,12 +276,14 @@ func TestTheCacheKeepsLodiasSecretsAndFailsAReadOfATypeItHasNoInformerFor(t *tes
 }
 
 func TestTheManagerLeadsOnTheLeaseTheRoleNamesInThePodsNamespace(t *testing.T) {
-	options := parsed(t, "--leader-elect=true").manager
-	if options.LeaderElectionID != "controlplane.lodia.io" {
-		t.Errorf("leader election ID %q, want the Lease that the leader election Role names", options.LeaderElectionID)
-	}
-	if options.LeaderElectionNamespace != "" {
-		t.Errorf("leader election in the namespace %q, want the Pod's", options.LeaderElectionNamespace)
+	for _, args := range [][]string{{"--leader-elect=true"}, {"--leader-elect=true", "--namespace=tenants"}} {
+		options := parsed(t, args...).manager
+		if options.LeaderElectionID != "controlplane.lodia.io" {
+			t.Errorf("%v: leader election ID %q, want the Lease that the leader election Role names", args, options.LeaderElectionID)
+		}
+		if options.LeaderElectionNamespace != "" {
+			t.Errorf("%v: leader election in the namespace %q, want the Pod's", args, options.LeaderElectionNamespace)
+		}
 	}
 }
 
