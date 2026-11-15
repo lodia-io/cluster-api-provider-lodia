@@ -177,6 +177,33 @@ const (
 	kubeadmBootstrapAccount   = "capi-kubeadm-bootstrap-manager"
 )
 
+const kubeadmBootstrapAggregation = `aggregationRule:
+  clusterRoleSelectors:
+  - matchLabels:
+      kubeadm.bootstrap.cluster.x-k8s.io/aggregate-to-manager: "true"
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  labels:
+    cluster.x-k8s.io/provider: bootstrap-kubeadm
+  name: capi-kubeadm-bootstrap-aggregated-manager-role
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  labels:
+    cluster.x-k8s.io/provider: bootstrap-kubeadm
+  name: capi-kubeadm-bootstrap-aggregated-manager-rolebinding
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: capi-kubeadm-bootstrap-aggregated-manager-role
+subjects:
+- kind: ServiceAccount
+  name: capi-kubeadm-bootstrap-manager
+  namespace: capi-kubeadm-bootstrap-system
+`
+
 func installProviders(ctx context.Context, cfg *envconf.Config) error {
 	dir := workDir(cfg)
 	metadata, err := clusterAPIMetadata.fetch(ctx, dir)
@@ -233,7 +260,12 @@ func installProviders(ctx context.Context, cfg *envconf.Config) error {
 	}); err != nil {
 		return fmt.Errorf("clusterctl init: %w", err)
 	}
-	return nil
+	if err := apply(ctx, cfg, []byte(kubeadmBootstrapAggregation)); err != nil {
+		return fmt.Errorf("apply the aggregation of the kubeadm bootstrap provider's ClusterRole: %w", err)
+	}
+	return pollUntil(ctx, untilInterval, func(ctx context.Context) error {
+		return requireTheKubeadmBootstrapGrant(ctx, cfg)
+	})
 }
 
 func repositoryDir(cfg *envconf.Config) string {
