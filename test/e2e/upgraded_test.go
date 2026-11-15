@@ -191,12 +191,8 @@ func requireTheGrantKept(ctx context.Context, k8s client.Reader, before *beforeT
 // takes is the host name and a UUID:
 // https://github.com/kubernetes-sigs/controller-runtime/blob/v0.25.2/pkg/leaderelection/leader_election.go#L93-L97
 func requireTheNewManagerLeads(ctx context.Context, k8s client.Reader) error {
-	options, err := controller.ManagerOptions(controller.Config{})
-	if err != nil {
-		return err
-	}
 	lease := &coordinationv1.Lease{}
-	if err := k8s.Get(ctx, client.ObjectKey{Namespace: providerNamespace, Name: options.LeaderElectionID}, lease); err != nil {
+	if err := k8s.Get(ctx, client.ObjectKey{Namespace: providerNamespace, Name: controller.LeaderElectionID}, lease); err != nil {
 		return err
 	}
 	holder := ptr.Deref(lease.Spec.HolderIdentity, "")

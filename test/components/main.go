@@ -151,10 +151,6 @@ func run(args []string, r io.Reader, previous previousRelease) error {
 }
 
 func check(r io.Reader) error {
-	options, err := controller.ManagerOptions(controller.Config{})
-	if err != nil {
-		return err
-	}
 	raw, err := io.ReadAll(r)
 	if err != nil {
 		return err
@@ -186,7 +182,7 @@ func check(r io.Reader) error {
 		{defaultsRun, serviceAccountUserPrefix + bootstrapNamespace + ":" + bootstrapAccount, nil},
 		{explicitRun, serviceAccountUserPrefix + explicit[bootstrapNamespaceVariable] + ":" + explicit[bootstrapAccountVariable], explicit},
 	} {
-		if err := requireRoles(raw, run.values, options.LeaderElectionID, run.bootstrapUser); err != nil {
+		if err := requireRoles(raw, run.values, controller.LeaderElectionID, run.bootstrapUser); err != nil {
 			errs = append(errs, fmt.Errorf("with %s: %w", run.name, err))
 		}
 	}

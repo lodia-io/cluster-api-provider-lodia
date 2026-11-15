@@ -52,8 +52,9 @@ import (
 )
 
 const (
-	Name         = "lodiacontrolplane"
-	FieldManager = "cluster-api-provider-lodia"
+	Name             = "lodiacontrolplane"
+	FieldManager     = "cluster-api-provider-lodia"
+	LeaderElectionID = "controlplane.lodia.io"
 )
 
 // +kubebuilder:rbac:groups=controlplane.lodia.io,resources=lodiacontrolplanes,verbs=get;list;watch;patch
@@ -132,7 +133,7 @@ func ManagerOptions(c Config) (ctrl.Options, error) {
 		HealthProbeBindAddress: c.HealthAddr,
 		PprofBindAddress:       c.ProfilerAddress,
 		LeaderElection:         c.LeaderElect,
-		LeaderElectionID:       "controlplane.lodia.io",
+		LeaderElectionID:       LeaderElectionID,
 		LeaseDuration:          &c.LeaseDuration,
 		RenewDeadline:          &c.RenewDeadline,
 		RetryPeriod:            &c.RetryPeriod,
