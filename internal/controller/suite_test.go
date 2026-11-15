@@ -168,7 +168,6 @@ func startManager(t *testing.T, ns string) ctrl.Manager {
 func startManagerWith(t *testing.T, c controller.Config, with ...func(*ctrl.Options)) ctrl.Manager {
 	t.Helper()
 	forTheTest := func(options *ctrl.Options) {
-		options.Cache.ReaderFailOnMissingInformer = true
 		options.Metrics = metricsserver.Options{BindAddress: "0"}
 		options.Controller = config.Controller{SkipNameValidation: new(true)}
 	}

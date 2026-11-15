@@ -110,6 +110,7 @@ What another controller owns is left alone ([decision](decisions/objects-of-anot
 ### The cache and the watches
 
 The cache holds no Secret data.
+It fails a typed read of a type it has no informer for ([`ReaderFailOnMissingInformer`][cr-fail-on-missing]) instead of starting one, which for a Secret would hold the data of every Secret labelled `lodia.io/control-plane`.
 The provider watches the metadata of Secrets labelled `lodia.io/control-plane` ([labels][lo-labels]), maps `<cp>-admin-kubeconfig` and `<cp>-ca-bundle` to the `LodiaControlPlane` of the Cluster of that name, and reads both, and its own two, from the API server on every pass.
 `ControlPlane` and `Cluster` events map the same way, through the Cluster's `controlPlaneRef`, so a leftover `ControlPlane` of another owner wakes the provider when it goes.
 The cache resyncs every 10 minutes by default, Cluster API's default ([--sync-period][capi-sync]), which repairs the provider's own Secrets, which no watch covers, and a missed delete event.
@@ -634,6 +635,7 @@ To give the copy a new, empty control plane, remove its annotation `controlplane
 [ks-restrictor]: https://github.com/kubernetes-sigs/kustomize/blob/kustomize/v5.7.0/kustomize/commands/build/flagloadrestrictor.go#L16-L25
 
 <!-- controller-runtime, kubeadm, Kubernetes -->
+[cr-fail-on-missing]: https://github.com/kubernetes-sigs/controller-runtime/blob/v0.25.2/pkg/cache/cache.go#L130-L137
 [kubeadm-discovery]: https://github.com/kubernetes/kubernetes/blob/v1.35.0/cmd/kubeadm/app/discovery/token/token.go#L59-L152
 [kubeadm-pins]: https://github.com/kubernetes/kubernetes/blob/v1.35.0/cmd/kubeadm/app/discovery/token/token.go#L191-L209
 [kubeadm-jws]: https://github.com/kubernetes/kubernetes/blob/v1.35.0/cmd/kubeadm/app/discovery/token/token.go#L211-L259

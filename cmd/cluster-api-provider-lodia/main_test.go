@@ -255,6 +255,12 @@ func TestTheFlagsDefaultToClusterAPIsValues(t *testing.T) {
 	}
 }
 
+func TestTheCacheFailsAReadOfATypeItHasNoInformerFor(t *testing.T) {
+	if !parsed(t).manager.Cache.ReaderFailOnMissingInformer {
+		t.Error("a typed read of a type with no informer starts one, which for a Secret holds the data of every one labelled for Lodia")
+	}
+}
+
 func TestTheFieldsThatWriteNoFlagMoveTheProbesOffThePathsTheManagerServes(t *testing.T) {
 	container := managerContainer(t)
 	served := []string{container.LivenessProbe.HTTPGet.Path, container.ReadinessProbe.HTTPGet.Path}

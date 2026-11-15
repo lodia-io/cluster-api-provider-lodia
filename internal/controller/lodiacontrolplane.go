@@ -112,6 +112,7 @@ func ManagerOptions(c Config) (ctrl.Options, error) {
 		return ctrl.Options{}, err
 	}
 	cacheOptions.SyncPeriod = &c.SyncPeriod
+	cacheOptions.ReaderFailOnMissingInformer = true
 	if c.Namespace != "" {
 		cacheOptions.DefaultNamespaces = map[string]cache.Config{c.Namespace: {}}
 	}
