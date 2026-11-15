@@ -500,7 +500,7 @@ const (
 	never     = 1 << 20
 )
 
-type timeline struct{ machineAt, copyAt, finishAt, heldAt int }
+type timeline struct{ machineAt, copyAt, finishAt, heldAt, heldUntil int }
 
 func (tl timeline) at(read int) minorWorld {
 	w := minorWorld{ready: "Unknown", readyCause: "LatestGenerationNotObserved"}
@@ -511,7 +511,7 @@ func (tl timeline) at(read int) minorWorld {
 		w.stepped, w.ready, w.readyCause = true, "True", "Ready"
 	}
 	w.finished = read >= tl.finishAt
-	w.held = read >= tl.heldAt
+	w.held = read >= tl.heldAt && read < tl.heldUntil
 	return w
 }
 
@@ -587,7 +587,7 @@ func (s *scriptedMinor) run(step *minorStep, polls int) (done int) {
 }
 
 func TestAPollListsTheMachinesThenReadsTheCopyThenLodiasReport(t *testing.T) {
-	s := inAWorld(timeline{never, never, never, 1})
+	s := inAWorld(timeline{never, never, never, 1, never})
 	step := newMinorStep(scaleKey, worldTo)
 	if err := step.poll(t.Context(), s); err == nil {
 		t.Fatal("a poll ended while Lodia has not rolled")
@@ -606,13 +606,14 @@ func TestAMinorStepIsHeldOrBrokenAsTheOrderedReadsOfEachPollSayAndTheHoldIsSeenO
 		violation string
 		held      bool
 	}{
-		{"a Machine that comes with the copy, and a copy that comes with Lodia", timeline{5, 5, 4, 1}, 5, 2, "", true},
-		{"a copy that comes at the read in which Lodia finishes", timeline{never, 3, 3, 1}, 5, 2, "", true},
-		{"a Machine that comes after the copy and Lodia", timeline{10, 5, 4, 1}, 5, 2, "", true},
-		{"a Machine with the copy still the old version", timeline{2, never, never, 1}, 5, 2, "Machine m of w-md-1 exists, and the LodiaControlPlane read after it reports \"v1.36.4\", not v1.37.0", true},
-		{"a copy of the new version while Lodia has not rolled", timeline{never, 2, never, 1}, 5, 1, "the LodiaControlPlane reports v1.37.0, and Lodia's ControlPlane read after it still has status.kubernetes.upgrade at the step ControllerManager", true},
-		{"a step that is never held", timeline{never, 5, 4, never}, 5, 2, "", false},
-		{"a step that does not end", timeline{never, never, never, 1}, 5, 0, "", true},
+		{"a Machine that comes with the copy, and a copy that comes with Lodia", timeline{5, 5, 4, 1, never}, 5, 2, "", true},
+		{"a copy that comes at the read in which Lodia finishes", timeline{never, 3, 3, 1, never}, 5, 2, "", true},
+		{"a Machine that comes after the copy and Lodia", timeline{10, 5, 4, 1, never}, 5, 2, "", true},
+		{"a Machine with the copy still the old version", timeline{2, never, never, 1, never}, 5, 2, "Machine m of w-md-1 exists, and the LodiaControlPlane read after it reports \"v1.36.4\", not v1.37.0", true},
+		{"a copy of the new version while Lodia has not rolled", timeline{never, 2, never, 1, never}, 5, 1, "the LodiaControlPlane reports v1.37.0, and Lodia's ControlPlane read after it still has status.kubernetes.upgrade at the step ControllerManager", true},
+		{"a step that is never held", timeline{never, 5, 4, never, never}, 5, 2, "", false},
+		{"a hold that is gone before the copy moves", timeline{never, 8, 7, 1, 4}, 5, 3, "", true},
+		{"a step that does not end", timeline{never, never, never, 1, never}, 5, 0, "", true},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -638,7 +639,7 @@ func TestAMinorStepIsHeldOrBrokenAsTheOrderedReadsOfEachPollSayAndTheHoldIsSeenO
 }
 
 func TestAMinorStepIsRunToTheVersionItIsGiven(t *testing.T) {
-	s := inAWorld(timeline{5, 5, 4, 1})
+	s := inAWorld(timeline{5, 5, 4, 1, never})
 	s.from, s.to = "v1.37.0", "v1.38.0"
 	step := newMinorStep(scaleKey, "v1.38.0")
 	if done := s.run(step, 5); done != 2 {
@@ -647,7 +648,7 @@ func TestAMinorStepIsRunToTheVersionItIsGiven(t *testing.T) {
 	if err := step.verdict(); err != nil {
 		t.Fatal(err)
 	}
-	s = inAWorld(timeline{5, 5, 4, 1})
+	s = inAWorld(timeline{5, 5, 4, 1, never})
 	step = newMinorStep(scaleKey, "v1.38.0")
 	s.run(step, 5)
 	requireFailure(t, step.verdict(), `reports "v1.37.0", not v1.38.0`)
@@ -688,7 +689,7 @@ func TestTheHoldIsReadFromTheMachineSetsOfTheNextDeploymentAlone(t *testing.T) {
 }
 
 func TestAPollThatEndsNoStepNamesWhatLodiaStillDoes(t *testing.T) {
-	s := inAWorld(timeline{never, never, never, 1})
+	s := inAWorld(timeline{never, never, never, 1, never})
 	step := newMinorStep(scaleKey, worldTo)
 	err := step.poll(t.Context(), s)
 	for _, want := range []string{`the LodiaControlPlane reports "v1.36.4", not v1.37.0 yet`, `status.kubernetes.upgrade at the step ControllerManager`, `status.components.controllerManager.version "v1.36.4"`, "Progressing is True (Upgrading): upgrading to v1.37.0, step ControllerManager"} {
@@ -699,7 +700,7 @@ func TestAPollThatEndsNoStepNamesWhatLodiaStillDoes(t *testing.T) {
 }
 
 func TestTheReadyOfTheControlPlaneIsLoggedAsItChangesAndNeverAsserted(t *testing.T) {
-	s := inAWorld(timeline{never, 8, 7, 1})
+	s := inAWorld(timeline{never, 8, 7, 1, never})
 	step := newMinorStep(scaleKey, worldTo)
 	if done := s.run(step, 5); done != 3 {
 		t.Fatalf("the wait ended at poll %d, want 3", done)
@@ -713,7 +714,7 @@ func TestTheReadyOfTheControlPlaneIsLoggedAsItChangesAndNeverAsserted(t *testing
 }
 
 func TestAReadFailureEndsAPollWithItsErrorAndNoVerdict(t *testing.T) {
-	s := inAWorld(timeline{never, never, never, 1})
+	s := inAWorld(timeline{never, never, never, 1, never})
 	step := newMinorStep(scaleKey, worldTo)
 	failing := &failingMinor{scriptedMinor: s, failAt: "ControlPlane"}
 	if err := step.poll(t.Context(), failing); !errors.Is(err, errRead) {
