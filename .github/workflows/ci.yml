@@ -24,10 +24,10 @@ jobs:
           version: v2.13.2
           install-only: true
       - run: make verify
-      - name: Check that make test fails when setup-envtest does
+      - name: Check that make verify fails when setup-envtest does
         run: |
-          if make test ENVTEST_K8S_VERSION=not-a-version; then
-            echo "make test exited 0 with a version that setup-envtest rejects: the Makefile makes make go on past a failed line, so make verify passes whatever setup-envtest and the tests do"
+          if make verify ENVTEST_K8S_VERSION=not-a-version; then
+            echo "make verify exited 0 with a version that setup-envtest rejects: the Makefile makes make go on past a failed line, or its test rule does not take ENVTEST_K8S_VERSION, so make verify passes whatever setup-envtest and the tests do"
             exit 1
           fi
 
