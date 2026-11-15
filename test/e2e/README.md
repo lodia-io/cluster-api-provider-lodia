@@ -230,6 +230,7 @@ No webhook runs under envtest, so what only a webhook refuses is left to the fir
 The `DevCluster` and the `DevMachineTemplate` are left out: CAPD's CRDs are in [Cluster API's `test` module](https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/test/go.mod#L1), which this module does not depend on.
 The test skips without `KUBEBUILDER_ASSETS`, as the envtest suite of `internal/controller` does, so that `make e2e`, which runs the package's unit tests without envtest's binaries, skips it.
 `make test`, which `make verify` runs, sets the variable, and `TestTheTestTargetThatMakeVerifyRunsSetsTheAssetsOfEnvtest` holds that.
+Its import of envtest [adds](https://github.com/kubernetes-sigs/controller-runtime/blob/v0.25.2/pkg/envtest/helper.go#L24-L31) the `CustomResourceDefinition` to client-go's scheme, which e2e-framework's decoder of the manifests [types by](https://github.com/kubernetes-sigs/e2e-framework/blob/v0.7.0/klient/decoder/decoder.go#L156-L165), in every build of the package, the tagged ones too, so the install decodes the CRDs of its manifests as typed objects, and the suite's client knows that type: `TestTheClientKnowsEveryKindThatTheDecoderOfTheManifestsGivesAType` fails a client that does not know a kind the decoder gives a type.
 
 ## The upgrade test
 

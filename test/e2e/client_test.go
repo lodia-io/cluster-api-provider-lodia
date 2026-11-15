@@ -18,10 +18,14 @@ import (
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/apimachinery/pkg/util/wait"
+	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/util/flowcontrol"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -35,8 +39,14 @@ import (
 	"go.lodia.io/cluster-api-provider-lodia/test/clusterctlproxy"
 )
 
+var clientScheme = func() *runtime.Scheme {
+	s := controller.Scheme()
+	utilruntime.Must(apiextensionsv1.AddToScheme(s))
+	return s
+}()
+
 func newClient(cfg *envconf.Config) (client.Client, error) {
-	return clusterctlproxy.NewClient(cfg.Client().RESTConfig(), controller.Scheme(), clientRequestTimeout, discoveryTimeout)
+	return clusterctlproxy.NewClient(cfg.Client().RESTConfig(), clientScheme, clientRequestTimeout, discoveryTimeout)
 }
 
 func deploymentAvailable(c client.Reader, key client.ObjectKey) wait.ConditionWithContextFunc {
@@ -215,6 +225,20 @@ func TestTheClientKnowsTheKindsTheStepsRead(t *testing.T) {
 	}
 	if err := c.List(t.Context(), &clusterv1.ClusterList{}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestTheClientKnowsEveryKindThatTheDecoderOfTheManifestsGivesAType(t *testing.T) {
+	server := httptest.NewTLSServer(managementHandler(t))
+	t.Cleanup(server.Close)
+	c, err := newClient(configFor(t, server.URL))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for gvk := range clientgoscheme.Scheme.AllKnownTypes() {
+		if gvk.Version != runtime.APIVersionInternal && !c.Scheme().Recognizes(gvk) {
+			t.Errorf("the decoder of the manifests decodes %s to a type, and the client does not know it", gvk)
+		}
 	}
 }
 
