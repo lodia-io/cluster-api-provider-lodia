@@ -91,7 +91,7 @@ release-verify-attestations: ## run what a user runs for the tag IMAGE_TAG, with
 	gh attestation verify metadata.yaml $(VERIFY_ATTESTATION)
 
 .PHONY: release-check
-release-check: ## refuse TAG before it is pushed: a semver tag with a series in metadata.yaml at COMMIT, a series for every tag there is, COMMIT on origin/main with every run of ci.yml green, the local tags TAG and api/TAG at COMMIT; reads GitHub with $$GITHUB_TOKEN, or with gh's
+release-check: ## refuse TAG before it is pushed: a semver tag with a series in metadata.yaml at COMMIT, a series for every tag there is, COMMIT on origin/main with every run of ci.yml green, the local tags TAG and api/TAG at COMMIT, the pin of the upgrade e2e at COMMIT naming the newest published release below TAG; reads GitHub with $$GITHUB_TOKEN, or with gh's
 	@[ -n "$(TAG)" ] || { echo "usage: make release-check TAG=vX.Y.Z [COMMIT=<sha>]"; exit 1; }
 	git fetch --quiet --tags origin main
 	GITHUB_TOKEN="$${GITHUB_TOKEN:-$$(gh auth token)}" go run ./hack/releasecheck tag --commit="$(COMMIT)" "$(TAG)"

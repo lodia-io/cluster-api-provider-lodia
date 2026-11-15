@@ -22,6 +22,8 @@ import (
 	"k8s.io/apimachinery/pkg/util/version"
 	clusterctlv1 "sigs.k8s.io/cluster-api/cmd/clusterctl/api/v1alpha3"
 	"sigs.k8s.io/yaml"
+
+	"go.lodia.io/cluster-api-provider-lodia/test/pin"
 )
 
 const (
@@ -41,9 +43,11 @@ type Run struct {
 	Conclusion string
 }
 
-// CI lists the runs of ci.yml for the push of a commit to main.
+// CI lists the runs of ci.yml for the push of a commit to main, and the tags of
+// the releases that are published.
 type CI interface {
 	Runs(ctx context.Context, sha string) ([]Run, error)
+	Releases(ctx context.Context) ([]string, error)
 }
 
 func checkTag(ctx context.Context, dir string, ci CI, tag, commit string) (string, error) {
@@ -76,6 +80,9 @@ func checkTag(ctx context.Context, dir string, ci CI, tag, commit string) (strin
 		return "", err
 	}
 	if err := requireTags(ctx, dir, tag, sha); err != nil {
+		return "", err
+	}
+	if err := requireUpgradePin(ctx, dir, ci, v, sha); err != nil {
 		return "", err
 	}
 	runs, err := ci.Runs(ctx, sha)
@@ -153,6 +160,42 @@ func requireTags(ctx context.Context, dir, tag, sha string) error {
 		}
 	}
 	return errors.Join(problems...)
+}
+
+// Every release is upgrade-tested from the one before it, so the pin of the
+// upgrade e2e at the commit has to name the newest published release below the
+// tag. A published release counts, not a tag: a run that fails leaves a tag
+// without a release, since its cleanup job deletes the draft alone.
+func requireUpgradePin(ctx context.Context, dir string, ci CI, tag *version.Version, sha string) error {
+	published, err := ci.Releases(ctx)
+	if err != nil {
+		return err
+	}
+	var newest *version.Version
+	for _, name := range published {
+		v, err := version.ParseSemantic(name)
+		if err != nil || !v.LessThan(tag) {
+			continue
+		}
+		if newest == nil || v.GreaterThan(newest) {
+			newest = v
+		}
+	}
+	if newest == nil {
+		return nil
+	}
+	raw, err := git(ctx, dir, "show", sha+":"+pin.File)
+	if err != nil {
+		return err
+	}
+	previous, err := pin.Parse(raw)
+	if err != nil {
+		return fmt.Errorf("%s at %s: %w", pin.File, sha, err)
+	}
+	if want := "v" + newest.String(); previous.Version != want {
+		return fmt.Errorf("the upgrade e2e's pin at %s names %s, and the newest published release below v%s is %s: move the pin to it in a pull request, with the sums of its two files, and tag after that merges", sha, previous.Version, tag, want)
+	}
+	return nil
 }
 
 // ci.yml's run is the one that counts: on the commit of a tag, release.yml's
