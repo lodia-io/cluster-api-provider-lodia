@@ -2,6 +2,7 @@ ENVTEST_K8S_VERSION ?= 1.35.0
 E2E_CLUSTER ?= capl-e2e
 E2E_DIR = $(CURDIR)/work/e2e/$(E2E_CLUSTER)
 LODIA_DIR = $(CURDIR)/work/lodia
+PIN_DIR = $(CURDIR)/work/pin
 LODIA_COMMIT = f91168b1248dc18151a0c2d442fe2050593a0866
 REMOVE_WORKERS = docker ps --all --quiet --filter label=io.x-k8s.kind.cluster=$(E2E_CLUSTER)-w | xargs -r docker rm --force --volumes
 KUSTOMIZE = sigs.k8s.io/kustomize/kustomize/v5@v5.7.0
@@ -42,6 +43,11 @@ test: ## unit and envtest tests; envtest runs a real API server and etcd
 components: ## render config/default and check that every variable has a non-empty default, its Namespace, labels and manager container as rendered, and, on what clusterctl installs with the defaults and with explicit values, the roles that reach the manager's ServiceAccount, the kubeadm bootstrap provider's grant and the subjects of every binding
 	@rendered="$$(go run $(KUSTOMIZE) build config/default)" || exit 1; \
 	printf '%s\n' "$$rendered" | go run ./test/components
+
+.PHONY: upgrade-components
+upgrade-components: ## compare the render of config/default with the components of the release that test/pin names, which the first run downloads into $(PIN_DIR) and checks against the pinned sha256: fail on a cluster-scoped object of the release that clusterctl's upgrade keeps and the render drops or renames, a ClusterRoleBinding whose roleRef the render changes and a CRD version that the release serves and the render drops
+	@rendered="$$(go run $(KUSTOMIZE) build config/default)" || exit 1; \
+	printf '%s\n' "$$rendered" | go run ./test/components upgrade $(PIN_DIR)
 
 .PHONY: release-components
 release-components: ## write $(RELEASE_DIR)/control-plane-components.yaml: config/default with the manager's image built by ko for $(PLATFORMS) and named by digest in $(IMAGE_REPOSITORY), tagged $(IMAGE_TAG), pushed unless KO_PUSH=false
@@ -98,7 +104,7 @@ verify: ## the check that says a change is done
 	[ "$$before" = "$$(cat $(GENERATED) | cksum)" ] || { echo "make generate changed the generated files: review and commit them"; exit 1; }
 	go mod tidy -diff
 	cd api && go mod tidy -diff
-	$(MAKE) --no-print-directory components metadata lint test
+	$(MAKE) --no-print-directory components upgrade-components metadata lint test
 	$(MAKE) --no-print-directory release-components release-image KO_PUSH=false IMAGE_TAG=v0.0.0-verify
 
 # LC_ALL=C: a range in a case pattern follows the locale, and on macOS en_US.UTF-8 puts A in a-z.

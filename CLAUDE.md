@@ -25,7 +25,7 @@ Read **Authority** first; **Out of scope** is binding, findings outside it go to
 
 - The repository is two Go modules, the manager at the root and the API in `api/`: `go build`, `go vet` and `go test` run in the directory of the module they are for, and `go test ./...` from the root does not reach `api/`.
 - `make generate` — deepcopy functions, the CRDs in `api/crds` with their copy in `config/crd/bases`, and the controller's ClusterRole in `config/rbac/role.yaml`; commit the result.
-- `make verify` — the one check whose exit code says a change is done: generated files current, both modules tidy, `config/default` rendered and checked, `metadata.yaml`, the release's render with no push, lint and unit and envtest tests of both modules.
+- `make verify` — the one check whose exit code says a change is done: generated files current, both modules tidy, `config/default` rendered and checked, and compared with the components of the release that `test/pin/previous-release.yaml` names, `metadata.yaml`, the release's render with no push, lint and unit and envtest tests of both modules.
   It needs `origin/main` fetched, and CI runs it on every pull request.
 - `make e2e` — the suite in `test/e2e` on a kind cluster of its own; it refuses any other cluster (`docs/decisions/e2e-on-a-named-cluster.md`), and CI runs it.
 - `make release-check TAG=vX.Y.Z` — refuses a tag before it is pushed, and a local `vX.Y.Z` or `api/vX.Y.Z` that is missing or at another commit.
