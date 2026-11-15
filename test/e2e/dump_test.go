@@ -246,12 +246,12 @@ func dumpWorkers(ctx context.Context, cfg *envconf.Config, dir string, bound tim
 	if err != nil {
 		return err
 	}
-	containers, err := docker(ctx, "ps", "--all", "--quiet", "--filter", "label="+clusterLabel+"="+cluster)
+	containers, err := clusterContainers(ctx, cluster)
 	if err != nil {
 		return err
 	}
 	var errs []error
-	for container := range strings.FieldsSeq(containers) {
+	for _, container := range containers {
 		for name, command := range map[string][]string{
 			"journal.log":   {"journalctl", "--no-pager", "-u", "kubelet", "-u", "containerd"},
 			"crictl-ps.txt": {"crictl", "ps", "-a"},

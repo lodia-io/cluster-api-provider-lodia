@@ -53,8 +53,11 @@ func toolOutput(cmd *exec.Cmd) ([]byte, error) {
 }
 
 func koEnv(environ []string, cluster string, extra ...string) []string {
-	// ko refuses --platform beside GOARCH.
-	env := slices.DeleteFunc(slices.Clone(environ), func(kv string) bool { return strings.HasPrefix(kv, "GOARCH=") })
+	// ko refuses --platform beside GOOS, GOARCH or GOARM.
+	// https://github.com/google/ko/blob/v0.19.1/pkg/commands/resolver.go#L80-L84
+	env := slices.DeleteFunc(slices.Clone(environ), func(kv string) bool {
+		return strings.HasPrefix(kv, "GOOS=") || strings.HasPrefix(kv, "GOARCH=") || strings.HasPrefix(kv, "GOARM=")
+	})
 	return append(env, append([]string{"KO_DOCKER_REPO=kind.local", "KIND_CLUSTER_NAME=" + cluster}, extra...)...)
 }
 
@@ -67,14 +70,14 @@ func pidIn(path string) (int, bool) {
 	return pid, err == nil
 }
 
-func TestKoRunsOnTheClusterWithTheVersionAndWithoutGOARCH(t *testing.T) {
-	environ := []string{"PATH=/bin", "GOARCH=arm64", "VERSION=inherited"}
+func TestKoRunsOnTheClusterWithTheVersionAndWithoutGOOSGOARCHAndGOARM(t *testing.T) {
+	environ := []string{"PATH=/bin", "GOOS=linux", "GOARCH=arm64", "GOARM=7", "VERSION=inherited", "GOARMS=kept"}
 	got := koEnv(environ, "capl-e2e", "VERSION=f91168b1248d")
-	want := []string{"PATH=/bin", "VERSION=inherited", "KO_DOCKER_REPO=kind.local", "KIND_CLUSTER_NAME=capl-e2e", "VERSION=f91168b1248d"}
+	want := []string{"PATH=/bin", "VERSION=inherited", "GOARMS=kept", "KO_DOCKER_REPO=kind.local", "KIND_CLUSTER_NAME=capl-e2e", "VERSION=f91168b1248d"}
 	if !slices.Equal(got, want) {
 		t.Fatalf("got %q, want %q", got, want)
 	}
-	if !slices.Equal(environ, []string{"PATH=/bin", "GOARCH=arm64", "VERSION=inherited"}) {
+	if !slices.Equal(environ, []string{"PATH=/bin", "GOOS=linux", "GOARCH=arm64", "GOARM=7", "VERSION=inherited", "GOARMS=kept"}) {
 		t.Fatalf("koEnv changed its argument: %q", environ)
 	}
 	if got := koEnv(nil, "c"); !slices.Equal(got, []string{"KO_DOCKER_REPO=kind.local", "KIND_CLUSTER_NAME=c"}) {

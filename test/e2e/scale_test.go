@@ -817,7 +817,7 @@ var (
 		"hold":            3,
 		"within":          1,
 	}
-	contextsThatEnd          = []string{"within"}
+	contextThatEnds          = "within"
 	waitsOnTheCallersContext = []string{
 		"pollUntil", "apply", "applyTheCluster", "upgradeProvider", "installCertManager", "deploymentsAvailable",
 		"clusterctlproxy.MoveUntilBlocked",
@@ -909,7 +909,7 @@ func problemsWithTheWaits(fset *token.FileSet, file *ast.File, owner string, fie
 					break
 				}
 				call, ok := n.Rhs[0].(*ast.CallExpr)
-				if !ok || !slices.Contains(contextsThatEnd, calleeOf(call)) {
+				if !ok || calleeOf(call) != contextThatEnds {
 					break
 				}
 				ident, isIdent := n.Lhs[0].(*ast.Ident)
@@ -1096,13 +1096,9 @@ func TestTheCheckOfTheWaitsRefusesWhatBreaksTheSumOfTheBounds(t *testing.T) {
 			struct{ name, body, want string }{callee + " on a context made in another step", "func() {\n" + madeBy("within") + "\n}()\nfunc() {\n" + callee + "(bounded)\n}()", callee + " runs on a context that no field of bounds ends in this step"},
 			struct{ name, body, want string }{callee + " on a context that context.WithTimeout made from a field", strings.Join(all, "\n") + "\nbounded, cancel := context.WithTimeout(ctx, bounds.A)\n" + callee + "(bounded)", callee + " runs on a context that no field of bounds ends in this step"},
 			struct{ name, body, want string }{callee + " on a context made from a literal", strings.Join(all[1:], "\n") + "\nbounded, cancel := within(ctx, 5*time.Minute)\n" + callee + "(bounded)", callee + " runs on a context that no field of bounds ends in this step"},
+			struct{ name, body, want string }{callee + " on a context made by " + contextThatEnds, madeBy(contextThatEnds) + "\n" + callee + "(bounded)", ""},
+			struct{ name, body, want string }{callee + " on a context made by " + contextThatEnds + " and then replaced by the step's own", madeBy(contextThatEnds) + "\nbounded = ctx\n" + callee + "(bounded)", callee + " runs on a context that no field of bounds ends in this step"},
 		)
-		for _, maker := range contextsThatEnd {
-			cases = append(cases,
-				struct{ name, body, want string }{callee + " on a context made by " + maker, madeBy(maker) + "\n" + callee + "(bounded)", ""},
-				struct{ name, body, want string }{callee + " on a context made by " + maker + " and then replaced by the step's own", madeBy(maker) + "\nbounded = ctx\n" + callee + "(bounded)", callee + " runs on a context that no field of bounds ends in this step"},
-			)
-		}
 	}
 	for _, callee := range waitsOfTheirOwn {
 		cases = append(cases, struct{ name, body, want string }{callee + " in a step", strings.Join(all, "\n") + "\n" + callee + "()", callee + " waits for a bound of its own"})

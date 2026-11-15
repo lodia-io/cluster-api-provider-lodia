@@ -199,23 +199,6 @@ func TestEveryCallAgainstAClusterThatDoesNotAnswerEndsWithinItsBoundAndOneDiscov
 	}
 }
 
-func TestNoCallReadsAKubeconfigOrTheCurrentContext(t *testing.T) {
-	for call, run := range calls {
-		t.Run(call, func(t *testing.T) {
-			s := serve(t, neverAnswers)
-			c := newClusterctl(t, s)
-			ctx, cancel := context.WithTimeout(t.Context(), bound)
-			defer cancel()
-			if _, err := within(t, call, func() error { return run(ctx, c) }); err == nil {
-				t.Fatalf("%s says nothing about a cluster that did not answer", call)
-			}
-			if s.asked() == 0 {
-				t.Errorf("%s did not reach the cluster of the rest config", call)
-			}
-		})
-	}
-}
-
 func TestEveryClusterClientTheFactoryMakesReachesTheClusterOfTheRestConfig(t *testing.T) {
 	TrapTheDefaultKubeconfig(t)
 	s := serve(t, neverAnswers)
@@ -568,7 +551,7 @@ func TestTheListingHoldsTheImportsOfTestFilesAndOfTheTagsItIsGiven(t *testing.T)
 }
 
 func TestNoPackageOfTheDependencyGraphBuildsClusterctlClientsFromAPath(t *testing.T) {
-	for name, tags := range map[string]string{"untagged": "", "e2e": "e2e", "upgrade": "e2e,upgrade"} {
+	for name, tags := range map[string]string{"untagged": "", "e2e": "e2e", "upgrade": "e2e,upgrade", "minor": "e2e,minor"} {
 		t.Run(name, func(t *testing.T) {
 			for _, f := range buildingClustersFromAPath(listPackages(t, moduleRoot, tags)) {
 				t.Error(f)

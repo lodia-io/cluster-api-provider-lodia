@@ -90,13 +90,13 @@ func Fetch(ctx context.Context, dir, url, sum string) ([]byte, error) {
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return nil, err
 	}
-	if Checksum(raw) == sum {
+	if checksum(raw) == sum {
 		return raw, nil
 	}
 	if raw, err = download(ctx, url); err != nil {
 		return nil, err
 	}
-	if got := Checksum(raw); got != sum {
+	if got := checksum(raw); got != sum {
 		return nil, fmt.Errorf("%s has sha256 %s, the pin is %s", url, got, sum)
 	}
 	if err := os.MkdirAll(dir, 0o750); err != nil {
@@ -105,7 +105,7 @@ func Fetch(ctx context.Context, dir, url, sum string) ([]byte, error) {
 	return raw, os.WriteFile(cached, raw, 0o600)
 }
 
-func Checksum(data []byte) string {
+func checksum(data []byte) string {
 	sum := sha256.Sum256(data)
 	return hex.EncodeToString(sum[:])
 }

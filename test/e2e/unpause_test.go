@@ -212,7 +212,14 @@ func TestUnpausingClearsThePauseOfTheMoveAndWaitsForBothControllersToRunAgain(t 
 	}
 }
 
-func TestUnpausingFailsUnlessBothControllersRanAfterIt(t *testing.T) {
+func modeOf(pause bool) string {
+	if pause {
+		return "pausing"
+	}
+	return "unpausing"
+}
+
+func TestAPauseCycleFailsUnlessBothControllersReportedAndRanAfterTheUnpause(t *testing.T) {
 	const notPausedByAController, noRunAfterTheUnpause = "Paused is not True on both", "both controllers did not run"
 	cases := []struct {
 		name          string
@@ -236,55 +243,61 @@ func TestUnpausingFailsUnlessBothControllersRanAfterIt(t *testing.T) {
 		{"Available is the one of before the move", pausedByTheMove, reported{metav1.ConditionFalse, metav1.ConditionFalse, metav1.ConditionTrue, pausedGeneration - 1}, []string{noRunAfterTheUnpause, "the Available of the Cluster", "True at generation 5 or later"}},
 		{"Available is the one of the move's pause", pausedByTheMove, reported{metav1.ConditionFalse, metav1.ConditionFalse, metav1.ConditionTrue, pausedGeneration}, []string{noRunAfterTheUnpause, "the Available of the Cluster", "True at generation 5 or later"}},
 	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			bound := 100 * time.Millisecond
-			if c.want == nil {
-				bound = 5 * time.Second
-			}
-			w := newWorld(always(c.before), always(c.after))
-			err := requireUnpaused(t.Context(), w, unpausedKey, bound, 10*time.Millisecond)
-			if c.want == nil && err != nil {
-				t.Fatalf("want accepted, got %v", err)
-			}
-			if c.want != nil && err == nil {
-				t.Fatalf("want an error with %q, got none", c.want)
-			}
-			for _, want := range c.want {
-				if !strings.Contains(err.Error(), want) {
-					t.Errorf("want an error with %q, got %v", want, err)
+	for _, pause := range []bool{false, true} {
+		for _, c := range cases {
+			t.Run(modeOf(pause)+"/"+c.name, func(t *testing.T) {
+				bound := 100 * time.Millisecond
+				if c.want == nil {
+					bound = 5 * time.Second
 				}
-			}
-			cluster := &clusterv1.Cluster{}
-			if err := w.Get(t.Context(), unpausedKey, cluster); err != nil {
-				t.Fatal(err)
-			}
-			if left := err != nil && strings.Contains(err.Error(), notPausedByAController); (cluster.Spec.Paused != nil) != left {
-				t.Errorf("spec.paused is %v after the call, want it left as the move left it only when neither controller reported the pause", cluster.Spec.Paused)
-			}
-		})
+				w := newWorldPausedAt(!pause, always(c.before), always(c.after))
+				err := pauseCycle(t.Context(), w, unpausedKey, bound, 10*time.Millisecond, pause, nil)
+				if c.want == nil && err != nil {
+					t.Fatalf("want accepted, got %v", err)
+				}
+				if c.want != nil && err == nil {
+					t.Fatalf("want an error with %q, got none", c.want)
+				}
+				for _, want := range c.want {
+					if !strings.Contains(err.Error(), want) {
+						t.Errorf("want an error with %q, got %v", want, err)
+					}
+				}
+				cluster := &clusterv1.Cluster{}
+				if err := w.Get(t.Context(), unpausedKey, cluster); err != nil {
+					t.Fatal(err)
+				}
+				if left := !pause && err != nil && strings.Contains(err.Error(), notPausedByAController); (cluster.Spec.Paused != nil) != left {
+					t.Errorf("spec.paused is %v after the call, want it left as the move left it only when it was not this call that paused the Cluster and neither controller reported the pause", cluster.Spec.Paused)
+				}
+			})
+		}
 	}
 }
 
-func TestUnpausingTakesOneBoundForBothWaits(t *testing.T) {
+func TestAPauseCycleTakesOneBoundForBothWaits(t *testing.T) {
 	const (
 		bound      = 800 * time.Millisecond
 		reportedAt = 3 * bound / 4
 	)
-	start := time.Now()
-	w := newWorld(func(int) reported {
-		if time.Since(start) < reportedAt {
-			return beforeTheMove
-		}
-		return pausedByTheMove
-	}, always(pausedByTheMove))
-	err := requireUnpaused(t.Context(), w, unpausedKey, bound, 10*time.Millisecond)
-	took := time.Since(start)
-	if err == nil || !strings.Contains(err.Error(), "both controllers did not run") {
-		t.Fatalf("want the failure of the second wait, got %v", err)
-	}
-	if limit := bound + bound/4; took > limit {
-		t.Errorf("the waits took %s, more than %s: the second one has a bound of its own, and not what the first left of the %s that both share", took, limit, bound)
+	for _, pause := range []bool{false, true} {
+		t.Run(modeOf(pause), func(t *testing.T) {
+			start := time.Now()
+			w := newWorldPausedAt(!pause, func(int) reported {
+				if time.Since(start) < reportedAt {
+					return beforeTheMove
+				}
+				return pausedByTheMove
+			}, always(pausedByTheMove))
+			err := pauseCycle(t.Context(), w, unpausedKey, bound, 10*time.Millisecond, pause, nil)
+			took := time.Since(start)
+			if err == nil || !strings.Contains(err.Error(), "both controllers did not run") {
+				t.Fatalf("want the failure of the second wait, got %v", err)
+			}
+			if limit := bound + bound/4; took > limit {
+				t.Errorf("the waits took %s, more than %s: the second one has a bound of its own, and not what the first left of the %s that both share", took, limit, bound)
+			}
+		})
 	}
 }
 

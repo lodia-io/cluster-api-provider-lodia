@@ -64,7 +64,7 @@ Decided 2026-11-09; the second job, `e2e-upgrade`, and the third, `e2e-minor`, a
 - `test/e2e/helm_test.go` — `refuseHelmKubeEnv` and `TestHelmKubeVariablesAreRefused`; `test/e2e/suite_test.go` calls it with the guard.
 - `Makefile` — `e2e`, `e2e-upgrade`, `e2e-minor`, `e2e-cluster`, `e2e-lodia` and `upgrade-components`; `.github/workflows/ci.yml` — the jobs `e2e`, `e2e-upgrade` and `e2e-minor`.
 - `test/e2e/join_test.go` — `TestAWorkerJoinsAClusterOfLodiasControlPlane`; `test/e2e/install_test.go` and `test/e2e/clusterctl_test.go` — the install; `test/e2e/README.md` — the steps and the failure modes.
-- `test/clusterctlproxy/trap.go` — `TrapTheDefaultKubeconfig`; `test/clusterctlproxy/proxy_test.go` — `TestNoCallReadsAKubeconfigOrTheCurrentContext` and `TestEveryClusterctlClientIsBuiltThroughTheFactory`.
+- `test/clusterctlproxy/trap.go` — `TrapTheDefaultKubeconfig`; `test/clusterctlproxy/proxy_test.go` — `TestEveryCallAgainstAClusterThatDoesNotAnswerEndsWithinItsBoundAndOneDiscoveryTimeout` and `TestEveryClusterctlClientIsBuiltThroughTheFactory`.
 - `test/e2e/bounds_test.go` — `TestTheBoundsFitUnderTheTimeouts`; `test/e2e/stable_test.go` — `within`.
 - `test/clusterctlproxy/proxy.go` — `NoRateLimit`; `test/clusterctlproxy/proxy_test.go` and `test/e2e/ratelimit_test.go` — the tests that a client of each config has no rate limiter.
 - `test/e2e/upgrade_test.go` — `TestTheProviderUpgradesFromThePreviousRelease`; `test/e2e/upgraded_test.go` — its checks; `test/e2e/lodia_upgrade_test.go` — the install of the release; `test/pin` — the pin and the download by sha256.

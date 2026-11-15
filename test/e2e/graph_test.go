@@ -66,7 +66,7 @@ func listGraph(ctx context.Context, c client.Reader, namespace string) ([]*unstr
 		for i := range list.Items {
 			obj := &list.Items[i]
 			obj.SetGroupVersionKind(kind)
-			if kind.Kind == "ConfigMap" && obj.GetName() == "kube-root-ca.crt" || kind.Kind == "Secret" && strings.Contains(obj.GetName(), "default-token") {
+			if kind.Kind == "ConfigMap" && obj.GetName() == "kube-root-ca.crt" {
 				continue
 			}
 			graph = append(graph, obj)
@@ -99,7 +99,6 @@ func TestTheGraphHoldsTheLabelledKindsOfTheNamespaceAndTheSecretsAndConfigMapsAn
 		object(extension, "e"),
 		inOtherNamespace(object(corev1.SchemeGroupVersion.WithKind("Secret"), "of-another-namespace")),
 		object(corev1.SchemeGroupVersion.WithKind("ConfigMap"), "kube-root-ca.crt"),
-		object(corev1.SchemeGroupVersion.WithKind("Secret"), "default-token-abc"),
 	)
 	graph, err := listGraph(t.Context(), q.client(), quickStartKey.Namespace)
 	if err != nil {

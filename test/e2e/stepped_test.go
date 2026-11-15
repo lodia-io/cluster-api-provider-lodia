@@ -58,15 +58,16 @@ func runningWorkersOf(ctx context.Context, k8s client.Reader, key client.ObjectK
 	return requireRunning(machines, want)
 }
 
-func requireTheMachineKept(ctx context.Context, k8s client.Reader, key client.ObjectKey, deployment string, kept *clusterv1.Machine) error {
+func requireTheMachineKept(ctx context.Context, k8s client.Reader, key client.ObjectKey, deployment string, kept *clusterv1.Machine) (*clusterv1.Machine, error) {
 	workers, err := runningWorkersOf(ctx, k8s, key, deployment, 1)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	if m := workers[0]; m.UID != kept.UID || m.Status.NodeRef.Name != kept.Status.NodeRef.Name {
-		return fmt.Errorf("Machine %s of %s has the UID %s and the nodeRef %s, before the step %s and %s: it was replaced", m.Name, deployment, m.UID, m.Status.NodeRef.Name, kept.UID, kept.Status.NodeRef.Name)
+	m := &workers[0]
+	if m.UID != kept.UID || m.Status.NodeRef.Name != kept.Status.NodeRef.Name {
+		return nil, fmt.Errorf("Machine %s of %s has the UID %s and the nodeRef %s, and it had %s and %s: it was replaced", m.Name, deployment, m.UID, m.Status.NodeRef.Name, kept.UID, kept.Status.NodeRef.Name)
 	}
-	return nil
+	return m, nil
 }
 
 func requireKubelet(node *corev1.Node, version string) error {
@@ -381,7 +382,11 @@ func TestAMachineIsKeptWhenItsDeploymentHoldsItAloneWithTheUIDAndTheNodeRefItHad
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			requireFailure(t, requireTheMachineKept(t.Context(), managementOf(c.objects...), scaleKey, deployment, kept), c.failure)
+			machine, err := requireTheMachineKept(t.Context(), managementOf(c.objects...), scaleKey, deployment, kept)
+			requireFailure(t, err, c.failure)
+			if c.failure == "" && (machine == nil || machine.Name != "a") {
+				t.Errorf("returned %v", machine)
+			}
 		})
 	}
 }
@@ -494,11 +499,7 @@ type minorWorld struct {
 	ready, readyCause string
 }
 
-const (
-	worldFrom = "v1.36.4"
-	worldTo   = "v1.37.0"
-	never     = 1 << 20
-)
+const never = 1 << 20
 
 type timeline struct{ machineAt, copyAt, finishAt, heldAt, heldUntil int }
 
@@ -523,7 +524,7 @@ type scriptedMinor struct {
 }
 
 func inAWorld(tl timeline) *scriptedMinor {
-	return &scriptedMinor{from: worldFrom, to: worldTo, world: tl.at}
+	return &scriptedMinor{from: previousKubernetes, to: newestKubernetes, world: tl.at}
 }
 
 func (s *scriptedMinor) read(kind string) minorWorld {
@@ -588,7 +589,7 @@ func (s *scriptedMinor) run(step *minorStep, polls int) (done int) {
 
 func TestAPollListsTheMachinesThenReadsTheCopyThenLodiasReport(t *testing.T) {
 	s := inAWorld(timeline{never, never, never, 1, never})
-	step := newMinorStep(scaleKey, worldTo)
+	step := newMinorStep(scaleKey, newestKubernetes)
 	if err := step.poll(t.Context(), s); err == nil {
 		t.Fatal("a poll ended while Lodia has not rolled")
 	}
@@ -618,7 +619,7 @@ func TestAMinorStepIsHeldOrBrokenAsTheOrderedReadsOfEachPollSayAndTheHoldIsSeenO
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			s := inAWorld(c.timeline)
-			step := newMinorStep(scaleKey, worldTo)
+			step := newMinorStep(scaleKey, newestKubernetes)
 			if done := s.run(step, c.polls); done != c.done {
 				t.Fatalf("the wait ended at poll %d, want %d", done, c.done)
 			}
@@ -665,8 +666,8 @@ func TestTheHoldIsReadFromTheMachineSetsOfTheNextDeploymentAlone(t *testing.T) {
 		return set
 	}
 	lcp := &v1alpha1.LodiaControlPlane{ObjectMeta: metav1.ObjectMeta{Namespace: scaleKey.Namespace, Name: scaleKey.Name}}
-	lcp.Status.Versions = []clusterv1.StatusVersion{{Version: worldFrom}}
-	cp := lodiaAt(worldFrom)
+	lcp.Status.Versions = []clusterv1.StatusVersion{{Version: previousKubernetes}}
+	cp := lodiaAt(previousKubernetes)
 	cp.ObjectMeta = metav1.ObjectMeta{Namespace: scaleKey.Namespace, Name: scaleKey.Name}
 	cases := []struct {
 		name string
@@ -679,7 +680,7 @@ func TestTheHoldIsReadFromTheMachineSetsOfTheNextDeploymentAlone(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			step := newMinorStep(scaleKey, worldTo)
+			step := newMinorStep(scaleKey, newestKubernetes)
 			_ = step.poll(t.Context(), managementOf(append([]client.Object{lcp.DeepCopy(), cp.DeepCopy()}, c.sets...)...))
 			if step.held != c.want {
 				t.Errorf("the hold is %q, want %q", step.held, c.want)
@@ -690,7 +691,7 @@ func TestTheHoldIsReadFromTheMachineSetsOfTheNextDeploymentAlone(t *testing.T) {
 
 func TestAPollThatEndsNoStepNamesWhatLodiaStillDoes(t *testing.T) {
 	s := inAWorld(timeline{never, never, never, 1, never})
-	step := newMinorStep(scaleKey, worldTo)
+	step := newMinorStep(scaleKey, newestKubernetes)
 	err := step.poll(t.Context(), s)
 	for _, want := range []string{`the LodiaControlPlane reports "v1.36.4", not v1.37.0 yet`, `status.kubernetes.upgrade at the step ControllerManager`, `status.components.controllerManager.version "v1.36.4"`, "Progressing is True (Upgrading): upgrading to v1.37.0, step ControllerManager"} {
 		if err == nil || !strings.Contains(err.Error(), want) {
@@ -701,7 +702,7 @@ func TestAPollThatEndsNoStepNamesWhatLodiaStillDoes(t *testing.T) {
 
 func TestTheReadyOfTheControlPlaneIsLoggedAsItChangesAndNeverAsserted(t *testing.T) {
 	s := inAWorld(timeline{never, 8, 7, 1, never})
-	step := newMinorStep(scaleKey, worldTo)
+	step := newMinorStep(scaleKey, newestKubernetes)
 	if done := s.run(step, 5); done != 3 {
 		t.Fatalf("the wait ended at poll %d, want 3", done)
 	}
@@ -715,8 +716,8 @@ func TestTheReadyOfTheControlPlaneIsLoggedAsItChangesAndNeverAsserted(t *testing
 
 func TestAReadFailureEndsAPollWithItsErrorAndNoVerdict(t *testing.T) {
 	s := inAWorld(timeline{never, never, never, 1, never})
-	step := newMinorStep(scaleKey, worldTo)
-	failing := &failingMinor{scriptedMinor: s, failAt: "ControlPlane"}
+	step := newMinorStep(scaleKey, newestKubernetes)
+	failing := &failingMinor{scriptedMinor: s}
 	if err := step.poll(t.Context(), failing); !errors.Is(err, errRead) {
 		t.Fatalf("got %v, want the read's error", err)
 	}
@@ -727,13 +728,10 @@ func TestAReadFailureEndsAPollWithItsErrorAndNoVerdict(t *testing.T) {
 
 var errRead = errors.New("the API server did not answer")
 
-type failingMinor struct {
-	*scriptedMinor
-	failAt string
-}
+type failingMinor struct{ *scriptedMinor }
 
 func (f *failingMinor) Get(ctx context.Context, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
-	if _, ok := obj.(*lodiav1alpha1.ControlPlane); ok && f.failAt == "ControlPlane" {
+	if _, ok := obj.(*lodiav1alpha1.ControlPlane); ok {
 		return errRead
 	}
 	return f.scriptedMinor.Get(ctx, key, obj, opts...)

@@ -73,7 +73,7 @@ func TestEveryObjectOfTheTestdataIsAcceptedByTheCRDOfItsKind(t *testing.T) {
 		return c.Create(ctx, obj, append(opts, client.DryRunAll)...)
 	}})
 	for _, file := range renderedFiles(t) {
-		for _, version := range []string{worldFrom, worldTo} {
+		for _, version := range []string{previousKubernetes, newestKubernetes} {
 			t.Run(file+" at "+version, func(t *testing.T) {
 				manifest, err := render(file, testdataVariables(scaleKey.Name, version))
 				if err != nil {

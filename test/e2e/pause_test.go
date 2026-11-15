@@ -147,10 +147,6 @@ func TestAnActionRunsOnlyOnceBothControllersReportPausedAndTheClusterIsUnpausedA
 		{"the action fails", always(pausedByTheMove), always(pausedByTheMove), 0, 0, true, true, "the action failed"},
 		{"the LodiaControlPlane never reports", always(reported{metav1.ConditionTrue, metav1.ConditionFalse, metav1.ConditionTrue, pausedGeneration - 1}), always(runAgain), 0, 0, false, false, "Paused is not True on both"},
 		{"the Cluster never reports", always(reported{metav1.ConditionFalse, metav1.ConditionTrue, metav1.ConditionTrue, pausedGeneration - 1}), always(runAgain), 0, 0, false, false, "Paused is not True on both"},
-		{"neither controller runs after the unpause", always(pausedByTheMove), always(pausedByTheMove), 0, 0, false, true, "both controllers did not run"},
-		{"the Cluster is still paused after the unpause", always(pausedByTheMove), always(reported{metav1.ConditionTrue, metav1.ConditionFalse, metav1.ConditionTrue, unpausedGeneration}), 0, 0, false, true, "the Paused of the Cluster"},
-		{"the LodiaControlPlane is still paused after the unpause", always(pausedByTheMove), always(reported{metav1.ConditionFalse, metav1.ConditionTrue, metav1.ConditionTrue, unpausedGeneration}), 0, 0, false, true, "the Paused of the LodiaControlPlane"},
-		{"the Available of the Cluster is the one of before the unpause", always(pausedByTheMove), always(reported{metav1.ConditionFalse, metav1.ConditionFalse, metav1.ConditionTrue, pausedGeneration}), 0, 0, false, true, "True at generation 5 or later"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -192,28 +188,6 @@ func TestAnActionRunsOnlyOnceBothControllersReportPausedAndTheClusterIsUnpausedA
 				t.Errorf("returned after %d reads of the Cluster since the unpause, before the controllers had run again at the read %d", w.readsAfter[0], c.recomputedAt)
 			}
 		})
-	}
-}
-
-func TestAPauseTakesOneBoundForBothWaitsAndTheAction(t *testing.T) {
-	const (
-		bound      = 800 * time.Millisecond
-		reportedAt = 3 * bound / 4
-	)
-	start := time.Now()
-	w := newWorldPausedAt(false, func(int) reported {
-		if time.Since(start) < reportedAt {
-			return beforeTheMove
-		}
-		return pausedByTheMove
-	}, always(pausedByTheMove))
-	err := whilePaused(t.Context(), w, unpausedKey, bound, 10*time.Millisecond, func(context.Context) error { return nil })
-	took := time.Since(start)
-	if err == nil || !strings.Contains(err.Error(), "both controllers did not run") {
-		t.Fatalf("want the failure of the second wait, got %v", err)
-	}
-	if limit := bound + bound/4; took > limit {
-		t.Errorf("the waits took %s, more than %s: the second one has a bound of its own, and not what the first left of the %s that both share", took, limit, bound)
 	}
 }
 

@@ -105,7 +105,7 @@ func TestAFileIsDownloadedOnceAndReadFromTheCacheAfter(t *testing.T) {
 	d := serve(t, http.StatusOK)
 	dir := filepath.Join(t.TempDir(), "not", "there", "yet")
 	for range 2 {
-		got, err := Fetch(t.Context(), dir, d.url, Checksum([]byte(body)))
+		got, err := Fetch(t.Context(), dir, d.url, checksum([]byte(body)))
 		if err != nil || string(got) != body {
 			t.Fatalf("got %q and %v", got, err)
 		}
@@ -124,7 +124,7 @@ func TestACachedFileWithAnotherSumIsReplacedByTheDownload(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "components.yaml"), []byte("kind: Other\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	got, err := Fetch(t.Context(), dir, d.url, Checksum([]byte(body)))
+	got, err := Fetch(t.Context(), dir, d.url, checksum([]byte(body)))
 	if err != nil || string(got) != body {
 		t.Fatalf("got %q and %v", got, err)
 	}
@@ -150,7 +150,7 @@ func TestADownloadWithAnotherSumIsRefusedAndNotCached(t *testing.T) {
 
 func TestADownloadThatIsNotAnsweredWithOKIsRefused(t *testing.T) {
 	d := serve(t, http.StatusNotFound)
-	_, err := Fetch(t.Context(), t.TempDir(), d.url, Checksum([]byte(body)))
+	_, err := Fetch(t.Context(), t.TempDir(), d.url, checksum([]byte(body)))
 	if err == nil || !strings.Contains(err.Error(), "404") {
 		t.Fatalf("want the refusal of the status, got %v", err)
 	}

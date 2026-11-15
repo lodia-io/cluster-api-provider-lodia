@@ -27,8 +27,6 @@ import (
 	"go.lodia.io/cluster-api-provider-lodia/api/v1alpha1"
 )
 
-const newestKubernetes = "v1.37.0"
-
 func applyTheCluster(ctx context.Context, cfg *envconf.Config, k8s client.Client, key client.ObjectKey, kubernetes string) error {
 	for _, file := range []string{"cluster.yaml", "workers.yaml"} {
 		manifest, err := render(file, testdataVariables(key.Name, kubernetes))
