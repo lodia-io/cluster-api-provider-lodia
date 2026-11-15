@@ -7,7 +7,6 @@
 *.exe
 *.test
 *.out
-/bin/
 go.work
 go.work.sum
 /work/
