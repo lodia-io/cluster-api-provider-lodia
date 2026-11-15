@@ -14,7 +14,6 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
-	corev1ac "k8s.io/client-go/applyconfigurations/core/v1"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	"sigs.k8s.io/cluster-api/util/secret"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -62,7 +61,7 @@ func TestAControlPlaneVanishingBeforeTheApplyIsNotRecreated(t *testing.T) {
 	cluster, lcp, cp, r, _ := readyControlPlane(t, "tau")
 	racing := direct(t, interceptor.Funcs{
 		Apply: func(ctx context.Context, c client.WithWatch, obj runtime.ApplyConfiguration, opts ...client.ApplyOption) error {
-			if _, ok := obj.(*corev1ac.SecretApplyConfiguration); !ok {
+			if isControlPlaneApply(obj) {
 				if err := k8s.Delete(ctx, controlPlaneOf(cluster)); err != nil {
 					return err
 				}
@@ -90,7 +89,7 @@ func TestAControlPlaneReplacedBeforeTheApplyIsLeftAlone(t *testing.T) {
 	replacement.ObjectMeta = metav1.ObjectMeta{Namespace: cp.Namespace, Name: cp.Name, Finalizers: []string{lodiav1alpha1.DatastoreFinalizer}}
 	racing := direct(t, interceptor.Funcs{
 		Apply: func(ctx context.Context, c client.WithWatch, obj runtime.ApplyConfiguration, opts ...client.ApplyOption) error {
-			if _, ok := obj.(*corev1ac.SecretApplyConfiguration); !ok && replacement.UID == "" {
+			if isControlPlaneApply(obj) && replacement.UID == "" {
 				if err := k8s.Delete(ctx, controlPlaneOf(cluster)); err != nil {
 					return err
 				}
@@ -148,12 +147,12 @@ func TestAControlPlaneReplacedBeforeTheDeleteIsLeftAlone(t *testing.T) {
 	}
 }
 
-func behindTheCache(t *testing.T, hides func(client.Object) bool) *controller.Reconciler {
+func behindTheCache(t *testing.T) *controller.Reconciler {
 	t.Helper()
 	live := direct(t, interceptor.Funcs{})
 	stale := direct(t, interceptor.Funcs{
 		Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
-			if hides(obj) {
+			if isControlPlane(obj) {
 				return apierrors.NewNotFound(schema.GroupResource{Group: lodiav1alpha1.GroupVersion.Group, Resource: "controlplanes"}, key.Name)
 			}
 			return c.Get(ctx, key, obj, opts...)
@@ -189,7 +188,7 @@ func TestAStaleCacheDoesNotHideALeftoverControlPlane(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := pass(t.Context(), behindTheCache(t, isControlPlane), lcp); err == nil {
+	if err := pass(t.Context(), behindTheCache(t), lcp); err == nil {
 		t.Fatal("the pass returned no error")
 	}
 	get(t, lcp)
@@ -214,7 +213,7 @@ func TestAStaleCacheDoesNotLetDeletionForgetTheControlPlane(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	passes(t, behindTheCache(t, isControlPlane), lcp)
+	passes(t, behindTheCache(t), lcp)
 	if err := k8s.Get(t.Context(), client.ObjectKeyFromObject(lcp), lcp); err != nil || !controllerutil.ContainsFinalizer(lcp, v1alpha1.Finalizer) {
 		t.Fatalf("the LodiaControlPlane is gone or lost its finalizer while its ControlPlane exists: %v, finalizers %v", err, lcp.Finalizers)
 	}

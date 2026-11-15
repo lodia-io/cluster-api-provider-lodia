@@ -432,6 +432,11 @@ func isSecretApply(obj runtime.ApplyConfiguration, name string) bool {
 	return ok && s.Name != nil && *s.Name == name
 }
 
+func isControlPlaneApply(obj runtime.ApplyConfiguration) bool {
+	_, secret := obj.(*corev1ac.SecretApplyConfiguration)
+	return !secret
+}
+
 func condition(lcp *v1alpha1.LodiaControlPlane, conditionType string) *metav1.Condition {
 	return meta.FindStatusCondition(lcp.Status.Conditions, conditionType)
 }

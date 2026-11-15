@@ -262,7 +262,7 @@ func TestTheCacheFailsAReadOfATypeItHasNoInformerFor(t *testing.T) {
 }
 
 func TestTheFieldsThatWriteNoFlagMoveTheProbesOffThePathsTheManagerServes(t *testing.T) {
-	container := managerContainer(t)
+	container := managerContainerWith(t, nil)
 	served := []string{container.LivenessProbe.HTTPGet.Path, container.ReadinessProbe.HTTPGet.Path}
 	if !slices.Equal(served, []string{"/healthz", "/readyz"}) {
 		t.Fatalf("the manifest's probes use %v, want the paths controller-runtime serves", served)
@@ -279,7 +279,7 @@ func TestTheFieldsThatWriteNoFlagMoveTheProbesOffThePathsTheManagerServes(t *tes
 }
 
 func TestTheManifestsArgsParseAndItsPortsFollowTheDefaults(t *testing.T) {
-	container := managerContainer(t)
+	container := managerContainerWith(t, nil)
 	r := parsed(t, container.Args...)
 	if !r.manager.LeaderElection {
 		t.Error("the manifest's args do not turn leader election on")
@@ -310,11 +310,6 @@ func TestTheManifestsArgsParseAndItsPortsFollowTheDefaults(t *testing.T) {
 			t.Errorf("a probe uses the port %s, not the named port healthz", probe.HTTPGet.Port.String())
 		}
 	}
-}
-
-func managerContainer(t *testing.T) corev1.Container {
-	t.Helper()
-	return managerContainerWith(t, nil)
 }
 
 func managerManifest(t *testing.T) []byte {

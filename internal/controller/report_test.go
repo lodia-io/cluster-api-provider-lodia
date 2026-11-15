@@ -16,7 +16,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
-	corev1ac "k8s.io/client-go/applyconfigurations/core/v1"
 	"sigs.k8s.io/cluster-api/util/conditions"
 	"sigs.k8s.io/cluster-api/util/secret"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -99,12 +98,8 @@ func TestReadyAtAnOlderGenerationInitializes(t *testing.T) {
 }
 
 func TestAForbiddenWriteIsReportedAsRefused(t *testing.T) {
-	isControlPlane := func(obj runtime.ApplyConfiguration) bool {
-		_, isSecret := obj.(*corev1ac.SecretApplyConfiguration)
-		return !isSecret
-	}
 	for name, target := range map[string]func(obj runtime.ApplyConfiguration) bool{
-		"the ControlPlane": isControlPlane,
+		"the ControlPlane": isControlPlaneApply,
 		"a Secret":         func(obj runtime.ApplyConfiguration) bool { return isSecretApply(obj, "psi-ca") },
 	} {
 		t.Run(name, func(t *testing.T) {
