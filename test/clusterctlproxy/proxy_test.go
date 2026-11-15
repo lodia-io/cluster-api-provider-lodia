@@ -654,6 +654,26 @@ func TestEveryClusterctlClientIsBuiltThroughTheFactory(t *testing.T) {
 	}
 }
 
+func isTheProxyType(e ast.Expr) bool {
+	ident, ok := e.(*ast.Ident)
+	return ok && ident.Name == "proxy"
+}
+
+func makesAProxy(n ast.Node) bool {
+	switch n := n.(type) {
+	case *ast.CompositeLit:
+		return isTheProxyType(n.Type)
+	case *ast.ValueSpec:
+		return isTheProxyType(n.Type)
+	case *ast.Field:
+		return isTheProxyType(n.Type)
+	case *ast.CallExpr:
+		ident, ok := n.Fun.(*ast.Ident)
+		return ok && ident.Name == "new" && len(n.Args) == 1 && isTheProxyType(n.Args[0])
+	}
+	return false
+}
+
 func proxiesMadeOutsideNewProxy(path string, src any) ([]string, error) {
 	fset := token.NewFileSet()
 	file, err := parser.ParseFile(fset, path, src, parser.SkipObjectResolution)
@@ -662,11 +682,7 @@ func proxiesMadeOutsideNewProxy(path string, src any) ([]string, error) {
 	}
 	var found []string
 	ast.PreorderStack(file, nil, func(n ast.Node, stack []ast.Node) bool {
-		lit, ok := n.(*ast.CompositeLit)
-		if !ok {
-			return true
-		}
-		if ident, ok := lit.Type.(*ast.Ident); !ok || ident.Name != "proxy" {
+		if !makesAProxy(n) {
 			return true
 		}
 		for _, outer := range slices.Backward(stack) {
@@ -674,7 +690,7 @@ func proxiesMadeOutsideNewProxy(path string, src any) ([]string, error) {
 				return true
 			}
 		}
-		found = append(found, fmt.Sprintf("%s makes a proxy", fset.Position(lit.Pos())))
+		found = append(found, fmt.Sprintf("%s makes or declares a proxy", fset.Position(n.Pos())))
 		return true
 	})
 	return found, nil
@@ -692,6 +708,17 @@ func TestTheScanRefusesAProxyThatNewProxyDidNotMake(t *testing.T) {
 		{"a literal of a method", "package p\nfunc (p *proxy) NewClient() { use(&proxy{}) }\n", 1},
 		{"a call of newProxy", "package p\nfunc New() { use(newProxy(nil, 0, 0)) }\n", 0},
 		{"a literal of another type", "package p\nfunc New() { use(&server{}) }\n", 0},
+		{"new in New", "package p\nfunc New() { p := new(proxy); use(p) }\n", 1},
+		{"new outside a function", "package p\nvar p = new(proxy)\n", 1},
+		{"new in newProxy", "package p\nfunc newProxy() *proxy { return new(proxy) }\n", 0},
+		{"new of another type", "package p\nfunc New() { use(new(server)) }\n", 0},
+		{"a variable declared in New", "package p\nfunc New() { var p proxy; use(&p) }\n", 1},
+		{"a variable declared outside a function", "package p\nvar p proxy\n", 1},
+		{"a variable declared in newProxy", "package p\nfunc newProxy() *proxy { var p proxy; return &p }\n", 0},
+		{"a variable of a pointer", "package p\nfunc New() { var p *proxy; use(p) }\n", 0},
+		{"a variable of another type", "package p\nfunc New() { var s server; use(&s) }\n", 0},
+		{"a field of the type", "package p\ntype wrapper struct{ p proxy }\n", 1},
+		{"a parameter of the type", "package p\nfunc New(p proxy) {}\n", 1},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

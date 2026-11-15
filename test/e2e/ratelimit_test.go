@@ -65,9 +65,9 @@ func TestTheConfigOfATenantHasNoRateLimiter(t *testing.T) {
 }
 
 var (
-	sourcesOfAConfig = []string{"clientcmd.RESTConfigFromKubeConfig", "clientcmd.BuildConfigFromFlags", "conf.New", "rest.InClusterConfig", "rest.CopyConfig"}
+	sourcesOfAConfig = []string{"clientcmd.RESTConfigFromKubeConfig", "clientcmd.BuildConfigFromFlags", "conf.New", "conf.NewWithContextName", "conf.NewInCluster", "rest.InClusterConfig", "rest.CopyConfig"}
 	takeAConfig      = []string{"clusterctlproxy.New", "clusterctlproxy.NewClient"}
-	makeAnEnvconf    = []string{"envconf.New", "envconf.NewWithKubeConfig", "envconf.NewFromFlags"}
+	makeAnEnvconf    = []string{"envconf.New", "envconf.NewWithKubeConfig", "envconf.NewFromFlags", "env.New", "env.NewParallel", "env.NewWithKubeConfig", "env.NewFromFlags", "env.NewInClusterConfig"}
 )
 
 func isNoRateLimit(e ast.Expr) bool {
@@ -129,6 +129,11 @@ func isAnEnvconf(n ast.Node) bool {
 	return ok && slices.Contains(makeAnEnvconf, calleeOf(call))
 }
 
+func isAClientOfAKubeconfigFile(n ast.Node) bool {
+	call, ok := n.(*ast.CallExpr)
+	return ok && calleeOf(call) == "klient.NewWithKubeConfigFile"
+}
+
 func problemsWithTheRateLimiters(fset *token.FileSet, files []*ast.File) []string {
 	var problems []string
 	for _, file := range files {
@@ -140,11 +145,14 @@ func problemsWithTheRateLimiters(fset *token.FileSet, files []*ast.File) []strin
 					break
 				}
 			}
-			if isARestConfigLiteral(n) && (fn == nil || fn.Recv != nil || !strings.HasPrefix(fn.Name.Name, "Test")) {
-				problems = append(problems, problemAt(fset, n, "a rest.Config literal outside a Test function, which keeps client-go's rate limiter unless it sets its QPS to clusterctlproxy.NoRateLimit: write it in a test of a fake, or take the config from a constructor that sets it"))
+			if isARestConfigLiteral(n) && (carriesABuildTag(file) || fn == nil || fn.Recv != nil || !strings.HasPrefix(fn.Name.Name, "Test")) {
+				problems = append(problems, problemAt(fset, n, "a rest.Config literal outside a Test function of a file with no build tag, which keeps client-go's rate limiter unless it sets its QPS to clusterctlproxy.NoRateLimit: write it in a test of a fake, or take the config from a constructor that sets it"))
 			}
 			if isAnEnvconf(n) && (fn == nil || fn.Name.Name != "newEnvconf") {
-				problems = append(problems, problemAt(fset, n, "an envconf whose client keeps client-go's rate limiter, since envconf's Client builds one with the default QPS: make it with newEnvconf"))
+				problems = append(problems, problemAt(fset, n, "an envconf, or an environment that makes one, whose client keeps client-go's rate limiter, since envconf's Client builds one with the default QPS: make the envconf with newEnvconf and the environment with env.NewWithConfig"))
+			}
+			if isAClientOfAKubeconfigFile(n) {
+				problems = append(problems, problemAt(fset, n, "a client of a kubeconfig file, which keeps client-go's rate limiter since nothing sets the QPS of its config: make the config with conf.New, set its QPS to clusterctlproxy.NoRateLimit and hand it to klient.New, as newEnvconf does"))
 			}
 			if !isARestConfig(n) {
 				return true
@@ -177,7 +185,7 @@ func TestNoRESTConfigOfTheSuiteKeepsClientGosRateLimiter(t *testing.T) {
 	fset := token.NewFileSet()
 	var files []*ast.File
 	for _, name := range names {
-		file, err := parser.ParseFile(fset, name, nil, 0)
+		file, err := parser.ParseFile(fset, name, nil, parser.ParseComments)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -186,8 +194,27 @@ func TestNoRESTConfigOfTheSuiteKeepsClientGosRateLimiter(t *testing.T) {
 	if len(files) < 2 {
 		t.Fatalf("the check read %d files", len(files))
 	}
+	if !slices.ContainsFunc(files, carriesABuildTag) {
+		t.Fatal("none of the files the check read carries a build tag, so it cannot refuse a rest.Config literal in one")
+	}
 	for _, problem := range problemsWithTheRateLimiters(fset, files) {
 		t.Error(problem)
+	}
+}
+
+func requireProblemOfSource(t *testing.T, src, want string) {
+	t.Helper()
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, "x.go", src, parser.ParseComments)
+	if err != nil {
+		t.Fatal(err)
+	}
+	problems := strings.Join(problemsWithTheRateLimiters(fset, []*ast.File{file}), "\n")
+	switch {
+	case want == "" && problems != "":
+		t.Fatalf("want accepted, got %s", problems)
+	case want != "" && !strings.Contains(problems, want):
+		t.Fatalf("want a problem with %q, got %q", want, problems)
 	}
 }
 
@@ -213,6 +240,14 @@ func TestTheCheckOfTheRESTConfigsRefusesOneThatKeepsTheRateLimiter(t *testing.T)
 		{"the config of the environment's client, handed to another function", "func helper() {\nuse(env.Client().RESTConfig())\n}", refused},
 		{"a config of conf.New whose QPS is set", "func newEnvconf() {\ncfg, err := conf.New(path)\ncfg.QPS = clusterctlproxy.NoRateLimit\n}", ""},
 		{"a config of conf.New whose QPS is not set", "func helper() {\ncfg, err := conf.New(path)\n}", refused},
+		{"a config of conf.NewWithContextName whose QPS is set", "func helper() {\ncfg, err := conf.NewWithContextName(path, \"c\")\ncfg.QPS = clusterctlproxy.NoRateLimit\n}", ""},
+		{"a config of conf.NewWithContextName whose QPS is not set", "func helper() {\ncfg, err := conf.NewWithContextName(path, \"c\")\n}", refused},
+		{"a config of conf.NewInCluster whose QPS is set", "func helper() {\ncfg, err := conf.NewInCluster()\ncfg.QPS = clusterctlproxy.NoRateLimit\n}", ""},
+		{"a config of conf.NewInCluster whose QPS is not set", "func helper() {\ncfg, err := conf.NewInCluster()\n}", refused},
+		{"a client of a config whose QPS is set", "func helper() {\ncfg, err := conf.New(path)\ncfg.QPS = clusterctlproxy.NoRateLimit\nuse(klient.New(cfg))\n}", ""},
+		{"a client of a kubeconfig file", "func helper() {\nuse(klient.NewWithKubeConfigFile(path))\n}", refused},
+		{"a client of a kubeconfig file in newEnvconf", "func newEnvconf(path string) {\nuse(klient.NewWithKubeConfigFile(path))\n}", refused},
+		{"a client of a kubeconfig file outside a function", "var c, _ = klient.NewWithKubeConfigFile(path)", refused},
 		{"a rest.Config literal in a Test function", "func TestX(t *testing.T) {\nuse(&rest.Config{Host: \"https://unused.invalid\"})\n}", ""},
 		{"a rest.Config literal in a function literal of a Test function", "func TestX(t *testing.T) {\nt.Run(\"a\", func(t *testing.T) {\nuse(rest.Config{})\n})\n}", ""},
 		{"a rest.Config literal in a helper", "func helper() {\nuse(&rest.Config{Host: \"https://unused.invalid\"})\n}", refused},
@@ -223,21 +258,33 @@ func TestTheCheckOfTheRESTConfigsRefusesOneThatKeepsTheRateLimiter(t *testing.T)
 		{"an envconf of New outside newEnvconf", "func helper() {\nuse(envconf.New())\n}", refused},
 		{"an envconf of NewFromFlags outside newEnvconf", "func helper() {\nuse(envconf.NewFromFlags())\n}", refused},
 		{"an envconf outside a function", "var cfg = envconf.New()", refused},
+		{"an environment of an envconf that newEnvconf made", "func TestMain(m *testing.M) {\ntestenv = env.NewWithConfig(cfg)\n}", ""},
+		{"an environment of New", "func TestMain(m *testing.M) {\ntestenv = env.New()\n}", refused},
+		{"an environment of NewParallel", "func TestMain(m *testing.M) {\ntestenv = env.NewParallel()\n}", refused},
+		{"an environment of NewWithKubeConfig", "func TestMain(m *testing.M) {\ntestenv = env.NewWithKubeConfig(path)\n}", refused},
+		{"an environment of NewFromFlags", "func TestMain(m *testing.M) {\ntestenv, err = env.NewFromFlags()\n}", refused},
+		{"an environment of NewInClusterConfig", "func TestMain(m *testing.M) {\ntestenv = env.NewInClusterConfig()\n}", refused},
+		{"an environment outside a function", "var testenv = env.New()", refused},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			fset := token.NewFileSet()
-			file, err := parser.ParseFile(fset, "x.go", "package p\n"+c.source+"\n", 0)
-			if err != nil {
-				t.Fatal(err)
-			}
-			problems := strings.Join(problemsWithTheRateLimiters(fset, []*ast.File{file}), "\n")
-			switch {
-			case c.want == "" && problems != "":
-				t.Fatalf("want accepted, got %s", problems)
-			case c.want != "" && !strings.Contains(problems, c.want):
-				t.Fatalf("want a problem with %q, got %q", c.want, problems)
-			}
+			requireProblemOfSource(t, "package p\n"+c.source+"\n", c.want)
+		})
+	}
+}
+
+func TestTheCheckOfTheRESTConfigsDecidesTheLiteralByTheFile(t *testing.T) {
+	const refused = "keeps client-go's rate limiter"
+	cases := []struct {
+		name, source, want string
+	}{
+		{"a literal in a Test function of a file with no build tag", "// Copyright\n\npackage p\n\nfunc TestX(t *testing.T) {\nuse(&rest.Config{})\n}", ""},
+		{"a literal in a Test function of a file with a build tag", "//go:build e2e\n\npackage p\n\nfunc TestX(t *testing.T) {\nuse(&rest.Config{})\n}", refused},
+		{"a literal in a function literal of a Test function of a file with a build tag", "//go:build e2e && upgrade\n\npackage p\n\nfunc TestMain(m *testing.M) {\nf := features.New(\"a\").Assess(\"b\", func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {\nuse(rest.Config{})\nreturn ctx\n})\n}", refused},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			requireProblemOfSource(t, c.source+"\n", c.want)
 		})
 	}
 }
