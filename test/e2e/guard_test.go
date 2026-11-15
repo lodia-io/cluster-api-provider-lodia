@@ -161,9 +161,9 @@ func TestEachTargetThatRunsTheSuiteCreatesAClusterOfItsOwnThatTheGuardAccepts(t 
 	creates := regexp.MustCompile(`kind create cluster --name (\S+) --kubeconfig (\S+)`)
 	runs := regexp.MustCompile(`go test [^;&|\n]*-tags e2e`)
 	clusters := make(map[string]string)
-	for target, tags := range map[string]string{"e2e": "-tags e2e ", "e2e-upgrade": "-tags e2e,upgrade ", "e2e-minor": "-tags e2e,minor "} {
-		t.Run(target, func(t *testing.T) {
-			cmd := exec.CommandContext(t.Context(), "make", "--no-print-directory", target)
+	for _, j := range jobs {
+		t.Run(j.target, func(t *testing.T) {
+			cmd := exec.CommandContext(t.Context(), "make", "--no-print-directory", j.target)
 			cmd.Dir = root
 			recipe := recipeOf(t, cmd)
 			found := creates.FindStringSubmatch(recipe)
@@ -171,7 +171,7 @@ func TestEachTargetThatRunsTheSuiteCreatesAClusterOfItsOwnThatTheGuardAccepts(t 
 				t.Fatalf("the recipe creates no kind cluster:\n%s", recipe)
 			}
 			name, kubeconfigPath := found[1], found[2]
-			clusters[target] = name
+			clusters[j.target] = name
 			if n := len(runs.FindAllString(recipe, -1)); n != 1 {
 				t.Errorf("the target runs go test with -tags e2e %d times, want once, since a suite that a prerequisite or a recursive make runs besides it is on the same cluster and under no bound of the target:\n%s", n, recipe)
 			}
@@ -182,7 +182,7 @@ func TestEachTargetThatRunsTheSuiteCreatesAClusterOfItsOwnThatTheGuardAccepts(t 
 				t.Errorf("make e2e-cluster refuses %s: %v\n%s", name, err, out)
 			}
 			for _, want := range []string{
-				"E2E_KUBECONFIG=" + kubeconfigPath + " go test -v " + tags,
+				"E2E_KUBECONFIG=" + kubeconfigPath + " go test -v -tags " + j.tags + " ",
 				"label=io.x-k8s.kind.cluster=" + name + "-w",
 				"kind delete cluster --name " + name + " --kubeconfig " + kubeconfigPath,
 			} {

@@ -274,13 +274,23 @@ func tenantFits(requestTimeout, workerBound, dumpBound, dump time.Duration) erro
 
 type job struct {
 	name, target, tags, test string
-	bounded                  time.Duration
+	set                      any
+}
+
+// The join set holds the install and the dump, which the other jobs run through
+// the same functions.
+func (j job) bounded() time.Duration {
+	sum := total(j.set)
+	if _, ok := j.set.(boundSet); !ok {
+		sum += bounds.Install + bounds.Dump
+	}
+	return sum
 }
 
 var jobs = []job{
-	{"e2e", "e2e", "e2e", "", total(bounds)},
-	{"e2e-upgrade", "e2e-upgrade", "e2e,upgrade", "TestTheProviderUpgradesFromThePreviousRelease", bounds.Install + bounds.Dump + total(upgradeBounds)},
-	{"e2e-minor", "e2e-minor", "e2e,minor", "TestAMinorStepHoldsNewWorkersUntilLodiaRunsIt", bounds.Install + bounds.Dump + total(minorBounds)},
+	{"e2e", "e2e", "e2e", "", bounds},
+	{"e2e-upgrade", "e2e-upgrade", "e2e,upgrade", "TestTheProviderUpgradesFromThePreviousRelease", upgradeBounds},
+	{"e2e-minor", "e2e-minor", "e2e,minor", "TestAMinorStepHoldsNewWorkersUntilLodiaRunsIt", minorBounds},
 }
 
 var targetRule = regexp.MustCompile(`(?m)^([A-Za-z][\w.-]*):.*\n((?:\t.*(?:\n|$)|\n)*)`)
@@ -471,7 +481,7 @@ func TestTheBoundsFitUnderTheTimeouts(t *testing.T) {
 			if limit.TimeoutMinutes == 0 {
 				t.Fatalf("the %s job has no timeout-minutes", j.name)
 			}
-			if err := fits(j.bounded, timeout, time.Duration(limit.TimeoutMinutes)*time.Minute); err != nil {
+			if err := fits(j.bounded(), timeout, time.Duration(limit.TimeoutMinutes)*time.Minute); err != nil {
 				t.Fatal(err)
 			}
 		})
@@ -541,7 +551,7 @@ func TestALintThatLacksTheTagsOfAJobIsRefused(t *testing.T) {
 }
 
 func TestTotalAddsEveryBound(t *testing.T) {
-	for name, b := range map[string]any{"the join test's": &boundSet{}, "the upgrade test's": &upgradeBoundSet{}, "the minor test's": &minorBoundSet{}} {
+	for name, b := range map[string]any{"the join test's": &boundSet{}, "the upgrade test's": &upgradeBoundSet{}} {
 		t.Run(name, func(t *testing.T) {
 			var want time.Duration
 			fields := reflect.ValueOf(b).Elem()
@@ -552,6 +562,26 @@ func TestTotalAddsEveryBound(t *testing.T) {
 			}
 			if got := total(reflect.ValueOf(b).Elem().Interface()); got != want {
 				t.Fatalf("total is %s, the bounds add up to %s", got, want)
+			}
+		})
+	}
+}
+
+func TestAJobAddsTheInstallAndTheDumpToTheBoundsOfAnySetButTheJoinTests(t *testing.T) {
+	const minute = time.Minute
+	cases := []struct {
+		name string
+		job  job
+		want time.Duration
+	}{
+		{"the join test's set, which holds them", job{set: boundSet{Install: 3 * minute, Dump: 2 * minute, Apply: 4 * minute}}, 9 * minute},
+		{"the upgrade test's set", job{set: upgradeBoundSet{Apply: 4 * minute, Upgrade: 5 * minute}}, 9*minute + bounds.Install + bounds.Dump},
+		{"the minor test's set", job{set: minorBoundSet{Apply: 4 * minute, Stepped: 5 * minute}}, 9*minute + bounds.Install + bounds.Dump},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := c.job.bounded(); got != c.want {
+				t.Errorf("got %s, want %s", got, c.want)
 			}
 		})
 	}
