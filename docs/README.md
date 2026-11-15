@@ -114,7 +114,7 @@ The cache holds no Secret data.
 It fails a typed read of a type it has no informer for ([`ReaderFailOnMissingInformer`][cr-fail-on-missing]) instead of starting one, which for a Secret would hold the data of every Secret labelled `lodia.io/control-plane`.
 The provider watches the metadata of Secrets labelled `lodia.io/control-plane` ([labels][lo-labels]), maps `<cp>-admin-kubeconfig` and `<cp>-ca-bundle` to the `LodiaControlPlane` of the Cluster of that name, and reads both, and its own two, from the API server on every pass.
 `ControlPlane` and `Cluster` events map the same way, through the Cluster's `controlPlaneRef`, so a leftover `ControlPlane` of another owner wakes the provider when it goes.
-A `Cluster` event passes only when the Cluster's generation changed ([`GenerationChangedPredicate`][cr-generation-changed]), so a change of its metadata or status starts no pass.
+A `Cluster` update passes only when the Cluster's generation changed ([`GenerationChangedPredicate`][cr-generation-changed]), so an update of its metadata or status starts no pass.
 The cache resyncs every 10 minutes by default, Cluster API's default ([--sync-period][capi-sync]), which repairs the provider's own Secrets, which no watch covers, and a missed delete event.
 
 ### RBAC
