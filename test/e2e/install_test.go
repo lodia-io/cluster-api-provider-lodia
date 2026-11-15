@@ -233,6 +233,7 @@ func installProviders(ctx context.Context, cfg *envconf.Config) error {
 	configPath, err := writeRepository(repositoryDir(cfg), providers, map[string]string{
 		"LODIA_KUBEADM_BOOTSTRAP_SA_NAMESPACE": kubeadmBootstrapNamespace,
 		"LODIA_KUBEADM_BOOTSTRAP_SA_NAME":      kubeadmBootstrapAccount,
+		"EXP_MACHINE_SET_PREFLIGHT_CHECKS":     "false",
 	})
 	if err != nil {
 		return err
