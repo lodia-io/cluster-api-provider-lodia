@@ -384,7 +384,7 @@ func TestTheMetadataCheck(t *testing.T) {
 		{name: "a series replaced by the next", head: series("0.2.v1beta2"), base: series("0.1.v1beta2"), labels: [][]string{{v1beta2}}, want: "has the series 0.1"},
 		{name: "a series with another contract", head: series("0.1.v1beta2", "0.2.v1beta2"), base: series("0.1.v1beta1"), labels: [][]string{{v1beta2}}, want: "the series 0.1 has the contract v1beta1 at the merge base with origin/main and v1beta2"},
 		{name: "a metadata.yaml that is not metadata", head: "kind: Other\n", base: series("0.1.v1beta2"), labels: [][]string{{v1beta2}}, want: "metadata.yaml:"},
-		{name: "a metadata.yaml on origin/main that is not metadata", head: series("0.1.v1beta2"), base: "releaseSeries: []\n", labels: [][]string{{v1beta2}}, want: "at the merge base with origin/main: "},
+		{name: "a metadata.yaml on origin/main that is not metadata", head: series("0.1.v1beta2"), base: "releaseSeries: []\n", labels: [][]string{{v1beta2}}, want: "the merge base with origin/main: metadata.yaml at "},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

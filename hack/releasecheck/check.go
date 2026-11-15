@@ -5,7 +5,6 @@ package main
 
 import (
 	"bytes"
-	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -137,9 +136,16 @@ func tagsWithoutSeries(ctx context.Context, dir string, md *clusterctlv1.Metadat
 	return missing, nil
 }
 
-func requireOnMain(ctx context.Context, dir, sha string) error {
+func requireOriginMain(ctx context.Context, dir string) error {
 	if _, err := git(ctx, dir, "rev-parse", "--verify", "--quiet", originMain); err != nil {
 		return errors.New("origin/main does not exist here: fetch it first")
+	}
+	return nil
+}
+
+func requireOnMain(ctx context.Context, dir, sha string) error {
+	if err := requireOriginMain(ctx, dir); err != nil {
+		return err
 	}
 	_, err := git(ctx, dir, "merge-base", "--is-ancestor", sha, originMain)
 	if exit, ok := errors.AsType[*exec.ExitError](err); ok && exit.ExitCode() == 1 {
@@ -258,7 +264,7 @@ func checkMetadata(ctx context.Context, dir string) error {
 	if err != nil {
 		return fmt.Errorf("%s: %w", metadataFile, err)
 	}
-	want := newest(head.ReleaseSeries)
+	want := pin.NewestSeries(head.ReleaseSeries)
 
 	var problems []error
 	crds, err := filepath.Glob(filepath.Join(dir, crdsDir, "*.yaml"))
@@ -278,8 +284,8 @@ func checkMetadata(ctx context.Context, dir string) error {
 		}
 	}
 
-	if _, err := git(ctx, dir, "rev-parse", "--verify", "--quiet", originMain); err != nil {
-		return errors.New("origin/main does not exist here: fetch it first")
+	if err := requireOriginMain(ctx, dir); err != nil {
+		return err
 	}
 	// The merge base, not the tip: a branch that dropped nothing must not fail
 	// once main adds a series.
@@ -287,13 +293,9 @@ func checkMetadata(ctx context.Context, dir string) error {
 	if err != nil {
 		return fmt.Errorf("HEAD and origin/main have no merge base, as in a shallow clone: %w", err)
 	}
-	out, err := git(ctx, dir, "show", strings.TrimSpace(string(mergeBase))+":"+metadataFile)
+	base, err := metadataAt(ctx, dir, strings.TrimSpace(string(mergeBase)))
 	if err != nil {
-		return err
-	}
-	base, err := decodeMetadata(out)
-	if err != nil {
-		return fmt.Errorf("%s at the merge base with origin/main: %w", metadataFile, err)
+		return fmt.Errorf("the merge base with origin/main: %w", err)
 	}
 	for _, was := range base.ReleaseSeries {
 		i := slices.IndexFunc(head.ReleaseSeries, func(s clusterctlv1.ReleaseSeries) bool {
@@ -307,12 +309,6 @@ func checkMetadata(ctx context.Context, dir string) error {
 		}
 	}
 	return errors.Join(problems...)
-}
-
-func newest(series []clusterctlv1.ReleaseSeries) clusterctlv1.ReleaseSeries {
-	return slices.MaxFunc(series, func(a, b clusterctlv1.ReleaseSeries) int {
-		return cmp.Or(cmp.Compare(a.Major, b.Major), cmp.Compare(a.Minor, b.Minor))
-	})
 }
 
 func crdContract(path string) (string, error) {

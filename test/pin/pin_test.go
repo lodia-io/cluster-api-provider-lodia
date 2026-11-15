@@ -12,6 +12,8 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+
+	clusterctlv1 "sigs.k8s.io/cluster-api/cmd/clusterctl/api/v1alpha3"
 )
 
 const (
@@ -33,6 +35,32 @@ func TestThePinIsTheFileThatAReaderOfAnotherCommitReads(t *testing.T) {
 	}
 	if release.Version == "" || release.ComponentsURL() == release.MetadataURL() {
 		t.Errorf("the pin names %+v", release)
+	}
+}
+
+func TestTheNewestSeriesIsTheHighestMajorAndOfThatTheHighestMinorWhereverItStands(t *testing.T) {
+	series := func(versions ...[2]int32) []clusterctlv1.ReleaseSeries {
+		var out []clusterctlv1.ReleaseSeries
+		for _, v := range versions {
+			out = append(out, clusterctlv1.ReleaseSeries{Major: v[0], Minor: v[1]})
+		}
+		return out
+	}
+	for name, c := range map[string]struct {
+		series []clusterctlv1.ReleaseSeries
+		want   [2]int32
+	}{
+		"one":                           {series([2]int32{0, 1}), [2]int32{0, 1}},
+		"the last":                      {series([2]int32{0, 1}, [2]int32{0, 2}), [2]int32{0, 2}},
+		"the first":                     {series([2]int32{0, 2}, [2]int32{0, 1}), [2]int32{0, 2}},
+		"a higher major, a lower minor": {series([2]int32{0, 9}, [2]int32{1, 0}), [2]int32{1, 0}},
+		"a higher minor, a lower major": {series([2]int32{1, 0}, [2]int32{0, 9}), [2]int32{1, 0}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if got := NewestSeries(c.series); [2]int32{got.Major, got.Minor} != c.want {
+				t.Errorf("the newest of %v is %d.%d, want %d.%d", c.series, got.Major, got.Minor, c.want[0], c.want[1])
+			}
+		})
 	}
 }
 

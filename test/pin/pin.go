@@ -7,6 +7,7 @@
 package pin
 
 import (
+	"cmp"
 	"context"
 	"crypto/sha256"
 	_ "embed"
@@ -19,9 +20,11 @@ import (
 	"path"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"time"
 
 	"k8s.io/apimachinery/pkg/util/version"
+	clusterctlv1 "sigs.k8s.io/cluster-api/cmd/clusterctl/api/v1alpha3"
 	"sigs.k8s.io/yaml"
 )
 
@@ -68,6 +71,14 @@ func Parse(raw []byte) (Release, error) {
 		}
 	}
 	return r, nil
+}
+
+// NewestSeries is the series of the highest major, and of that the highest
+// minor, wherever it stands in the list.
+func NewestSeries(series []clusterctlv1.ReleaseSeries) clusterctlv1.ReleaseSeries {
+	return slices.MaxFunc(series, func(a, b clusterctlv1.ReleaseSeries) int {
+		return cmp.Or(cmp.Compare(a.Major, b.Major), cmp.Compare(a.Minor, b.Minor))
+	})
 }
 
 func (r Release) ComponentsURL() string {
