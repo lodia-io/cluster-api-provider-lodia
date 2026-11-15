@@ -36,17 +36,18 @@ func setClusterPaused(ctx context.Context, c client.Client, key client.ObjectKey
 // Cluster left paused would hold every controller of the suite.
 var unpauseBound = 30 * time.Second
 
-// pauseCycle is the pause of steps 11, 19 and 21. It waits until both
-// controllers report Paused True, runs act, unpauses by dropping spec.paused as
-// clusterctl does, and requires that both controllers ran after it. Both stop
-// at Paused while it is True, so the Paused False it waits for is a write of a
-// controller that has read the Cluster unpaused, and not the False of before
-// the pause: a LodiaControlPlane that misses the unpause stays True. The
-// Cluster's Available is recomputed only by the full pass that follows, which
-// stamps it with the Cluster's generation, so it has to be True at the
-// generation that the unpause produced or a later one. The LodiaControlPlane's
-// generation does not move with the Cluster's, so nothing beyond its Paused
-// going True and then False shows that the provider resumed.
+// pauseCycle is the pause of steps 11, 19 and 21 of the join test and step 12
+// of the upgrade test. It waits until both controllers report Paused True, runs
+// act, unpauses by dropping spec.paused as clusterctl does, and requires that
+// both controllers ran after it. Both stop at Paused while it is True, so the
+// Paused False it waits for is a write of a controller that has read the
+// Cluster unpaused, and not the False of before the pause: a LodiaControlPlane
+// that misses the unpause stays True. The Cluster's Available is recomputed
+// only by the full pass that follows, which stamps it with the Cluster's
+// generation, so it has to be True at the generation that the unpause produced
+// or a later one. The LodiaControlPlane's generation does not move with the
+// Cluster's, so nothing beyond its Paused going True and then False shows that
+// the provider resumed.
 // The pause, both waits and act, which gets their context, share bound. The
 // unpause has unpauseBound of its own, and no deadline of its caller's, so that
 // it goes out when bound has ended.
@@ -58,12 +59,13 @@ var unpauseBound = 30 * time.Second
 // https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/core/reconcilers/cluster/cluster_controller_status.go#L92
 // https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/util/conditions/setter.go#L84
 func pauseCycle(ctx context.Context, c client.Client, key client.ObjectKey, bound, interval time.Duration, pause bool, act func(context.Context) error) error {
-	bounded, cancel := endAfter(ctx, bound)
+	bounded, cancel := within(ctx, bound)
 	defer cancel()
 	var err error
 	if pause {
-		_, err = setClusterPaused(bounded, c, key, true)
-		err = cutShort(bounded, err)
+		if _, err = setClusterPaused(bounded, c, key, true); err != nil {
+			err = errors.Join(err, context.Cause(bounded))
+		}
 	}
 	holding := pause
 	if err == nil {
@@ -78,7 +80,9 @@ func pauseCycle(ctx context.Context, c client.Client, key client.ObjectKey, boun
 		} else {
 			holding = true
 			if act != nil {
-				err = cutShort(bounded, act(bounded))
+				if err = act(bounded); err != nil {
+					err = errors.Join(err, context.Cause(bounded))
+				}
 			}
 		}
 	}
@@ -144,10 +148,6 @@ func TestAnActionRunsOnlyOnceBothControllersReportPausedAndTheClusterIsUnpausedA
 		{"the action fails", always(pausedByTheMove), always(pausedByTheMove), 0, 0, true, true, "the action failed"},
 		{"the LodiaControlPlane never reports", always(reported{metav1.ConditionTrue, metav1.ConditionFalse, metav1.ConditionTrue, pausedGeneration - 1}), always(runAgain), 0, 0, false, false, "Paused is not True on both"},
 		{"the Cluster never reports", always(reported{metav1.ConditionFalse, metav1.ConditionTrue, metav1.ConditionTrue, pausedGeneration - 1}), always(runAgain), 0, 0, false, false, "Paused is not True on both"},
-		{"neither controller runs after the unpause", always(pausedByTheMove), always(pausedByTheMove), 0, 0, false, true, "both controllers did not run"},
-		{"the Cluster is still paused after the unpause", always(pausedByTheMove), always(reported{metav1.ConditionTrue, metav1.ConditionFalse, metav1.ConditionTrue, unpausedGeneration}), 0, 0, false, true, "the Paused of the Cluster"},
-		{"the LodiaControlPlane is still paused after the unpause", always(pausedByTheMove), always(reported{metav1.ConditionFalse, metav1.ConditionTrue, metav1.ConditionTrue, unpausedGeneration}), 0, 0, false, true, "the Paused of the LodiaControlPlane"},
-		{"the Available of the Cluster is the one of before the unpause", always(pausedByTheMove), always(reported{metav1.ConditionFalse, metav1.ConditionFalse, metav1.ConditionTrue, pausedGeneration}), 0, 0, false, true, "True at generation 5 or later"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -189,28 +189,6 @@ func TestAnActionRunsOnlyOnceBothControllersReportPausedAndTheClusterIsUnpausedA
 				t.Errorf("returned after %d reads of the Cluster since the unpause, before the controllers had run again at the read %d", w.readsAfter[0], c.recomputedAt)
 			}
 		})
-	}
-}
-
-func TestAPauseTakesOneBoundForBothWaitsAndTheAction(t *testing.T) {
-	const (
-		bound      = 800 * time.Millisecond
-		reportedAt = 3 * bound / 4
-	)
-	start := time.Now()
-	w := newWorldPausedAt(false, func(int) reported {
-		if time.Since(start) < reportedAt {
-			return beforeTheMove
-		}
-		return pausedByTheMove
-	}, always(pausedByTheMove))
-	err := whilePaused(t.Context(), w, unpausedKey, bound, 10*time.Millisecond, func(context.Context) error { return nil })
-	took := time.Since(start)
-	if err == nil || !strings.Contains(err.Error(), "both controllers did not run") {
-		t.Fatalf("want the failure of the second wait, got %v", err)
-	}
-	if limit := bound + bound/4; took > limit {
-		t.Errorf("the waits took %s, more than %s: the second one has a bound of its own, and not what the first left of the %s that both share", took, limit, bound)
 	}
 }
 

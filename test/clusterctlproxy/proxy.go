@@ -50,18 +50,29 @@ import (
 // other kubeconfig, since it would be ignored.
 var Kubeconfig = clusterctl.Kubeconfig{Context: "the-cluster-of-the-proxy"}
 
+// NoRateLimit as the QPS of a rest.Config gives its clients no client-side rate
+// limiter, as controller-runtime's default does. client-go builds the limiter
+// only for a QPS above zero, and a request without one returns from it at once.
+// x/time's Wait refuses a request under a deadline whose token is due after it,
+// with an error that is no context's.
+// https://github.com/kubernetes/client-go/blob/v0.37.2/rest/config.go#L373-L386
+// https://github.com/kubernetes/client-go/blob/v0.37.2/rest/request.go#L667-L670
+// https://github.com/golang/time/blob/v0.15.0/rate/rate.go#L268-L277
+// https://github.com/kubernetes-sigs/controller-runtime/blob/v0.25.2/pkg/client/config/config.go#L101-L105
+const NoRateLimit float32 = -1
+
 // New returns clusterctl's client, with every cluster client it makes, both
 // ends of a move included, built by a Proxy over cfg. Requests of the Proxy's
 // clients time out at requestTimeout, and their discovery at discoveryTimeout.
 func New(ctx context.Context, configClient config.Client, cfg *rest.Config, requestTimeout, discoveryTimeout time.Duration) (clusterctl.Client, error) {
-	// clusterctl sets these so that it is not throttled when it lists every
-	// kind of a large cluster:
-	// https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/cmd/clusterctl/client/cluster/proxy.go#L155-L159
-	cfg = rest.CopyConfig(cfg)
-	cfg.QPS = 500
-	cfg.Burst = 1000
-	p := &proxy{cfg: cfg, requestTimeout: requestTimeout, discoveryTimeout: discoveryTimeout}
+	p := newProxy(cfg, requestTimeout, discoveryTimeout)
 	return clusterctl.New(ctx, "", clusterctl.InjectConfig(configClient), clusterctl.InjectClusterClientFactory(clusterClientFactory(configClient, p)))
+}
+
+func newProxy(cfg *rest.Config, requestTimeout, discoveryTimeout time.Duration) *proxy {
+	cfg = rest.CopyConfig(cfg)
+	cfg.QPS = NoRateLimit
+	return &proxy{cfg: cfg, requestTimeout: requestTimeout, discoveryTimeout: discoveryTimeout}
 }
 
 func clusterClientFactory(configClient config.Client, p cluster.Proxy) clusterctl.ClusterClientFactory {
@@ -86,10 +97,7 @@ func requireNoKubeconfig(kubeconfig clusterctl.Kubeconfig) error {
 // context, so it ends only at the timeout of the config it is built on.
 // https://github.com/kubernetes-sigs/controller-runtime/blob/v0.25.2/pkg/client/apiutil/restmapper.go#L285
 func NewClient(cfg *rest.Config, scheme *runtime.Scheme, requestTimeout, discoveryTimeout time.Duration) (client.Client, error) {
-	requests := rest.CopyConfig(cfg)
-	requests.Timeout = requestTimeout
-	discovery := rest.CopyConfig(cfg)
-	discovery.Timeout = discoveryTimeout
+	requests, discovery := clientConfigs(cfg, requestTimeout, discoveryTimeout)
 	httpClient, err := rest.HTTPClientFor(discovery)
 	if err != nil {
 		return nil, err
@@ -101,12 +109,22 @@ func NewClient(cfg *rest.Config, scheme *runtime.Scheme, requestTimeout, discove
 	return client.New(requests, client.Options{Scheme: scheme, Mapper: mapper})
 }
 
+func clientConfigs(cfg *rest.Config, requestTimeout, discoveryTimeout time.Duration) (requests, discovery *rest.Config) {
+	requests = rest.CopyConfig(cfg)
+	requests.Timeout = requestTimeout
+	requests.QPS = NoRateLimit
+	discovery = rest.CopyConfig(cfg)
+	discovery.Timeout = discoveryTimeout
+	discovery.QPS = NoRateLimit
+	return requests, discovery
+}
+
 type proxy struct {
 	cfg                              *rest.Config
 	requestTimeout, discoveryTimeout time.Duration
 }
 
-var _ cluster.Proxy = &proxy{}
+var _ cluster.Proxy = (*proxy)(nil)
 
 // The kinds of clusterctl's own scheme, which is in an internal package:
 // https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/cmd/clusterctl/internal/scheme/scheme.go#L41-L50

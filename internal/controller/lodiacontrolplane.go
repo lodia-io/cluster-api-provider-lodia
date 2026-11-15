@@ -52,8 +52,9 @@ import (
 )
 
 const (
-	Name         = "lodiacontrolplane"
-	FieldManager = "cluster-api-provider-lodia"
+	Name             = "lodiacontrolplane"
+	FieldManager     = "cluster-api-provider-lodia"
+	LeaderElectionID = "controlplane.lodia.io"
 )
 
 // +kubebuilder:rbac:groups=controlplane.lodia.io,resources=lodiacontrolplanes,verbs=get;list;watch;patch
@@ -70,8 +71,9 @@ var ownedConditions = patch.WithOwnedConditions{Conditions: []string{clusterv1.R
 type Reconciler struct {
 	client.Client
 
-	// APIReader reads the ControlPlane and Secrets from the API server: the
-	// cache holds no Secret data, and a predecessor's object may be outside it.
+	// APIReader reads the ControlPlane, the Secrets and, in initialized, the
+	// LodiaControlPlane from the API server: the cache holds no Secret data, and
+	// a predecessor's object may be outside it.
 	APIReader client.Reader
 }
 
@@ -104,14 +106,20 @@ type Config struct {
 }
 
 // ManagerOptions are the manager's: leader-elected on request, with the
-// diagnostics served as Cluster API's util/flags serves them, and CacheOptions
+// diagnostics served as Cluster API's util/flags serves them, and a cache
 // limited to Config.Namespace.
 func ManagerOptions(c Config) (ctrl.Options, error) {
-	cacheOptions, err := CacheOptions()
+	lodias, err := labels.NewRequirement(lodiav1alpha1.ControlPlaneLabel, selection.Exists, nil)
 	if err != nil {
 		return ctrl.Options{}, err
 	}
+	// The cache keeps of Secrets only Lodia's, and only their metadata, which
+	// is all the controller watches.
+	cacheOptions := cache.Options{ByObject: map[client.Object]cache.ByObject{
+		&corev1.Secret{}: {Label: labels.NewSelector().Add(*lodias)},
+	}}
 	cacheOptions.SyncPeriod = &c.SyncPeriod
+	cacheOptions.ReaderFailOnMissingInformer = true
 	if c.Namespace != "" {
 		cacheOptions.DefaultNamespaces = map[string]cache.Config{c.Namespace: {}}
 	}
@@ -125,7 +133,7 @@ func ManagerOptions(c Config) (ctrl.Options, error) {
 		HealthProbeBindAddress: c.HealthAddr,
 		PprofBindAddress:       c.ProfilerAddress,
 		LeaderElection:         c.LeaderElect,
-		LeaderElectionID:       "controlplane.lodia.io",
+		LeaderElectionID:       LeaderElectionID,
 		LeaseDuration:          &c.LeaseDuration,
 		RenewDeadline:          &c.RenewDeadline,
 		RetryPeriod:            &c.RetryPeriod,
@@ -160,20 +168,6 @@ func NewManager(restConfig *rest.Config, c Config, with ...func(*ctrl.Options)) 
 	return mgr, nil
 }
 
-// CacheOptions keep of Secrets only Lodia's, and only their metadata, which
-// is all the controller watches.
-func CacheOptions() (cache.Options, error) {
-	lodias, err := labels.NewRequirement(lodiav1alpha1.ControlPlaneLabel, selection.Exists, nil)
-	if err != nil {
-		return cache.Options{}, err
-	}
-	return cache.Options{
-		ByObject: map[client.Object]cache.ByObject{
-			&corev1.Secret{}: {Label: labels.NewSelector().Add(*lodias)},
-		},
-	}, nil
-}
-
 // ControllerOptions run Config.Concurrency workers, which keep one tenant's
 // blocked write from holding up the others, and bound a pass.
 func ControllerOptions(c Config) controller.Options {
@@ -185,6 +179,16 @@ func ControllerOptions(c Config) controller.Options {
 // Secrets carry no such label, so their map functions check the Cluster's.
 func (r *Reconciler) SetupWithManager(mgr ctrl.Manager, c Config) error {
 	watched := predicates.ResourceHasFilterLabel(mgr.GetScheme(), mgr.GetLogger().WithValues("controller", Name), c.WatchFilterValue)
+	forCluster := func(ctx context.Context, namespace, name string) []reconcile.Request {
+		cluster := &clusterv1.Cluster{}
+		if err := r.Get(ctx, client.ObjectKey{Namespace: namespace, Name: name}, cluster); err != nil {
+			return nil
+		}
+		if c.WatchFilterValue != "" && !capilabels.HasWatchLabel(cluster, c.WatchFilterValue) {
+			return nil
+		}
+		return lodiaControlPlaneOf(cluster)
+	}
 	return ctrl.NewControllerManagedBy(mgr).
 		Named(Name).
 		WithOptions(ControllerOptions(c)).
@@ -196,7 +200,7 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager, c Config) error {
 			builder.WithPredicates(watched, predicate.GenerationChangedPredicate{})).
 		Watches(&lodiav1alpha1.ControlPlane{},
 			handler.EnqueueRequestsFromMapFunc(func(ctx context.Context, o client.Object) []reconcile.Request {
-				return r.forCluster(ctx, c.WatchFilterValue, o.GetNamespace(), o.GetName())
+				return forCluster(ctx, o.GetNamespace(), o.GetName())
 			})).
 		WatchesMetadata(&corev1.Secret{},
 			handler.EnqueueRequestsFromMapFunc(func(ctx context.Context, o client.Object) []reconcile.Request {
@@ -204,20 +208,9 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager, c Config) error {
 				if o.GetName() != lodiav1alpha1.AdminKubeconfigSecret.Name(cp) && o.GetName() != lodiav1alpha1.CABundleSecret.Name(cp) {
 					return nil
 				}
-				return r.forCluster(ctx, c.WatchFilterValue, o.GetNamespace(), cp)
+				return forCluster(ctx, o.GetNamespace(), cp)
 			})).
 		Complete(r)
-}
-
-func (r *Reconciler) forCluster(ctx context.Context, watchFilterValue, namespace, name string) []reconcile.Request {
-	cluster := &clusterv1.Cluster{}
-	if err := r.Get(ctx, client.ObjectKey{Namespace: namespace, Name: name}, cluster); err != nil {
-		return nil
-	}
-	if watchFilterValue != "" && !capilabels.HasWatchLabel(cluster, watchFilterValue) {
-		return nil
-	}
-	return lodiaControlPlaneOf(cluster)
 }
 
 func lodiaControlPlaneOf(cluster *clusterv1.Cluster) []reconcile.Request {
@@ -534,20 +527,21 @@ func (e *controlledElsewhereError) Error() string {
 // reconcileDelete keeps the finalizer until the ControlPlane is gone, which
 // Lodia's own finalizer decides.
 func (r *Reconciler) reconcileDelete(ctx context.Context, cluster *clusterv1.Cluster, lcp *v1alpha1.LodiaControlPlane) error {
-	cp := &lodiav1alpha1.ControlPlane{}
-	err := r.APIReader.Get(ctx, client.ObjectKey{Namespace: cluster.Namespace, Name: cluster.Name}, cp)
+	cp, err := r.currentControlPlane(ctx, cluster, lcp)
+	var elsewhere *controlledElsewhereError
 	switch {
-	case apierrors.IsNotFound(err) || err == nil && !metav1.IsControlledBy(cp, lcp):
+	case cp == nil && (err == nil || errors.As(err, &elsewhere)):
 		controllerutil.RemoveFinalizer(lcp, v1alpha1.Finalizer)
 		return nil
 	case err != nil:
 		return err
 	}
-	if cp.DeletionTimestamp.IsZero() {
-		if err := r.Delete(ctx, cp, client.Preconditions{UID: &cp.UID}); err != nil && !apierrors.IsNotFound(err) {
+	if cp.GetDeletionTimestamp().IsZero() {
+		uid := cp.GetUID()
+		if err := r.Delete(ctx, cp, client.Preconditions{UID: &uid}); err != nil && !apierrors.IsNotFound(err) {
 			return err
 		}
 	}
-	setDown(lcp, clusterv1.DeletingReason, fmt.Sprintf("waiting for ControlPlane %s to be deleted", cp.Name))
+	setDown(lcp, clusterv1.DeletingReason, fmt.Sprintf("waiting for ControlPlane %s to be deleted", cp.GetName()))
 	return nil
 }

@@ -50,8 +50,7 @@ var (
 type beforeTheUpgrade struct {
 	deployment, binding types.UID
 	made                map[string]types.UID
-	machine             types.UID
-	nodeRef             string
+	worker              *clusterv1.Machine
 	available           map[string]metav1.Time
 }
 
@@ -151,7 +150,7 @@ func readBeforeTheUpgrade(ctx context.Context, k8s client.Reader, key client.Obj
 	if err != nil {
 		return nil, err
 	}
-	before.machine, before.nodeRef = workers[0].UID, workers[0].Status.NodeRef.Name
+	before.worker = &workers[0]
 	cluster, lcp, err := readBoth(ctx, k8s, key)
 	if err != nil {
 		return nil, err
@@ -192,12 +191,8 @@ func requireTheGrantKept(ctx context.Context, k8s client.Reader, before *beforeT
 // takes is the host name and a UUID:
 // https://github.com/kubernetes-sigs/controller-runtime/blob/v0.25.2/pkg/leaderelection/leader_election.go#L93-L97
 func requireTheNewManagerLeads(ctx context.Context, k8s client.Reader) error {
-	options, err := controller.ManagerOptions(controller.Config{})
-	if err != nil {
-		return err
-	}
 	lease := &coordinationv1.Lease{}
-	if err := k8s.Get(ctx, client.ObjectKey{Namespace: providerNamespace, Name: options.LeaderElectionID}, lease); err != nil {
+	if err := k8s.Get(ctx, client.ObjectKey{Namespace: providerNamespace, Name: controller.LeaderElectionID}, lease); err != nil {
 		return err
 	}
 	holder := ptr.Deref(lease.Spec.HolderIdentity, "")
@@ -258,18 +253,6 @@ func requireWhatTheReleaseMadeKept(ctx context.Context, k8s client.Reader, key c
 		}
 	}
 	return errors.Join(append(errs, requireCopies(ctx, k8s, key, lcp))...)
-}
-
-func requireTheWorkerKept(ctx context.Context, k8s client.Reader, key client.ObjectKey, before *beforeTheUpgrade) (*clusterv1.Machine, error) {
-	workers, err := runningWorkers(ctx, k8s, key, 1)
-	if err != nil {
-		return nil, err
-	}
-	machine := &workers[0]
-	if machine.UID != before.machine || machine.Status.NodeRef.Name != before.nodeRef {
-		return nil, fmt.Errorf("Machine %s has the UID %s and the nodeRef %s, before the upgrade %s and %s: it was replaced", machine.Name, machine.UID, machine.Status.NodeRef.Name, before.machine, before.nodeRef)
-	}
-	return machine, nil
 }
 
 func TestTheImageOfTheManagerIsTheOneContainerNamedManager(t *testing.T) {
@@ -482,7 +465,7 @@ func newUpgraded() *upgraded {
 	}
 	return &upgraded{
 		cluster: cluster, lcp: lcp, controlPlane: controlPlane, secrets: secrets,
-		machines:   []*clusterv1.Machine{workerMachine("m", "machine", "node")},
+		machines:   []*clusterv1.Machine{machineOfDeployment("m", "machine", "node", workersName(upgradedKey.Name))},
 		deployment: managerDeployment("manager", releaseImage),
 		binding:    &rbacv1.ClusterRoleBinding{ObjectMeta: metav1.ObjectMeta{Name: grantBinding, UID: "binding"}},
 	}
@@ -544,7 +527,7 @@ func TestWhatIsReadBeforeTheUpgradeIsWhatTheClusterHolds(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.deployment != "manager" || got.binding != "binding" || got.machine != "machine" || got.nodeRef != "node" {
+	if got.deployment != "manager" || got.binding != "binding" || got.worker.UID != "machine" || got.worker.Status.NodeRef.Name != "node" {
 		t.Errorf("got %+v", got)
 	}
 	wantMade := map[string]types.UID{
@@ -584,35 +567,6 @@ func TestNothingIsReadBeforeTheUpgradeFromAClusterThatIsNotAvailableWithOneWorke
 			c.change(u)
 			_, err := readBeforeTheUpgrade(t.Context(), u.reader(t), upgradedKey)
 			requireFailure(t, err, c.failure)
-		})
-	}
-}
-
-func TestTheWorkerIsKeptWhenItsMachineHasTheUIDAndTheNodeRefOfBeforeTheUpgrade(t *testing.T) {
-	cases := []struct {
-		name    string
-		change  func(*upgraded)
-		failure string
-	}{
-		{"the same Machine", func(*upgraded) {}, ""},
-		{"a Machine that was made again", func(u *upgraded) { u.machines[0].UID = "again" }, "it was replaced"},
-		{"a Machine with another Node", func(u *upgraded) { u.machines[0].Status.NodeRef.Name = "other" }, "it was replaced"},
-		{"a Machine that does not run", func(u *upgraded) { u.machines[0].Status.Phase = string(clusterv1.MachinePhaseDeleting) }, "is Deleting"},
-		{"a second Machine", func(u *upgraded) { u.machines = append(u.machines, workerMachine("n", "other", "node-n")) }, "2 Machines, want 1"},
-	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			u := newUpgraded()
-			before, err := readBeforeTheUpgrade(t.Context(), u.reader(t), upgradedKey)
-			if err != nil {
-				t.Fatal(err)
-			}
-			c.change(u)
-			machine, err := requireTheWorkerKept(t.Context(), u.reader(t), upgradedKey, before)
-			requireFailure(t, err, c.failure)
-			if c.failure == "" && (machine == nil || machine.Name != "m") {
-				t.Errorf("returned %v", machine)
-			}
 		})
 	}
 }

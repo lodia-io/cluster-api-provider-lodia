@@ -152,6 +152,7 @@ func TestTheTagCheckRefuses(t *testing.T) {
 		tag      string
 		metadata string
 		tags     []string
+		released []string
 		offMain  bool
 		noRelTag bool
 		noAPITag bool
@@ -191,6 +192,14 @@ func TestTheTagCheckRefuses(t *testing.T) {
 		{name: "no run at all", tag: "v0.1.0", metadata: series("0.1.v1beta2"), want: "no run for the push"},
 		{name: "one run green and one not", tag: "v0.1.0", metadata: series("0.1.v1beta2"), runs: append(greenRuns(), Run{URL: "https://example.test/runs/2", Status: "completed", Conclusion: "failure"}), want: "runs/2 ended as failure"},
 		{name: "a 403 from GitHub", tag: "v0.1.0", metadata: series("0.1.v1beta2"), ciErr: forbidden, want: "answered 403"},
+		{name: "a published release of a newer minor is not in the line", tag: "v0.1.0-alpha.1", metadata: series("0.1.v1beta2"), released: []string{"v0.2.0"}, runs: greenRuns()},
+		{name: "a published release of a newer major with the same minor is not in the line", tag: "v0.1.0-alpha.1", metadata: series("0.1.v1beta2"), released: []string{"v1.1.0"}, runs: greenRuns()},
+		{name: "a tag below the published release of its line", tag: "v0.1.0-alpha.0", metadata: series("0.1.v1beta2"), released: []string{"v0.1.0-alpha.2"}, runs: greenRuns(), want: "v0.1.0-alpha.2 is published in the line 0.1, and v0.1.0-alpha.0 is not above it"},
+		{name: "the tag of a published release", tag: "v0.1.0-alpha.2", metadata: series("0.1.v1beta2"), released: []string{"v0.1.0-alpha.1", "v0.1.0-alpha.2"}, runs: greenRuns(), want: "v0.1.0-alpha.2 is published in the line 0.1, and v0.1.0-alpha.2 is not above it"},
+		{name: "a pre-release of a line whose stable release is published", tag: "v0.1.0-rc.1", metadata: series("0.1.v1beta2"), released: []string{"v0.1.0"}, runs: greenRuns(), want: "v0.1.0 is published in the line 0.1"},
+		{name: "a tag below a published patch", tag: "v0.1.0", metadata: series("0.1.v1beta2"), released: []string{"v0.1.1"}, runs: greenRuns(), want: "v0.1.1 is published in the line 0.1"},
+		{name: "the newest of the releases above the tag is named", tag: "v0.1.0-alpha.0", metadata: series("0.1.v1beta2"), released: []string{"v0.1.0-alpha.1", "v0.1.0-alpha.10", "v0.1.0-alpha.2"}, runs: greenRuns(), want: "v0.1.0-alpha.10 is published"},
+		{name: "a name that is not a version among the releases", tag: "v0.1.0-alpha.0", metadata: series("0.1.v1beta2"), released: []string{"nightly", "v0.1.0-alpha.1"}, runs: greenRuns(), want: "v0.1.0-alpha.1 is published"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -213,7 +222,7 @@ func TestTheTagCheckRefuses(t *testing.T) {
 			if !tt.noAPITag {
 				r.tagAPI(tt.tag, sha)
 			}
-			ci := &fakeCI{runs: tt.runs, err: tt.ciErr}
+			ci := &fakeCI{runs: tt.runs, err: tt.ciErr, releases: tt.released}
 
 			got, err := checkTag(t.Context(), r.dir, ci, tt.tag, "HEAD")
 
@@ -270,6 +279,22 @@ func TestTheTagCheckAsksForTheCommitsFullSHAEvenWhenGivenATag(t *testing.T) {
 		if diff := cmp.Diff([]string{sha}, ci.asked); diff != "" || got != sha {
 			t.Errorf("%s: asked CI about (-want +got):\n%s\nreturned %s", commit, diff, got)
 		}
+	}
+}
+
+func TestTheTagCheckDoesNotAskCIAboutATagBelowAPublishedRelease(t *testing.T) {
+	r := newRepository(t)
+	sha := r.commit(series("0.1.v1beta2"))
+	r.originMain(sha)
+	r.tagRelease("v0.1.0-alpha.0", sha)
+	r.tagAPI("v0.1.0-alpha.0", sha)
+	ci := &fakeCI{runs: greenRuns(), releases: []string{"v0.1.0-alpha.1"}}
+
+	if _, err := checkTag(t.Context(), r.dir, ci, "v0.1.0-alpha.0", "HEAD"); err == nil {
+		t.Fatal("want a refusal")
+	}
+	if len(ci.asked) != 0 {
+		t.Errorf("asked CI about %v", ci.asked)
 	}
 }
 
@@ -359,7 +384,7 @@ func TestTheMetadataCheck(t *testing.T) {
 		{name: "a series replaced by the next", head: series("0.2.v1beta2"), base: series("0.1.v1beta2"), labels: [][]string{{v1beta2}}, want: "has the series 0.1"},
 		{name: "a series with another contract", head: series("0.1.v1beta2", "0.2.v1beta2"), base: series("0.1.v1beta1"), labels: [][]string{{v1beta2}}, want: "the series 0.1 has the contract v1beta1 at the merge base with origin/main and v1beta2"},
 		{name: "a metadata.yaml that is not metadata", head: "kind: Other\n", base: series("0.1.v1beta2"), labels: [][]string{{v1beta2}}, want: "metadata.yaml:"},
-		{name: "a metadata.yaml on origin/main that is not metadata", head: series("0.1.v1beta2"), base: "releaseSeries: []\n", labels: [][]string{{v1beta2}}, want: "at the merge base with origin/main: "},
+		{name: "a metadata.yaml on origin/main that is not metadata", head: series("0.1.v1beta2"), base: "releaseSeries: []\n", labels: [][]string{{v1beta2}}, want: "the merge base with origin/main: metadata.yaml at "},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -503,16 +528,15 @@ func TestTheTagCheckWantsTheUpgradePinAtTheNewestPublishedReleaseBelowTheTag(t *
 		{name: "the pin names a release that is not published", tag: "v0.1.0-alpha.3", pin: "v0.1.0-alpha.2", published: []string{"v0.1.0-alpha.1"}, want: "names v0.1.0-alpha.2, and the newest published release below v0.1.0-alpha.3 is v0.1.0-alpha.1"},
 		{name: "a tag without a release is not the newest", tag: "v0.1.0-alpha.3", pin: "v0.1.0-alpha.1", published: []string{"v0.1.0-alpha.1"}, gitTags: []string{"v0.1.0-alpha.2"}},
 		{name: "a tag without a release is not accepted as the pin", tag: "v0.1.0-alpha.3", pin: "v0.1.0-alpha.2", published: []string{"v0.1.0-alpha.1"}, gitTags: []string{"v0.1.0-alpha.2"}, want: "newest published release below v0.1.0-alpha.3 is v0.1.0-alpha.1"},
-		{name: "a release above the tag is not below it", tag: "v0.1.0-alpha.3", pin: "v0.1.0-alpha.2", published: []string{"v0.1.0-alpha.2", "v0.1.0-alpha.4", "v0.1.0"}},
-		{name: "a pin that names a release above the tag", tag: "v0.1.0-alpha.3", pin: "v0.1.0-alpha.4", published: []string{"v0.1.0-alpha.2", "v0.1.0-alpha.4"}, want: "names v0.1.0-alpha.4, and the newest published release below v0.1.0-alpha.3 is v0.1.0-alpha.2"},
-		{name: "the release of the tag itself is not below it", tag: "v0.1.0-alpha.3", pin: "v0.1.0-alpha.2", published: []string{"v0.1.0-alpha.2", "v0.1.0-alpha.3"}},
+		{name: "a release above the tag is not below it", tag: "v0.1.0-alpha.3", pin: "v0.1.0-alpha.2", published: []string{"v0.1.0-alpha.2", "v0.2.0-alpha.1", "v0.2.0"}},
+		{name: "a pin that names a release above the tag", tag: "v0.1.0-alpha.3", pin: "v0.2.0", published: []string{"v0.1.0-alpha.2", "v0.2.0"}, want: "names v0.2.0, and the newest published release below v0.1.0-alpha.3 is v0.1.0-alpha.2"},
 		{name: "a stable release is above its pre-releases", tag: "v0.1.0", pin: "v0.1.0-alpha.2", published: []string{"v0.1.0-alpha.1", "v0.1.0-alpha.2"}},
 		{name: "a pre-release is below the stable release of its version", tag: "v0.1.1", pin: "v0.1.0-alpha.2", published: []string{"v0.1.0-alpha.2", "v0.1.0"}, want: "newest published release below v0.1.1 is v0.1.0"},
 		{name: "the stable release is the pin of the next patch", tag: "v0.1.1", pin: "v0.1.0", published: []string{"v0.1.0-alpha.2", "v0.1.0"}},
 		{name: "the newest of ten releases is the numeric one", tag: "v0.1.0-alpha.11", pin: "v0.1.0-alpha.10", published: []string{"v0.1.0-alpha.9", "v0.1.0-alpha.10", "v0.1.0-alpha.2"}},
 		{name: "a name that is not a version is not a release", tag: "v0.1.0-alpha.3", pin: "v0.1.0-alpha.2", published: []string{"nightly", "v0.1.0-alpha.2", "latest"}},
 		{name: "no release below the tag asks for no pin", tag: "v0.1.0-alpha.1", published: nil},
-		{name: "releases only above the tag ask for no pin", tag: "v0.1.0-alpha.1", published: []string{"v0.1.0-alpha.2"}},
+		{name: "releases only above the tag ask for no pin", tag: "v0.1.0-alpha.1", published: []string{"v0.2.0-alpha.1"}},
 		{name: "a pin that is not written as a release", tag: "v0.1.0-alpha.3", pin: "main", published: []string{"v0.1.0-alpha.2"}, want: "test/pin/previous-release.yaml at"},
 	}
 	for _, tt := range tests {

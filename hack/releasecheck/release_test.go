@@ -9,7 +9,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
-	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -104,6 +103,7 @@ func TestTheReleaseWorkflowSetsNoEnvironmentAboveItsSteps(t *testing.T) {
 func TestTheReleaseWorkflowPullsTheImageThatTheMakefileChecks(t *testing.T) {
 	var order []string
 	var withs []map[string]any
+	var usesEnvs []map[string]string
 	runs := map[string]string{}
 	envs := map[string]map[string]string{}
 	ids := map[string]string{}
@@ -123,13 +123,14 @@ func TestTheReleaseWorkflowPullsTheImageThatTheMakefileChecks(t *testing.T) {
 			action, _, _ := strings.Cut(step.Uses, "@")
 			order = append(order, action)
 			withs = append(withs, step.With)
+			usesEnvs = append(usesEnvs, step.Env)
 		default:
 			t.Errorf("an unnamed step that runs %q", step.Run)
 		}
 	}
 
 	const (
-		checkout, setupGo, cosign, attest = "actions/checkout", "actions/setup-go", "sigstore/cosign-installer", "actions/attest-build-provenance"
+		checkout, setupGo, cosign, attest = "actions/checkout", "actions/setup-go", "sigstore/cosign-installer", "actions/attest"
 		tagCheck, login, render, pull     = "Check the tag", "Log in to the registry", "Push the image and render the components YAML", "Check the image and pull it without credentials"
 		sign, verifySigned, nameImage     = "Sign the image and the release files", "Verify the signatures as a user does", "Name the image by its digest"
 		verifyAttested, publish           = "Verify the attestations as a user does", "Publish the release"
@@ -146,6 +147,9 @@ func TestTheReleaseWorkflowPullsTheImageThatTheMakefileChecks(t *testing.T) {
 		{"subject-path": "out/control-plane-components.yaml\nmetadata.yaml\n"},
 	}, withs); diff != "" {
 		t.Errorf("the inputs of the unnamed steps, in order (-want +got):\n%s", diff)
+	}
+	if diff := cmp.Diff([]map[string]string{nil, nil, nil, {"NODE_OPTIONS": "--max-http-header-size=32768"}, nil}, usesEnvs); diff != "" {
+		t.Errorf("the environments of the unnamed steps, in order (-want +got):\n%s", diff)
 	}
 	if diff := cmp.Diff(map[string]string{nameImage: "image"}, ids); diff != "" {
 		t.Errorf("the ids of the named steps, which the attestation's inputs name (-want +got):\n%s", diff)
@@ -234,30 +238,6 @@ func TestTheReleaseLogsInToTheRegistryOfTheImage(t *testing.T) {
 	}
 	if want := ` login ghcr.io --username "$GITHUB_ACTOR" --password-stdin`; !strings.HasSuffix(out, want) {
 		t.Errorf("want the login to end with %q in:\n%s", want, out)
-	}
-}
-
-func TestVerifyChecksTheImageItRenders(t *testing.T) {
-	out, stderr, err := runMake(t, "-n", "verify")
-	if err != nil {
-		t.Fatalf("%v\n%s", err, stderr)
-	}
-
-	render := strings.Index(out, "--platform=linux/amd64,linux/arm64 --push=false --tags=v0.0.0-verify")
-	check := strings.Index(out, "go run ./hack/releasecheck image --repository=ghcr.io/lodia-io/cluster-api-provider-lodia --tag=v0.0.0-verify out/control-plane-components.yaml")
-	if render < 0 || check < render {
-		t.Errorf("want the render of the components YAML with the tag, then the check of its image with the same tag; the render is at %d and the check at %d of:\n%s", render, check, out)
-	}
-}
-
-func TestVerifyRunsTheMetadataCheck(t *testing.T) {
-	out, stderr, err := runMake(t, "-n", "verify")
-	if err != nil {
-		t.Fatalf("%v\n%s", err, stderr)
-	}
-
-	if !slices.Contains(strings.Split(out, "\n"), "go run ./hack/releasecheck metadata") {
-		t.Errorf("want the metadata check as a line of its own in:\n%s", out)
 	}
 }
 

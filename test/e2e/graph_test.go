@@ -28,12 +28,17 @@ var graphKinds = []string{
 }
 
 // listGraph lists what clusterctl's GetOwnerGraph lists, on the suite's client,
-// since GetOwnerGraph builds a proxy of its own from a kubeconfig path. Lodia's
-// ControlPlane and etcd-druid's Etcd are added, since their CRDs carry no
-// clusterctl label. The cluster-scoped kinds are left out: the quick start
-// keeps them only when their names contain the Cluster's, and the suite
-// creates none.
+// since GetOwnerGraph builds a proxy of its own from a kubeconfig path. It does
+// not skip the Secrets named default-token as GetOwnerGraph does, which
+// Kubernetes no longer creates by default, and it does not add the Secrets of
+// each infrastructure provider's namespace, which GetOwnerGraph adds to those
+// of the namespace it is given. Lodia's ControlPlane and etcd-druid's Etcd are
+// added, since their CRDs carry no clusterctl label. The cluster-scoped kinds
+// are left out: the quick start keeps them only when their names contain the
+// Cluster's, and the suite creates none.
 // https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/cmd/clusterctl/client/cluster/ownergraph.go#L71-L149
+// https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/cmd/clusterctl/client/cluster/ownergraph.go#L111-L129
+// https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/cmd/clusterctl/client/cluster/ownergraph.go#L139-L144
 // https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/cmd/clusterctl/client/cluster/objectgraph.go#L346-L412
 func listGraph(ctx context.Context, c client.Reader, namespace string) ([]*unstructured.Unstructured, error) {
 	crds := &unstructured.UnstructuredList{}
@@ -66,7 +71,7 @@ func listGraph(ctx context.Context, c client.Reader, namespace string) ([]*unstr
 		for i := range list.Items {
 			obj := &list.Items[i]
 			obj.SetGroupVersionKind(kind)
-			if kind.Kind == "ConfigMap" && obj.GetName() == "kube-root-ca.crt" || kind.Kind == "Secret" && strings.Contains(obj.GetName(), "default-token") {
+			if kind.Kind == "ConfigMap" && obj.GetName() == "kube-root-ca.crt" {
 				continue
 			}
 			graph = append(graph, obj)
@@ -99,7 +104,6 @@ func TestTheGraphHoldsTheLabelledKindsOfTheNamespaceAndTheSecretsAndConfigMapsAn
 		object(extension, "e"),
 		inOtherNamespace(object(corev1.SchemeGroupVersion.WithKind("Secret"), "of-another-namespace")),
 		object(corev1.SchemeGroupVersion.WithKind("ConfigMap"), "kube-root-ca.crt"),
-		object(corev1.SchemeGroupVersion.WithKind("Secret"), "default-token-abc"),
 	)
 	graph, err := listGraph(t.Context(), q.client(), quickStartKey.Namespace)
 	if err != nil {

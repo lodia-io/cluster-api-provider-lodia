@@ -5,7 +5,6 @@ package main
 
 import (
 	"bytes"
-	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -28,7 +27,7 @@ import (
 
 const (
 	metadataFile = "metadata.yaml"
-	crdsDir      = "config/crd/bases"
+	crdsDir      = "api/crds"
 	originMain   = "refs/remotes/origin/main"
 
 	completed = "completed"
@@ -82,7 +81,14 @@ func checkTag(ctx context.Context, dir string, ci CI, tag, commit string) (strin
 	if err := requireTags(ctx, dir, tag, sha); err != nil {
 		return "", err
 	}
-	if err := requireUpgradePin(ctx, dir, ci, v, sha); err != nil {
+	published, err := publishedReleases(ctx, ci)
+	if err != nil {
+		return "", err
+	}
+	if err := requireAbovePublished(published, v); err != nil {
+		return "", err
+	}
+	if err := requireUpgradePin(ctx, dir, published, v, sha); err != nil {
 		return "", err
 	}
 	runs, err := ci.Runs(ctx, sha)
@@ -130,9 +136,16 @@ func tagsWithoutSeries(ctx context.Context, dir string, md *clusterctlv1.Metadat
 	return missing, nil
 }
 
-func requireOnMain(ctx context.Context, dir, sha string) error {
+func requireOriginMain(ctx context.Context, dir string) error {
 	if _, err := git(ctx, dir, "rev-parse", "--verify", "--quiet", originMain); err != nil {
 		return errors.New("origin/main does not exist here: fetch it first")
+	}
+	return nil
+}
+
+func requireOnMain(ctx context.Context, dir, sha string) error {
+	if err := requireOriginMain(ctx, dir); err != nil {
+		return err
 	}
 	_, err := git(ctx, dir, "merge-base", "--is-ancestor", sha, originMain)
 	if exit, ok := errors.AsType[*exec.ExitError](err); ok && exit.ExitCode() == 1 {
@@ -162,22 +175,45 @@ func requireTags(ctx context.Context, dir, tag, sha string) error {
 	return errors.Join(problems...)
 }
 
+// A published release is a release, not a tag: a run that fails leaves a tag
+// without a release, since its cleanup job deletes the draft alone.
+func publishedReleases(ctx context.Context, ci CI) ([]*version.Version, error) {
+	names, err := ci.Releases(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var published []*version.Version
+	for _, name := range names {
+		if v, err := version.ParseSemantic(name); err == nil {
+			published = append(published, v)
+		}
+	}
+	return published, nil
+}
+
+// A tag at or below a published release of its line is the tag an older commit
+// gets, and the run of a tag is its own commit's release.yml, which an older
+// commit may not have signing or attestations in.
+func requireAbovePublished(published []*version.Version, tag *version.Version) error {
+	var newest *version.Version
+	for _, v := range published {
+		if v.Major() == tag.Major() && v.Minor() == tag.Minor() && !v.LessThan(tag) && (newest == nil || v.GreaterThan(newest)) {
+			newest = v
+		}
+	}
+	if newest != nil {
+		return fmt.Errorf("v%s is published in the line %d.%d, and v%s is not above it: tag the next version of the line", newest, tag.Major(), tag.Minor(), tag)
+	}
+	return nil
+}
+
 // Every release is upgrade-tested from the one before it, so the pin of the
 // upgrade e2e at the commit has to name the newest published release below the
-// tag. A published release counts, not a tag: a run that fails leaves a tag
-// without a release, since its cleanup job deletes the draft alone.
-func requireUpgradePin(ctx context.Context, dir string, ci CI, tag *version.Version, sha string) error {
-	published, err := ci.Releases(ctx)
-	if err != nil {
-		return err
-	}
+// tag.
+func requireUpgradePin(ctx context.Context, dir string, published []*version.Version, tag *version.Version, sha string) error {
 	var newest *version.Version
-	for _, name := range published {
-		v, err := version.ParseSemantic(name)
-		if err != nil || !v.LessThan(tag) {
-			continue
-		}
-		if newest == nil || v.GreaterThan(newest) {
+	for _, v := range published {
+		if v.LessThan(tag) && (newest == nil || v.GreaterThan(newest)) {
 			newest = v
 		}
 	}
@@ -228,7 +264,7 @@ func checkMetadata(ctx context.Context, dir string) error {
 	if err != nil {
 		return fmt.Errorf("%s: %w", metadataFile, err)
 	}
-	want := newest(head.ReleaseSeries)
+	want := pin.NewestSeries(head.ReleaseSeries)
 
 	var problems []error
 	crds, err := filepath.Glob(filepath.Join(dir, crdsDir, "*.yaml"))
@@ -248,8 +284,8 @@ func checkMetadata(ctx context.Context, dir string) error {
 		}
 	}
 
-	if _, err := git(ctx, dir, "rev-parse", "--verify", "--quiet", originMain); err != nil {
-		return errors.New("origin/main does not exist here: fetch it first")
+	if err := requireOriginMain(ctx, dir); err != nil {
+		return err
 	}
 	// The merge base, not the tip: a branch that dropped nothing must not fail
 	// once main adds a series.
@@ -257,13 +293,9 @@ func checkMetadata(ctx context.Context, dir string) error {
 	if err != nil {
 		return fmt.Errorf("HEAD and origin/main have no merge base, as in a shallow clone: %w", err)
 	}
-	out, err := git(ctx, dir, "show", strings.TrimSpace(string(mergeBase))+":"+metadataFile)
+	base, err := metadataAt(ctx, dir, strings.TrimSpace(string(mergeBase)))
 	if err != nil {
-		return err
-	}
-	base, err := decodeMetadata(out)
-	if err != nil {
-		return fmt.Errorf("%s at the merge base with origin/main: %w", metadataFile, err)
+		return fmt.Errorf("the merge base with origin/main: %w", err)
 	}
 	for _, was := range base.ReleaseSeries {
 		i := slices.IndexFunc(head.ReleaseSeries, func(s clusterctlv1.ReleaseSeries) bool {
@@ -277,12 +309,6 @@ func checkMetadata(ctx context.Context, dir string) error {
 		}
 	}
 	return errors.Join(problems...)
-}
-
-func newest(series []clusterctlv1.ReleaseSeries) clusterctlv1.ReleaseSeries {
-	return slices.MaxFunc(series, func(a, b clusterctlv1.ReleaseSeries) int {
-		return cmp.Or(cmp.Compare(a.Major, b.Major), cmp.Compare(a.Minor, b.Minor))
-	})
 }
 
 func crdContract(path string) (string, error) {

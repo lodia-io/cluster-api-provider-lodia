@@ -8,9 +8,16 @@ on:
 permissions:
   contents: read
 
+# The next run of a group replaces its pending one, and release-check refuses a cancelled run, so a push to main has a group of its own.
+# https://github.com/github/docs/blob/d59b2631959db46d71ca5f7748ec04311c6d0870/data/reusables/actions/actions-group-concurrency.md?plain=1#L3-L7
+concurrency:
+  group: ci-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   verify:
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -32,8 +39,23 @@ jobs:
           fi
 
   e2e:
+    # A required status check is named by the job's name, so each target keeps the name that main's ruleset requires:
+    # https://github.com/github/docs/blob/d59b2631959db46d71ca5f7748ec04311c6d0870/content/repositories/configuring-branches-and-merges-in-your-repository/managing-rulesets/troubleshooting-rules.md?plain=1#L34-L40
+    name: ${{ matrix.target }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 74
+    timeout-minutes: ${{ matrix.timeout }}
+    strategy:
+      # A failure cancels the other targets of the matrix by default, and each target reports its own result.
+      # https://github.com/github/docs/blob/d59b2631959db46d71ca5f7748ec04311c6d0870/data/reusables/actions/jobs/section-using-a-build-matrix-for-your-jobs-failfast.md?plain=1#L3
+      fail-fast: false
+      matrix:
+        include:
+          - target: e2e
+            timeout: 74
+          - target: e2e-upgrade
+            timeout: 56
+          - target: e2e-minor
+            timeout: 57
     steps:
       - name: Free the runner's disk
         run: |
@@ -53,70 +75,10 @@ jobs:
       - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
         with:
           version: v4.3.1
-      - run: make e2e
+      - run: make ${{ matrix.target }}
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
-          name: e2e-artifacts
-          path: work/e2e/*/artifacts
-          if-no-files-found: ignore
-
-  e2e-upgrade:
-    runs-on: ubuntu-24.04
-    timeout-minutes: 56
-    steps:
-      - name: Free the runner's disk
-        run: |
-          df -h /
-          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /opt/hostedtoolcache/CodeQL
-          df -h /
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - run: make e2e-lodia
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version-file: go.mod
-          cache-dependency-path: |
-            go.sum
-            work/lodia/go.sum
-      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
-        with:
-          version: v4.3.1
-      - run: make e2e-upgrade
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        if: always()
-        with:
-          name: e2e-upgrade-artifacts
-          path: work/e2e/*/artifacts
-          if-no-files-found: ignore
-
-  e2e-minor:
-    runs-on: ubuntu-24.04
-    timeout-minutes: 57
-    steps:
-      - name: Free the runner's disk
-        run: |
-          df -h /
-          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /opt/hostedtoolcache/CodeQL
-          df -h /
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - run: make e2e-lodia
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version-file: go.mod
-          cache-dependency-path: |
-            go.sum
-            work/lodia/go.sum
-      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
-        with:
-          version: v4.3.1
-      - run: make e2e-minor
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        if: always()
-        with:
-          name: e2e-minor-artifacts
+          name: ${{ matrix.target }}-artifacts
           path: work/e2e/*/artifacts
           if-no-files-found: ignore

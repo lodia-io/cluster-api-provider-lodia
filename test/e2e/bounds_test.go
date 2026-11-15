@@ -4,7 +4,6 @@
 package e2e
 
 import (
-	"bytes"
 	"errors"
 	"fmt"
 	"go/ast"
@@ -14,6 +13,7 @@ import (
 	"io"
 	"maps"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"regexp"
@@ -27,18 +27,21 @@ import (
 	"sigs.k8s.io/yaml"
 )
 
+// suiteBounds holds what every job spends on the install and on the dump, which
+// no step waits on.
+type suiteBoundSet struct{ Install, Dump time.Duration }
+
+var suiteBounds = suiteBoundSet{Install: 15 * time.Minute, Dump: 2 * time.Minute}
+
 type boundSet struct {
-	Install, Dump                                                                                                time.Duration
 	Apply, Initialized, Endpoint, Kindnet, Running, Ready, Konnectivity, Pod, Available, Move, Unpaused, Deleted time.Duration
 	Deployed, ScaleUp, ScaleReady, ScaleAgents, ScaleDown, Rescheduled                                           time.Duration
 	Owners, OwnersPaused, OwnersRestored, Finalizers, FinalizersPaused, FinalizersRestored, Settled, Stable      time.Duration
 }
 
-// bounds holds every wait of the suite. A step's own bound has to fail before
-// go test gives up, since only the step's failure writes the artifacts.
+// bounds holds every wait of the join test. A step's own bound has to fail
+// before go test gives up, since only the step's failure writes the artifacts.
 var bounds = boundSet{
-	Install:      15 * time.Minute,
-	Dump:         2 * time.Minute,
 	Apply:        time.Minute,
 	Initialized:  4 * time.Minute,
 	Endpoint:     30 * time.Second,
@@ -142,36 +145,30 @@ var dockerCallBound = 30 * time.Second
 
 var goTestTimeout = regexp.MustCompile(`-timeout (\d+)m\b`)
 
-func targetTimeout(makefile []byte, target, tags, test string) (time.Duration, error) {
-	rules := regexp.MustCompile(`(?m)^`+regexp.QuoteMeta(target)+`:.*\n((?:\t.*(?:\n|$)|\n)*)`).FindAllSubmatch(makefile, -1)
-	if rules == nil {
-		return 0, fmt.Errorf("the Makefile has no target %s", target)
-	}
-	var lines [][]byte
-	for _, rule := range rules {
-		for line := range bytes.SplitSeq(rule[1], []byte("\n")) {
-			if bytes.Contains(line, []byte("go test")) {
-				lines = append(lines, line)
-			}
+func targetTimeout(recipe, target, tags, test string) (time.Duration, error) {
+	var lines []string
+	for line := range strings.SplitSeq(recipe, "\n") {
+		if strings.Contains(line, "go test") {
+			lines = append(lines, line)
 		}
 	}
 	if len(lines) != 1 {
 		return 0, fmt.Errorf("the %s target has %d lines that run go test, want one", target, len(lines))
 	}
-	if !bytes.Contains(lines[0], []byte(" -tags "+tags+" ")) {
+	if !strings.Contains(lines[0], " -tags "+tags+" ") {
 		return 0, fmt.Errorf("the %s target's go test does not run -tags %s: %s", target, tags, lines[0])
 	}
-	switch only := " -run '^" + test + "$$' "; {
-	case test != "" && !bytes.Contains(lines[0], []byte(only)):
+	switch only := " -run '^" + test + "$' "; {
+	case test != "" && !strings.Contains(lines[0], only):
 		return 0, fmt.Errorf("the %s target's go test does not run %s alone, as %s: %s", target, test, strings.TrimSpace(only), lines[0])
-	case test == "" && bytes.Contains(lines[0], []byte(" -run ")):
+	case test == "" && strings.Contains(lines[0], " -run "):
 		return 0, fmt.Errorf("the %s target's go test runs a selection of the tests: %s", target, lines[0])
 	}
-	found := goTestTimeout.FindSubmatch(lines[0])
+	found := goTestTimeout.FindStringSubmatch(lines[0])
 	if found == nil {
 		return 0, fmt.Errorf("the %s target's go test has no -timeout in minutes: %s", target, lines[0])
 	}
-	n, err := strconv.Atoi(string(found[1]))
+	n, err := strconv.Atoi(found[1])
 	return time.Duration(n) * time.Minute, err
 }
 
@@ -272,46 +269,34 @@ func tenantFits(requestTimeout, workerBound, dumpBound, dump time.Duration) erro
 	return nil
 }
 
+// A job is named as its target of the Makefile and its check of ci.yml. Its
+// file is the one whose tests the job compiles, and its owner the variable that
+// holds the set of bounds that the waits of that file take.
 type job struct {
-	name, target, tags, test string
-	set                      any
+	name, tags, test, file, owner string
+	set                           any
 }
 
 func (j job) bounded() time.Duration {
-	sum := total(j.set)
-	if _, ok := j.set.(boundSet); !ok {
-		sum += bounds.Install + bounds.Dump
-	}
-	return sum
+	return total(suiteBounds) + total(j.set)
 }
 
 var jobs = []job{
-	{"e2e", "e2e", "e2e", "", bounds},
-	{"e2e-upgrade", "e2e-upgrade", "e2e,upgrade", "TestTheProviderUpgradesFromThePreviousRelease", upgradeBounds},
-	{"e2e-minor", "e2e-minor", "e2e,minor", "TestAMinorStepHoldsNewWorkersUntilLodiaRunsIt", minorBounds},
+	{"e2e", "e2e", "", "join_test.go", "bounds", bounds},
+	{"e2e-upgrade", "e2e,upgrade", "TestTheProviderUpgradesFromThePreviousRelease", "upgrade_test.go", "upgradeBounds", upgradeBounds},
+	{"e2e-minor", "e2e,minor", "TestAMinorStepHoldsNewWorkersUntilLodiaRunsIt", "minor_test.go", "minorBounds", minorBounds},
 }
 
-type waitedFile struct {
-	owner   string
-	set     any
-	outside []string
-}
-
-var waitedFiles = map[string]waitedFile{
-	"join_test.go":    {"bounds", bounds, boundsOutsideTheJoinTest},
-	"upgrade_test.go": {"upgradeBounds", upgradeBounds, nil},
-	"minor_test.go":   {"minorBounds", minorBounds, nil},
-}
-
-var targetRule = regexp.MustCompile(`(?m)^([A-Za-z][\w.-]*):.*\n((?:\t.*(?:\n|$)|\n)*)`)
+var (
+	targetRule = regexp.MustCompile(`(?m)^([A-Za-z][\w.-]*(?: +[A-Za-z][\w.-]*)*) *:.*\n((?:\t.*(?:\n|$)|\n)*)`)
+	suiteRun   = regexp.MustCompile(`go test\b.*-tags (?:e2e\b|\$\(E2E_TAGS\))`)
+)
 
 func suiteTargets(makefile []byte) []string {
 	var targets []string
 	for _, rule := range targetRule.FindAllSubmatch(makefile, -1) {
-		if slices.ContainsFunc(bytes.Split(rule[2], []byte("\n")), func(line []byte) bool {
-			return bytes.Contains(line, []byte("go test")) && bytes.Contains(line, []byte("-tags e2e"))
-		}) {
-			targets = append(targets, string(rule[1]))
+		if suiteRun.Match(rule[2]) {
+			targets = append(targets, strings.Fields(string(rule[1]))...)
 		}
 	}
 	slices.Sort(targets)
@@ -333,9 +318,9 @@ func targetsMade(runs, targets []string) []string {
 
 func requireTheModelIsTheSuiteOfTheMakefileAndCI(makefile []byte, ci map[string][]string, model []job) error {
 	targets := suiteTargets(makefile)
-	var modeled []string
-	for _, j := range model {
-		modeled = append(modeled, j.target)
+	modeled := make([]string, len(model))
+	for i, j := range model {
+		modeled[i] = j.name
 	}
 	slices.Sort(modeled)
 	var errs []error
@@ -352,8 +337,8 @@ func requireTheModelIsTheSuiteOfTheMakefileAndCI(makefile []byte, ci map[string]
 		switch i := slices.IndexFunc(model, func(j job) bool { return j.name == name }); {
 		case i < 0 && len(made) > 0:
 			errs = append(errs, fmt.Errorf("the %s job of ci.yml makes %v, and the model has no job of that name", name, made))
-		case i >= 0 && !slices.Equal(made, []string{model[i].target}):
-			errs = append(errs, fmt.Errorf("the %s job of ci.yml makes %v, want make %s alone", name, made, model[i].target))
+		case i >= 0 && !slices.Equal(made, []string{name}):
+			errs = append(errs, fmt.Errorf("the %s job of ci.yml makes %v, want make %s alone", name, made, name))
 		}
 	}
 	return errors.Join(errs...)
@@ -477,9 +462,12 @@ func requireEachJobToCompileItsOwnTests(files map[string]string, model []job) er
 		case !f.declaresATest():
 		case len(f.compiled) != 1:
 			errs = append(errs, fmt.Errorf("%s declares %v, and the jobs %v compile it, want exactly one: a job that compiles another job's test runs it on its own cluster beside its own, and a test that no job compiles runs nowhere", name, f.tests, f.namesOfTheJobs()))
-		case f.compiled[0].test != "":
+		default:
+			if f.compiled[0].file != name {
+				errs = append(errs, fmt.Errorf("%s declares %v, and the %s job that compiles it names %q as its file: the checks of the waits would not read the file whose waits the job runs", name, f.tests, f.compiled[0].name, f.compiled[0].file))
+			}
 			for _, test := range f.tests {
-				if test != f.compiled[0].test {
+				if f.compiled[0].test != "" && test != f.compiled[0].test {
 					errs = append(errs, fmt.Errorf("%s declares %s, and only the %s job compiles it, which runs %s alone: the test runs nowhere, and its job passes without it", name, test, f.compiled[0].name, f.compiled[0].test))
 				}
 			}
@@ -488,28 +476,141 @@ func requireEachJobToCompileItsOwnTests(files map[string]string, model []job) er
 	return errors.Join(errs...)
 }
 
-func requireEachJobToHoldTheBoundsOfTheWaitsOfItsTests(files map[string]string, model []job, waited map[string]waitedFile) error {
-	compiled, err := testFilesCompiledBy(files, model)
-	if err != nil {
-		return err
+type workflowJob struct {
+	Name           string `json:"name"`
+	TimeoutMinutes any    `json:"timeout-minutes"`
+	Strategy       struct {
+		Matrix map[string]any `json:"matrix"`
+	} `json:"strategy"`
+	Steps []struct {
+		Run string `json:"run"`
+	} `json:"steps"`
+}
+
+type check struct {
+	timeoutMinutes int
+	runs           []string
+}
+
+var (
+	matrixValue = regexp.MustCompile(`\$\{\{\s*matrix\.([A-Za-z_][\w-]*)\s*\}\}`)
+	expression  = regexp.MustCompile(`\$\{\{`)
+)
+
+func expandMatrix(text string, entry map[string]any) (string, error) {
+	var missing []string
+	expanded := matrixValue.ReplaceAllStringFunc(text, func(found string) string {
+		key := matrixValue.FindStringSubmatch(found)[1]
+		value, ok := entry[key]
+		if !ok {
+			missing = append(missing, key)
+			return found
+		}
+		return fmt.Sprint(value)
+	})
+	switch {
+	case len(missing) > 0:
+		return "", fmt.Errorf("%q reads %v, which the matrix entry %v does not have", text, missing, entry)
+	case expression.MatchString(expanded):
+		return "", fmt.Errorf("%q has an expression that is not a value of the matrix, which the model does not read", text)
 	}
-	var errs []error
-	for _, name := range slices.Sorted(maps.Keys(compiled)) {
-		f := compiled[name]
-		w, ok := waited[name]
-		switch {
-		case !f.declaresATest():
-		case !ok:
-			errs = append(errs, fmt.Errorf("%s declares %v, and the checks of the waits hold no set of bounds for it: add it to waitedFiles", name, f.tests))
-		default:
-			for _, j := range f.compiled {
-				if !reflect.DeepEqual(j.set, w.set) {
-					errs = append(errs, fmt.Errorf("the %s job adds up %v, and the waits of %s, which holds its test, are held to %s, %v: the model would not count what the job waits for", j.name, j.set, name, w.owner, w.set))
-				}
-			}
+	return expanded, nil
+}
+
+func expandJob(id string, j workflowJob, entry map[string]any) (string, check, error) {
+	name := id
+	var c check
+	var err error
+	if j.Name != "" {
+		if name, err = expandMatrix(j.Name, entry); err != nil {
+			return "", c, err
 		}
 	}
-	return errors.Join(errs...)
+	if j.TimeoutMinutes != nil {
+		minutes, err := expandMatrix(fmt.Sprint(j.TimeoutMinutes), entry)
+		if err != nil {
+			return "", c, err
+		}
+		if c.timeoutMinutes, err = strconv.Atoi(minutes); err != nil {
+			return "", c, fmt.Errorf("the check %s has the timeout-minutes %q: %w", name, minutes, err)
+		}
+	}
+	for _, step := range j.Steps {
+		run, err := expandMatrix(step.Run, entry)
+		if err != nil {
+			return "", c, err
+		}
+		c.runs = append(c.runs, run)
+	}
+	return name, c, nil
+}
+
+func checksOf(workflow []byte) (map[string]check, error) {
+	var ci struct {
+		Jobs map[string]workflowJob `json:"jobs"`
+	}
+	if err := yaml.Unmarshal(workflow, &ci); err != nil {
+		return nil, err
+	}
+	checks := make(map[string]check, len(ci.Jobs))
+	for _, id := range slices.Sorted(maps.Keys(ci.Jobs)) {
+		j := ci.Jobs[id]
+		entries := []map[string]any{{}}
+		if j.Strategy.Matrix != nil {
+			include, _ := j.Strategy.Matrix["include"].([]any)
+			if len(j.Strategy.Matrix) != 1 || len(include) == 0 {
+				return nil, fmt.Errorf("the %s job has a matrix that is not an include list alone, which the model does not read", id)
+			}
+			if j.Name == "" {
+				return nil, fmt.Errorf("the %s job has a matrix and no name: GitHub names its checks by its id and the values of each entry, and the ruleset of main requires exact names", id)
+			}
+			entries = nil
+			for _, item := range include {
+				entry, _ := item.(map[string]any)
+				entries = append(entries, entry)
+			}
+		}
+		for _, entry := range entries {
+			name, c, err := expandJob(id, j, entry)
+			if err != nil {
+				return nil, err
+			}
+			if _, ok := checks[name]; ok {
+				return nil, fmt.Errorf("two checks of ci.yml are named %s: a ruleset that requires the name cannot tell them apart", name)
+			}
+			checks[name] = c
+		}
+	}
+	return checks, nil
+}
+
+func targetRecipe(t *testing.T, target string) string {
+	t.Helper()
+	cmd := exec.CommandContext(t.Context(), "make", "--no-print-directory", target)
+	cmd.Dir = root
+	return recipeOf(t, cmd)
+}
+
+func goTestOf(recipe string) string {
+	for line := range strings.SplitSeq(recipe, "\n") {
+		if strings.Contains(line, "go test") {
+			return strings.TrimSpace(line)
+		}
+	}
+	return recipe
+}
+
+func TestNoTargetOfTheSuiteTakesItsSelectionOfTestsFromTheEnvironment(t *testing.T) {
+	for _, j := range jobs {
+		t.Run(j.name, func(t *testing.T) {
+			cmd := exec.CommandContext(t.Context(), "make", "--no-print-directory", j.name)
+			cmd.Dir = root
+			cmd.Env = append(os.Environ(), "E2E_RUN=-run TestOfTheEnvironment")
+			if got, want := recipeOf(t, cmd), targetRecipe(t, j.name); got != want {
+				t.Errorf("an E2E_RUN in the environment changes what %s runs, to\n%s\nwant\n%s", j.name, goTestOf(got), goTestOf(want))
+			}
+		})
+	}
 }
 
 func TestTheBoundsFitUnderTheTimeouts(t *testing.T) {
@@ -521,22 +622,13 @@ func TestTheBoundsFitUnderTheTimeouts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var ci struct {
-		Jobs map[string]struct {
-			TimeoutMinutes int `json:"timeout-minutes"`
-			Steps          []struct {
-				Run string `json:"run"`
-			} `json:"steps"`
-		} `json:"jobs"`
-	}
-	if err := yaml.Unmarshal(workflow, &ci); err != nil {
+	checks, err := checksOf(workflow)
+	if err != nil {
 		t.Fatal(err)
 	}
-	runs := make(map[string][]string, len(ci.Jobs))
-	for name, j := range ci.Jobs {
-		for _, step := range j.Steps {
-			runs[name] = append(runs[name], step.Run)
-		}
+	runs := make(map[string][]string, len(checks))
+	for name, c := range checks {
+		runs[name] = c.runs
 	}
 	if err := requireTheModelIsTheSuiteOfTheMakefileAndCI(makefile, runs, jobs); err != nil {
 		t.Fatal(err)
@@ -548,25 +640,22 @@ func TestTheBoundsFitUnderTheTimeouts(t *testing.T) {
 	if err := requireEachJobToCompileItsOwnTests(files, jobs); err != nil {
 		t.Fatal(err)
 	}
-	if err := requireEachJobToHoldTheBoundsOfTheWaitsOfItsTests(files, jobs, waitedFiles); err != nil {
-		t.Fatal(err)
-	}
 	for _, j := range jobs {
 		t.Run(j.name, func(t *testing.T) {
-			timeout, err := targetTimeout(makefile, j.target, j.tags, j.test)
+			timeout, err := targetTimeout(targetRecipe(t, j.name), j.name, j.tags, j.test)
 			if err != nil {
 				t.Fatal(err)
 			}
-			limit := ci.Jobs[j.name]
-			if limit.TimeoutMinutes == 0 {
+			limit := checks[j.name]
+			if limit.timeoutMinutes == 0 {
 				t.Fatalf("the %s job has no timeout-minutes", j.name)
 			}
-			if err := fits(j.bounded(), timeout, time.Duration(limit.TimeoutMinutes)*time.Minute); err != nil {
+			if err := fits(j.bounded(), timeout, time.Duration(limit.timeoutMinutes)*time.Minute); err != nil {
 				t.Fatal(err)
 			}
 		})
 	}
-	if err := tenantFits(tenantRequestTimeout, workerDumpBound, tenantDumpBound, bounds.Dump); err != nil {
+	if err := tenantFits(tenantRequestTimeout, workerDumpBound, tenantDumpBound, suiteBounds.Dump); err != nil {
 		t.Fatal(err)
 	}
 	if err := requestFits("the dump's", dumpRequestTimeout, 3); err != nil {
@@ -586,92 +675,76 @@ func TestTheBoundsFitUnderTheTimeouts(t *testing.T) {
 	}
 }
 
-const makeVerifyWithAVersionSetupEnvtestRejects = `if make verify ENVTEST_K8S_VERSION=` + versionSetupEnvtestRejects + `; then
-  echo "make verify exited 0 with a version that setup-envtest rejects: the Makefile makes make go on past a failed line, or its test rule does not take ENVTEST_K8S_VERSION, so make verify passes whatever setup-envtest and the tests do"
-  exit 1
-fi
-`
-
-func requireTheVerifyJobToRunMakeVerifyWithAVersionSetupEnvtestRejectsAfterMakeVerify(steps []map[string]any) error {
-	verify := slices.IndexFunc(steps, func(step map[string]any) bool {
-		run, _ := step["run"].(string)
-		return strings.TrimSpace(run) == "make verify"
-	})
-	if verify < 0 {
-		return errors.New("the verify job has no step that runs make verify")
-	}
-	check := slices.IndexFunc(steps, func(step map[string]any) bool { return step["run"] == makeVerifyWithAVersionSetupEnvtestRejects })
-	switch {
-	case check < 0:
-		return errors.New("the verify job has no step whose run is the script that fails the job when make verify exits 0 with a version that setup-envtest rejects: a Makefile that makes make ignore the failure of setup-envtest would pass make verify")
-	case check < verify:
-		return errors.New("the step of the verify job that runs make verify with a version that setup-envtest rejects comes before make verify, and has to follow it")
-	}
-	for _, key := range slices.Sorted(maps.Keys(steps[check])) {
-		if key != "name" && key != "run" {
-			return fmt.Errorf("the step of the verify job that runs make verify with a version that setup-envtest rejects has %s, and may have only a name and a run: the job would pass without the step failing it", key)
+func problemsWithTheSetsOfTheJobs(fset *token.FileSet, file *ast.File) []string {
+	var problems []string
+	var found bool
+	for n := range ast.Preorder(file) {
+		spec, ok := n.(*ast.ValueSpec)
+		if !ok || len(spec.Names) != 1 || spec.Names[0].Name != "jobs" || len(spec.Values) != 1 {
+			continue
+		}
+		table, ok := spec.Values[0].(*ast.CompositeLit)
+		if !ok {
+			continue
+		}
+		found = true
+		for _, row := range table.Elts {
+			lit, ok := row.(*ast.CompositeLit)
+			if !ok || len(lit.Elts) != 6 {
+				problems = append(problems, problemAt(fset, row, "a job that is not written with its six fields in order, whose set and owner the check cannot read"))
+				continue
+			}
+			owner, _ := lit.Elts[4].(*ast.BasicLit)
+			set, _ := lit.Elts[5].(*ast.Ident)
+			if owner == nil || set == nil || owner.Kind != token.STRING || owner.Value != strconv.Quote(set.Name) {
+				problems = append(problems, problemAt(fset, lit.Elts[5], "the set of a job is not the variable that its owner names, so the model would sum bounds that its waits do not take"))
+			}
 		}
 	}
-	return nil
+	if !found {
+		problems = append(problems, "the check found no literal of jobs")
+	}
+	return problems
 }
 
-func TestTheVerifyJobRunsMakeVerifyWithAVersionSetupEnvtestRejectsAfterMakeVerify(t *testing.T) {
-	workflow, err := os.ReadFile("../../.github/workflows/ci.yml")
+func TestEveryJobHoldsTheSetItsOwnerNames(t *testing.T) {
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, "bounds_test.go", nil, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
-	var ci struct {
-		Jobs map[string]struct {
-			Steps []map[string]any `json:"steps"`
-		} `json:"jobs"`
-	}
-	if err := yaml.Unmarshal(workflow, &ci); err != nil {
-		t.Fatal(err)
-	}
-	if err := requireTheVerifyJobToRunMakeVerifyWithAVersionSetupEnvtestRejectsAfterMakeVerify(ci.Jobs["verify"].Steps); err != nil {
-		t.Fatal(err)
+	for _, problem := range problemsWithTheSetsOfTheJobs(fset, file) {
+		t.Error(problem)
 	}
 }
 
-func TestAVerifyJobThatDoesNotRunMakeVerifyWithAVersionSetupEnvtestRejectsAfterMakeVerifyIsRefused(t *testing.T) {
-	run := func(script string) map[string]any { return map[string]any{"run": script} }
-	with := func(key string, value any) map[string]any {
-		return map[string]any{"run": makeVerifyWithAVersionSetupEnvtestRejects, key: value}
-	}
-	checkout := map[string]any{"uses": "actions/checkout"}
-	verify := run("make verify")
-	check := run(makeVerifyWithAVersionSetupEnvtestRejects)
+func TestTheCheckOfTheSetsOfTheJobsRefusesASetThatIsNotItsOwners(t *testing.T) {
+	const refused = "not the variable that its owner names"
 	cases := []struct {
-		name  string
-		steps []map[string]any
-		want  string
+		name, source, want string
 	}{
-		{"the check right after make verify", []map[string]any{checkout, verify, check}, ""},
-		{"the check after another step", []map[string]any{verify, run("echo done"), check}, ""},
-		{"make verify with a newline", []map[string]any{run("make verify\n"), check}, ""},
-		{"the check with a name", []map[string]any{verify, with("name", "Check")}, ""},
-		{"no check", []map[string]any{checkout, verify}, "has no step whose run is"},
-		{"make test with the Makefile's own version", []map[string]any{verify, run("make test")}, "has no step whose run is"},
-		{"make test with the version that setup-envtest rejects", []map[string]any{verify, run("make test ENVTEST_K8S_VERSION=" + versionSetupEnvtestRejects)}, "has no step whose run is"},
-		{"make verify with the Makefile's own version", []map[string]any{verify, run("make verify")}, "has no step whose run is"},
-		{"a check whose failure is swallowed", []map[string]any{verify, run("make verify ENVTEST_K8S_VERSION=" + versionSetupEnvtestRejects + " || true")}, "has no step whose run is"},
-		{"a check that never exits 1", []map[string]any{verify, run(strings.Replace(makeVerifyWithAVersionSetupEnvtestRejects, "  exit 1\n", "", 1))}, "has no step whose run is"},
-		{"a check that continues on error", []map[string]any{verify, with("continue-on-error", true)}, "has continue-on-error"},
-		{"a check with a condition", []map[string]any{verify, with("if", false)}, "has if"},
-		{"a check with another shell", []map[string]any{verify, with("shell", "sh {0}")}, "has shell"},
-		{"a check with an environment", []map[string]any{verify, with("env", map[string]any{"MAKEFLAGS": "-i"})}, "has env"},
-		{"the check before make verify", []map[string]any{check, verify}, "comes before make verify"},
-		{"no make verify", []map[string]any{check}, "has no step that runs make verify"},
-		{"no steps", nil, "has no step that runs make verify"},
+		{"every set its owner's", "var jobs = []job{\n{\"e2e\", \"e2e\", \"\", \"join_test.go\", \"bounds\", bounds},\n{\"e2e-minor\", \"e2e,minor\", \"T\", \"minor_test.go\", \"minorBounds\", minorBounds},\n}", ""},
+		{"the set of another job", "var jobs = []job{\n{\"e2e-minor\", \"e2e,minor\", \"T\", \"minor_test.go\", \"minorBounds\", upgradeBounds},\n}", refused},
+		{"a literal of the set", "var jobs = []job{\n{\"e2e-minor\", \"e2e,minor\", \"T\", \"minor_test.go\", \"minorBounds\", minorBoundSet{time.Second}},\n}", refused},
+		{"a field of another set", "var jobs = []job{\n{\"e2e-minor\", \"e2e,minor\", \"T\", \"minor_test.go\", \"minorBounds\", other.minorBounds},\n}", refused},
+		{"an owner that is no string", "var jobs = []job{\n{\"e2e-minor\", \"e2e,minor\", \"T\", \"minor_test.go\", minorBounds, minorBounds},\n}", refused},
+		{"a row of fewer fields", "var jobs = []job{\n{\"e2e-minor\", minorBounds},\n}", "six fields"},
+		{"a row that is not a literal", "var jobs = []job{\nminor,\n}", "six fields"},
+		{"no table", "var other = []job{}", "no literal of jobs"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			err := requireTheVerifyJobToRunMakeVerifyWithAVersionSetupEnvtestRejectsAfterMakeVerify(c.steps)
+			fset := token.NewFileSet()
+			file, err := parser.ParseFile(fset, "x.go", "package p\n"+c.source+"\n", 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			problems := strings.Join(problemsWithTheSetsOfTheJobs(fset, file), "\n")
 			switch {
-			case c.want == "" && err != nil:
-				t.Fatalf("want accepted, got %v", err)
-			case c.want != "" && (err == nil || !strings.Contains(err.Error(), c.want)):
-				t.Fatalf("want an error with %q, got %v", c.want, err)
+			case c.want == "" && problems != "":
+				t.Fatalf("want accepted, got %s", problems)
+			case c.want != "" && !strings.Contains(problems, c.want):
+				t.Fatalf("want a problem with %q, got %q", c.want, problems)
 			}
 		})
 	}
@@ -722,7 +795,7 @@ func TestALintThatLacksTheTagsOfAJobIsRefused(t *testing.T) {
 }
 
 func TestTotalAddsEveryBound(t *testing.T) {
-	for name, b := range map[string]any{"the join test's": &boundSet{}, "the upgrade test's": &upgradeBoundSet{}} {
+	for name, b := range map[string]any{"the suite's": &suiteBoundSet{}, "the join test's": &boundSet{}, "the upgrade test's": &upgradeBoundSet{}} {
 		t.Run(name, func(t *testing.T) {
 			var want time.Duration
 			fields := reflect.ValueOf(b).Elem()
@@ -738,16 +811,16 @@ func TestTotalAddsEveryBound(t *testing.T) {
 	}
 }
 
-func TestAJobAddsTheInstallAndTheDumpToTheBoundsOfAnySetButTheJoinTests(t *testing.T) {
+func TestAJobAddsTheInstallAndTheDumpToTheBoundsOfItsSet(t *testing.T) {
 	const minute = time.Minute
 	cases := []struct {
 		name string
 		job  job
 		want time.Duration
 	}{
-		{"the join test's set, which holds them", job{set: boundSet{Install: 3 * minute, Dump: 2 * minute, Apply: 4 * minute}}, 9 * minute},
-		{"the upgrade test's set", job{set: upgradeBoundSet{Apply: 4 * minute, Upgrade: 5 * minute}}, 9*minute + bounds.Install + bounds.Dump},
-		{"the minor test's set", job{set: minorBoundSet{Apply: 4 * minute, Stepped: 5 * minute}}, 9*minute + bounds.Install + bounds.Dump},
+		{"the join test's set", job{set: boundSet{Apply: 4 * minute, Stable: 5 * minute}}, 9*minute + suiteBounds.Install + suiteBounds.Dump},
+		{"the upgrade test's set", job{set: upgradeBoundSet{Apply: 4 * minute, Upgrade: 5 * minute}}, 9*minute + suiteBounds.Install + suiteBounds.Dump},
+		{"the minor test's set", job{set: minorBoundSet{Apply: 4 * minute, Stepped: 5 * minute}}, 9*minute + suiteBounds.Install + suiteBounds.Dump},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -933,43 +1006,34 @@ func TestTenantTimesThatDoNotFitAreRefused(t *testing.T) {
 	}
 }
 
-func TestTheTimeoutIsTheOneOfTheTargetThatRunsTheTestsOfTheJob(t *testing.T) {
+func TestTheTimeoutIsTheOneOfTheRecipeThatRunsTheTestsOfTheJob(t *testing.T) {
 	const (
-		suite   = "\tgo test -v -tags e2e -count=1 -timeout 64m ./test/e2e/...; status=$$?; \\\n"
-		upgrade = "\tgo test -v -tags e2e,upgrade -count=1 -timeout 46m -run '^TestUpgrade$$' ./test/e2e/...; status=$$?; \\\n"
+		cleanup = "docker ps --all --quiet --filter label=io.x-k8s.kind.cluster=capl-e2e-w | xargs -r docker rm --force --volumes && E2E_KUBECONFIG=/work/e2e/capl-e2e/kubeconfig "
+		suite   = cleanup + "go test -v -tags e2e -count=1 -timeout 64m  ./test/e2e/...; status=$?; \\\n"
+		upgrade = cleanup + "go test -v -tags e2e,upgrade -count=1 -timeout 46m -run '^TestUpgrade$' ./test/e2e/...; status=$?; \\\n"
+		other   = "mkdir -p /work/e2e/capl-e2e\nrm -rf /work/e2e/capl-e2e/artifacts\n"
 	)
 	cases := []struct {
-		name, makefile, target, tags string
-		want                         time.Duration
-		failure                      string
+		name, recipe, target, tags string
+		want                       time.Duration
+		failure                    string
 	}{
-		{"the e2e target's alone", "e2e:\n" + suite, "e2e", "e2e", 64 * time.Minute, ""},
-		{"a target before it with a longer timeout", "test:\n\tgo test -timeout 99m ./...\ne2e:\n" + suite, "e2e", "e2e", 64 * time.Minute, ""},
-		{"a target before it with a shorter timeout", "test:\n\tgo test -timeout 5m ./...\ne2e:\n" + suite, "e2e", "e2e", 64 * time.Minute, ""},
-		{"a target after it with a timeout", "e2e:\n" + suite + "test:\n\tgo test -timeout 99m ./...\n", "e2e", "e2e", 64 * time.Minute, ""},
-		{"the flags in another order", "e2e:\n\tgo test -timeout 30m -tags e2e ./test/e2e/...\n", "e2e", "e2e", 30 * time.Minute, ""},
-		{"the last line without a newline", "e2e:\n\tgo test -tags e2e -timeout 30m ./test/e2e/...", "e2e", "e2e", 30 * time.Minute, ""},
-		{"a variable of the target before its rule", "e2e-upgrade: E2E_CLUSTER = x\ne2e-upgrade: e2e-cluster\n" + upgrade, "e2e-upgrade", "e2e,upgrade", 46 * time.Minute, ""},
-		{"a variable of the target after its rule", "e2e-upgrade: e2e-cluster\n" + upgrade + "e2e-upgrade: E2E_CLUSTER = x\n", "e2e-upgrade", "e2e,upgrade", 46 * time.Minute, ""},
-		{"a comment that mentions the target", "# the e2e: target\ntest:\n\tgo test -timeout 5m -tags e2e ./...\ne2e:\n" + suite, "e2e", "e2e", 64 * time.Minute, ""},
-		{"a target with prerequisites and a comment", "e2e: e2e-cluster ## the suite\n" + suite, "e2e", "e2e", 64 * time.Minute, ""},
-		{"a blank line inside the recipe", "e2e:\n\techo a\n\n" + suite, "e2e", "e2e", 64 * time.Minute, ""},
-		{"the upgrade target after the e2e's", "e2e:\n" + suite + "e2e-upgrade:\n" + upgrade, "e2e-upgrade", "e2e,upgrade", 46 * time.Minute, ""},
-		{"the e2e target before the upgrade's", "e2e:\n" + suite + "e2e-upgrade:\n" + upgrade, "e2e", "e2e", 64 * time.Minute, ""},
-		{"the upgrade target before the e2e's", "e2e-upgrade:\n" + upgrade + "e2e:\n" + suite, "e2e", "e2e", 64 * time.Minute, ""},
-		{"the upgrade's tags in the e2e target", "e2e:\n" + upgrade, "e2e", "e2e", 0, "does not run -tags e2e"},
-		{"the e2e's tags in the upgrade target", "e2e-upgrade:\n" + suite, "e2e-upgrade", "e2e,upgrade", 0, "does not run -tags e2e,upgrade"},
-		{"no timeout", "e2e:\n\tgo test -tags e2e ./test/e2e/...\n", "e2e", "e2e", 0, "no -timeout in minutes"},
-		{"a timeout in seconds", "e2e:\n\tgo test -tags e2e -timeout 3600s ./test/e2e/...\n", "e2e", "e2e", 0, "no -timeout in minutes"},
-		{"no target", "test:\n\tgo test ./...\n", "e2e", "e2e", 0, "no target e2e"},
-		{"a target of a longer name only", "e2e-upgrade:\n" + upgrade, "e2e", "e2e", 0, "no target e2e"},
-		{"the upgrade target that runs every test", "e2e-upgrade:\n\tgo test -v -tags e2e,upgrade -count=1 -timeout 46m ./test/e2e/...\n", "e2e-upgrade", "e2e,upgrade", 0, "does not run TestUpgrade alone"},
-		{"the upgrade target that runs another test", "e2e-upgrade:\n\tgo test -v -tags e2e,upgrade -count=1 -timeout 46m -run '^TestOther$$' ./test/e2e/...\n", "e2e-upgrade", "e2e,upgrade", 0, "does not run TestUpgrade alone"},
-		{"the upgrade target that runs the tests of a prefix", "e2e-upgrade:\n\tgo test -v -tags e2e,upgrade -count=1 -timeout 46m -run 'TestUpgrade' ./test/e2e/...\n", "e2e-upgrade", "e2e,upgrade", 0, "does not run TestUpgrade alone"},
-		{"the e2e target that runs a selection of the tests", "e2e:\n\tgo test -v -tags e2e -count=1 -timeout 64m -run TestOther ./test/e2e/...\n", "e2e", "e2e", 0, "runs a selection of the tests"},
-		{"no line for the suite", "e2e:\n\techo a\n", "e2e", "e2e", 0, "0 lines"},
-		{"two lines for the suite", "e2e:\n" + suite + suite, "e2e", "e2e", 0, "2 lines"},
-		{"a line of another target is not the target's", "e2e:\n\techo a\ntest:\n" + suite, "e2e", "e2e", 0, "0 lines"},
+		{"the e2e recipe", suite, "e2e", "e2e", 64 * time.Minute, ""},
+		{"the upgrade recipe", upgrade, "e2e-upgrade", "e2e,upgrade", 46 * time.Minute, ""},
+		{"lines before and after the one that runs go test", other + suite + "\tgo tool kind delete cluster --name capl-e2e; exit $status\n", "e2e", "e2e", 64 * time.Minute, ""},
+		{"the flags in another order", "go test -timeout 30m -tags e2e ./test/e2e/...\n", "e2e", "e2e", 30 * time.Minute, ""},
+		{"the last line without a newline", "go test -tags e2e -timeout 30m ./test/e2e/...", "e2e", "e2e", 30 * time.Minute, ""},
+		{"the upgrade's tags in the e2e recipe", upgrade, "e2e", "e2e", 0, "does not run -tags e2e"},
+		{"the e2e's tags in the upgrade recipe", suite, "e2e-upgrade", "e2e,upgrade", 0, "does not run -tags e2e,upgrade"},
+		{"no tags", "go test -timeout 30m ./test/e2e/...\n", "e2e", "e2e", 0, "does not run -tags e2e"},
+		{"no timeout", "go test -tags e2e ./test/e2e/...\n", "e2e", "e2e", 0, "no -timeout in minutes"},
+		{"a timeout in seconds", "go test -tags e2e -timeout 3600s ./test/e2e/...\n", "e2e", "e2e", 0, "no -timeout in minutes"},
+		{"the upgrade recipe that runs every test", "go test -v -tags e2e,upgrade -count=1 -timeout 46m  ./test/e2e/...\n", "e2e-upgrade", "e2e,upgrade", 0, "does not run TestUpgrade alone"},
+		{"the upgrade recipe that runs another test", "go test -v -tags e2e,upgrade -count=1 -timeout 46m -run '^TestOther$' ./test/e2e/...\n", "e2e-upgrade", "e2e,upgrade", 0, "does not run TestUpgrade alone"},
+		{"the upgrade recipe that runs the tests of a prefix", "go test -v -tags e2e,upgrade -count=1 -timeout 46m -run 'TestUpgrade' ./test/e2e/...\n", "e2e-upgrade", "e2e,upgrade", 0, "does not run TestUpgrade alone"},
+		{"the e2e recipe that runs a selection of the tests", "go test -v -tags e2e -count=1 -timeout 64m -run TestOther ./test/e2e/...\n", "e2e", "e2e", 0, "runs a selection of the tests"},
+		{"no line for the suite", other, "e2e", "e2e", 0, "0 lines"},
+		{"two lines for the suite", suite + suite, "e2e", "e2e", 0, "2 lines"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -977,7 +1041,7 @@ func TestTheTimeoutIsTheOneOfTheTargetThatRunsTheTestsOfTheJob(t *testing.T) {
 			if c.tags == "e2e,upgrade" {
 				test = "TestUpgrade"
 			}
-			got, err := targetTimeout([]byte(c.makefile), c.target, c.tags, test)
+			got, err := targetTimeout(c.recipe, c.target, c.tags, test)
 			switch {
 			case c.failure == "" && err != nil:
 				t.Fatalf("want accepted, got %v", err)
@@ -992,12 +1056,11 @@ func TestTheTimeoutIsTheOneOfTheTargetThatRunsTheTestsOfTheJob(t *testing.T) {
 
 func TestTheModelHoldsEveryTargetThatRunsTheSuiteAndEveryJobThatMakesOne(t *testing.T) {
 	const (
-		suite   = "\tgo test -v -tags e2e -count=1 -timeout 64m ./test/e2e/...; status=$$?; \\\n"
-		upgrade = "\tgo test -v -tags e2e,upgrade -count=1 -timeout 46m -run '^TestUpgrade$$' ./test/e2e/...; status=$$?; \\\n"
-		both    = ".PHONY: e2e\ne2e: e2e-cluster ## the suite\n\t$(MAKE) e2e-lodia\n" + suite + "\ne2e-upgrade: E2E_CLUSTER = x\ne2e-upgrade: e2e-cluster\n" + upgrade + "\nverify:\n\tgo test ./...\n"
-		again   = "e2e-again:\n\tgo test -v -tags e2e -count=1 -timeout 200m ./test/e2e/...\n"
+		suite = "\tgo test -v -tags $(E2E_TAGS) -count=1 -timeout $(E2E_TIMEOUT) $(E2E_RUN) ./test/e2e/...; status=$$?; \\\n"
+		both  = "e2e: E2E_TAGS = e2e\ne2e-upgrade: E2E_TAGS = e2e,upgrade\n\n.PHONY: e2e e2e-upgrade\ne2e e2e-upgrade: e2e-cluster ## the suite\n\t$(MAKE) e2e-lodia\n" + suite + "\nverify:\n\tgo test ./...\n"
+		again = "e2e-again:\n\tgo test -v -tags e2e -count=1 -timeout 200m ./test/e2e/...\n"
 	)
-	model := []job{{name: "e2e", target: "e2e"}, {name: "e2e-upgrade", target: "e2e-upgrade"}}
+	model := []job{{name: "e2e"}, {name: "e2e-upgrade"}}
 	ok := map[string][]string{"verify": {"make verify"}, "e2e": {"", "make e2e-lodia", "make e2e"}, "e2e-upgrade": {"make e2e-lodia\nmake e2e-upgrade\n"}}
 	with := func(name string, runs ...string) map[string][]string {
 		jobs := maps.Clone(ok)
@@ -1016,12 +1079,14 @@ func TestTheModelHoldsEveryTargetThatRunsTheSuiteAndEveryJobThatMakesOne(t *test
 		want           string
 	}{
 		{"the targets and jobs as they are", both, ok, model, ""},
+		{"targets with a rule each", strings.Replace(strings.Replace(both, "e2e e2e-upgrade: e2e-cluster", "e2e: e2e-cluster", 1), "\nverify:", "e2e-upgrade: e2e-cluster\n"+suite+"\nverify:", 1), ok, model, ""},
 		{"a job that makes its target with a flag", both, with("e2e", "make --no-print-directory e2e"), model, ""},
 		{"a job that makes its target and something else in one step", both, with("e2e", "make e2e-lodia && make e2e"), model, ""},
 		{"a job that makes its target after a semicolon with no space", both, with("e2e", "echo start;make e2e"), model, ""},
 		{"a job that is not the model's and makes no target of the suite", both, with("lint", "make lint"), model, ""},
 		{"a target that runs the suite and has no job in the model", both + again, ok, model, "each target that runs the suite needs a job"},
 		{"a target that runs the suite and has no job in the model, with a job of ci.yml for it", both + again, with("e2e-again", "make e2e-again"), model, "each target that runs the suite needs a job"},
+		{"a target of the rule that the suite's recipe serves and has no job in the model", strings.Replace(both, "e2e e2e-upgrade: e2e-cluster", "e2e e2e-upgrade e2e-again: e2e-cluster", 1), ok, model, "each target that runs the suite needs a job"},
 		{"a job of the model that has no target", "e2e:\n" + suite, ok, model, "each target that runs the suite needs a job"},
 		{"a job of the model that ci.yml lacks", both, without("e2e-upgrade"), model, "ci.yml has no job e2e-upgrade"},
 		{"the upgrade job missing from the model", both, ok, model[:1], "each target that runs the suite needs a job"},
@@ -1041,6 +1106,53 @@ func TestTheModelHoldsEveryTargetThatRunsTheSuiteAndEveryJobThatMakesOne(t *test
 				t.Fatalf("want accepted, got %v", err)
 			case c.want != "" && (err == nil || !strings.Contains(err.Error(), c.want)):
 				t.Fatalf("want an error with %q, got %v", c.want, err)
+			}
+		})
+	}
+}
+
+func TestTheChecksOfCIAreTheNamesOfItsJobsAndOfTheEntriesOfItsMatrix(t *testing.T) {
+	const (
+		verify = "  verify:\n    timeout-minutes: 30\n    steps:\n      - run: make verify\n"
+		suite  = "  e2e:\n    name: ${{ matrix.target }}\n    timeout-minutes: ${{ matrix.timeout }}\n    strategy:\n      fail-fast: false\n      matrix:\n        include:\n          - target: e2e\n            timeout: 74\n          - target: e2e-upgrade\n            timeout: 56\n    steps:\n      - run: make e2e-lodia\n      - run: make ${{ matrix.target }}\n"
+	)
+	workflow := func(jobs ...string) string { return "jobs:\n" + strings.Join(jobs, "") }
+	inSuite := func(old, replacement string) string { return strings.Replace(suite, old, replacement, 1) }
+	cases := []struct {
+		name, workflow string
+		want           map[string]check
+		failure        string
+	}{
+		{"a job and the entries of a matrix", workflow(verify, suite), map[string]check{
+			"verify":      {30, []string{"make verify"}},
+			"e2e":         {74, []string{"make e2e-lodia", "make e2e"}},
+			"e2e-upgrade": {56, []string{"make e2e-lodia", "make e2e-upgrade"}},
+		}, ""},
+		{"a job with no timeout", workflow(strings.Replace(verify, "    timeout-minutes: 30\n", "", 1)), map[string]check{"verify": {0, []string{"make verify"}}}, ""},
+		{"a timeout written in the entry", workflow(inSuite("timeout-minutes: ${{ matrix.timeout }}", "timeout-minutes: 80")), map[string]check{
+			"e2e":         {80, []string{"make e2e-lodia", "make e2e"}},
+			"e2e-upgrade": {80, []string{"make e2e-lodia", "make e2e-upgrade"}},
+		}, ""},
+		{"two entries of one target", workflow(inSuite("target: e2e-upgrade", "target: e2e")), nil, "two checks of ci.yml are named e2e"},
+		{"a name that is the id of another job", workflow(strings.Replace(verify, "  verify:\n", "  other:\n    name: e2e\n", 1), suite), nil, "two checks of ci.yml are named e2e"},
+		{"a matrix and no name", workflow(inSuite("    name: ${{ matrix.target }}\n", "")), nil, "has a matrix and no name"},
+		{"a name from a value that an entry lacks", workflow(inSuite("name: ${{ matrix.target }}", "name: ${{ matrix.suite }}")), nil, "does not have"},
+		{"a step that reads another context", workflow(inSuite("make ${{ matrix.target }}", "make ${{ github.job }}")), nil, "not a value of the matrix"},
+		{"a name that reads another context", workflow(inSuite("name: ${{ matrix.target }}", "name: ${{ github.job }}")), nil, "not a value of the matrix"},
+		{"a dimension beside the include list", workflow(inSuite("        include:", "        os: [a]\n        include:")), nil, "not an include list alone"},
+		{"a matrix with no entry", workflow(inSuite("        include:\n          - target: e2e\n            timeout: 74\n          - target: e2e-upgrade\n            timeout: 56\n", "        include: []\n")), nil, "not an include list alone"},
+		{"a timeout that is not a number", workflow(inSuite("timeout: 74", "timeout: soon")), nil, "has the timeout-minutes"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got, err := checksOf([]byte(c.workflow))
+			switch {
+			case c.failure == "" && err != nil:
+				t.Fatalf("want accepted, got %v", err)
+			case c.failure != "" && (err == nil || !strings.Contains(err.Error(), c.failure)):
+				t.Fatalf("want an error with %q, got %v", c.failure, err)
+			case c.failure == "" && !reflect.DeepEqual(got, c.want):
+				t.Errorf("got %+v, want %+v", got, c.want)
 			}
 		})
 	}
@@ -1072,13 +1184,20 @@ func testFilesOfTheSuite() map[string]string {
 
 func TestEachJobIsHeldToTheTestsOfTheFilesItsBuildTagsCompile(t *testing.T) {
 	source := sourceOfATestFile
-	model := []job{{name: "e2e", tags: "e2e"}, {name: "e2e-upgrade", tags: "e2e,upgrade", test: "TestUpgrade"}, {name: "e2e-minor", tags: "e2e,minor", test: "TestMinor"}}
+	model := []job{
+		{name: "e2e", tags: "e2e", file: "join_test.go"},
+		{name: "e2e-upgrade", tags: "e2e,upgrade", test: "TestUpgrade", file: "upgrade_test.go"},
+		{name: "e2e-minor", tags: "e2e,minor", test: "TestMinor", file: "minor_test.go"},
+	}
 	cases := []struct {
 		name   string
 		change map[string]string
 		want   string
 	}{
 		{"the files as they are", nil, ""},
+		{"a file with a test that no job names as its file", map[string]string{"extra_test.go": source("e2e && !upgrade && !minor", "TestExtra")}, "extra_test.go declares [TestExtra], and the e2e job that compiles it names \"join_test.go\" as its file"},
+		{"a file with a build tag that declares no test", map[string]string{"extra_test.go": source("e2e && extra")}, ""},
+		{"a file without a build tag that declares a test", map[string]string{"extra_test.go": source("", "TestExtra")}, ""},
 		{"the minor test behind e2e alone", map[string]string{"minor_test.go": source("e2e", "TestMinor")}, "minor_test.go declares [TestMinor], and the jobs [e2e e2e-upgrade e2e-minor] compile it"},
 		{"the join test without !minor", map[string]string{"join_test.go": source("e2e && !upgrade", "TestJoin")}, "join_test.go declares [TestJoin], and the jobs [e2e e2e-minor] compile it"},
 		{"the join test without !upgrade", map[string]string{"join_test.go": source("e2e && !minor", "TestJoin")}, "join_test.go declares [TestJoin], and the jobs [e2e e2e-upgrade] compile it"},
@@ -1100,60 +1219,6 @@ func TestEachJobIsHeldToTheTestsOfTheFilesItsBuildTagsCompile(t *testing.T) {
 			files := testFilesOfTheSuite()
 			maps.Copy(files, c.change)
 			err := requireEachJobToCompileItsOwnTests(files, model)
-			switch {
-			case c.want == "" && err != nil:
-				t.Fatalf("want accepted, got %v", err)
-			case c.want != "" && (err == nil || !strings.Contains(err.Error(), c.want)):
-				t.Fatalf("want an error with %q, got %v", c.want, err)
-			}
-		})
-	}
-}
-
-func TestEachJobIsHeldToTheBoundsOfTheWaitsOfItsTests(t *testing.T) {
-	var (
-		join    = boundSet{Apply: time.Minute}
-		upgrade = upgradeBoundSet{Apply: time.Minute}
-		minor   = minorBoundSet{Apply: time.Minute}
-	)
-	waited := func() map[string]waitedFile {
-		return map[string]waitedFile{
-			"join_test.go":    {owner: "bounds", set: join},
-			"upgrade_test.go": {owner: "upgradeBounds", set: upgrade},
-			"minor_test.go":   {owner: "minorBounds", set: minor},
-		}
-	}
-	models := func(sets ...any) []job {
-		return []job{
-			{name: "e2e", tags: "e2e", set: sets[0]},
-			{name: "e2e-upgrade", tags: "e2e,upgrade", test: "TestUpgrade", set: sets[1]},
-			{name: "e2e-minor", tags: "e2e,minor", test: "TestMinor", set: sets[2]},
-		}
-	}
-	cases := []struct {
-		name   string
-		model  []job
-		waited map[string]waitedFile
-		change map[string]string
-		want   string
-	}{
-		{"each job with the set of its file", models(join, upgrade, minor), waited(), nil, ""},
-		{"the minor job with the upgrade test's set", models(join, upgrade, upgrade), waited(), nil, "the e2e-minor job adds up {1m0s"},
-		{"the minor job with an empty set", models(join, upgrade, minorBoundSet{}), waited(), nil, "the e2e-minor job adds up {0s"},
-		{"the minor job with a set of another value", models(join, upgrade, minorBoundSet{Apply: 2 * time.Minute}), waited(), nil, "the e2e-minor job adds up"},
-		{"the upgrade job with the join test's set", models(join, join, minor), waited(), nil, "the e2e-upgrade job adds up"},
-		{"the join job with the minor test's set", models(minor, upgrade, minor), waited(), nil, "the e2e job adds up"},
-		{"the set of a file's waits that is not its job's", models(join, upgrade, minor), map[string]waitedFile{"join_test.go": {owner: "bounds", set: join}, "upgrade_test.go": {owner: "upgradeBounds", set: upgrade}, "minor_test.go": {owner: "minorBounds", set: minorBoundSet{}}}, nil, "the e2e-minor job adds up"},
-		{"a file with a test that the checks of the waits do not hold", models(join, upgrade, minor), waited(), map[string]string{"extra_test.go": sourceOfATestFile("e2e && extra", "TestExtra")}, "extra_test.go declares [TestExtra], and the checks of the waits hold no set of bounds for it"},
-		{"a file without a build tag that declares a test", models(join, upgrade, minor), waited(), map[string]string{"extra_test.go": sourceOfATestFile("", "TestExtra")}, ""},
-		{"a file with a build tag that declares no test", models(join, upgrade, minor), waited(), map[string]string{"extra_test.go": sourceOfATestFile("e2e && extra")}, ""},
-		{"a file that does not parse", models(join, upgrade, minor), waited(), map[string]string{"minor_test.go": "package e2e\nfunc ("}, "minor_test.go"},
-	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			files := testFilesOfTheSuite()
-			maps.Copy(files, c.change)
-			err := requireEachJobToHoldTheBoundsOfTheWaitsOfItsTests(files, c.model, c.waited)
 			switch {
 			case c.want == "" && err != nil:
 				t.Fatalf("want accepted, got %v", err)

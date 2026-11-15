@@ -187,7 +187,7 @@ func TestAnExpiredDeadlineOnTheControlPlaneApplyIsReturned(t *testing.T) {
 	_, lcp, cp, r, _ := readyControlPlane(t, "tau-slow")
 	slow := direct(t, interceptor.Funcs{
 		Apply: func(ctx context.Context, c client.WithWatch, obj runtime.ApplyConfiguration, opts ...client.ApplyOption) error {
-			if _, ok := obj.(*corev1ac.SecretApplyConfiguration); !ok {
+			if isControlPlaneApply(obj) {
 				<-ctx.Done()
 			}
 			return c.Apply(ctx, obj, opts...)

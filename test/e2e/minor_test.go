@@ -17,8 +17,6 @@ import (
 	"sigs.k8s.io/e2e-framework/pkg/features"
 )
 
-const minorFrom = "v1.36.4"
-
 func TestAMinorStepHoldsNewWorkersUntilLodiaRunsIt(t *testing.T) {
 	var (
 		k8s    client.Client
@@ -41,10 +39,10 @@ func TestAMinorStepHoldsNewWorkersUntilLodiaRunsIt(t *testing.T) {
 			}
 			return ctx
 		}).
-		Assess("the objects are applied at "+minorFrom+", and the DevCluster, whose infrastructure the suite manages, is marked provisioned", func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
-			bounded, cancel := endAfter(ctx, minorBounds.Apply)
+		Assess("the objects are applied at "+previousKubernetes+", and the DevCluster, whose infrastructure the suite manages, is marked provisioned", func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
+			bounded, cancel := within(ctx, minorBounds.Apply)
 			defer cancel()
-			if err := applyTheCluster(bounded, cfg, k8s, key, minorFrom); err != nil {
+			if err := applyTheCluster(bounded, cfg, k8s, key, previousKubernetes); err != nil {
 				t.Fatal(err)
 			}
 			return ctx
@@ -77,13 +75,13 @@ func TestAMinorStepHoldsNewWorkersUntilLodiaRunsIt(t *testing.T) {
 			})
 			return ctx
 		}).
-		Assess("its Node carries the DevMachine's providerID, has no uninitialized taint, is Ready and runs kubelet "+minorFrom, func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
-			until(ctx, t, minorBounds.Ready, "Node "+first.Status.NodeRef.Name+" has the providerID, no uninitialized taint, is Ready and runs kubelet "+minorFrom, func(ctx context.Context) error {
+		Assess("its Node carries the DevMachine's providerID, has no uninitialized taint, is Ready and runs kubelet "+previousKubernetes, func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
+			until(ctx, t, minorBounds.Ready, "Node "+first.Status.NodeRef.Name+" has the providerID, no uninitialized taint, is Ready and runs kubelet "+previousKubernetes, func(ctx context.Context) error {
 				joined, err := requireJoined(ctx, k8s, tenant, first)
 				if err != nil {
 					return err
 				}
-				return requireKubelet(joined, minorFrom)
+				return requireKubelet(joined, previousKubernetes)
 			})
 			return ctx
 		}).
@@ -136,7 +134,7 @@ func TestAMinorStepHoldsNewWorkersUntilLodiaRunsIt(t *testing.T) {
 			})
 			return ctx
 		}).
-		Assess("the Machine of md-0 is the one it was, its Node is Ready at kubelet "+minorFrom+" through the tenant opened again, and the Cluster and the LodiaControlPlane are Available", func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
+		Assess("the Machine of md-0 is the one it was, its Node is Ready at kubelet "+previousKubernetes+" through the tenant opened again, and the Cluster and the LodiaControlPlane are Available", func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
 			reopened, err := reopenTenant(ctx, k8s, key)
 			if err != nil {
 				t.Fatal(err)
@@ -144,14 +142,14 @@ func TestAMinorStepHoldsNewWorkersUntilLodiaRunsIt(t *testing.T) {
 			tenant = reopened
 			t.Logf("the tenant's API server %s accepts the credential of the Secret as the provider holds it now", tenant.cfg.Host)
 			until(ctx, t, minorBounds.Kept, "the Machine of md-0 and its Node are as they were, and the Cluster and the LodiaControlPlane are Available", func(ctx context.Context) error {
-				if err := requireTheMachineKept(ctx, k8s, key, workersName(key.Name), first); err != nil {
+				if _, err := requireTheMachineKept(ctx, k8s, key, workersName(key.Name), first); err != nil {
 					return err
 				}
 				joined, err := requireJoined(ctx, k8s, tenant, first)
 				if err != nil {
 					return err
 				}
-				if err := requireKubelet(joined, minorFrom); err != nil {
+				if err := requireKubelet(joined, previousKubernetes); err != nil {
 					return err
 				}
 				if err := requireAvailable(ctx, k8s, key); err != nil {

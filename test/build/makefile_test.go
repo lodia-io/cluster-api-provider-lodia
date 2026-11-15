@@ -1,0 +1,230 @@
+// Copyright 2026 The Lodia Authors.
+// SPDX-License-Identifier: Apache-2.0
+
+package build_test
+
+import (
+	"errors"
+	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"regexp"
+	"slices"
+	"strings"
+	"testing"
+)
+
+const root = "../.."
+
+func recipeOf(t *testing.T, cmd *exec.Cmd) string {
+	t.Helper()
+	cmd.Args = slices.Insert(cmd.Args, 1, "-n")
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("%s: %v", cmd.Args, err)
+	}
+	return string(out)
+}
+
+const versionSetupEnvtestRejects = "not-a-version"
+
+var assetsOfEnvtest = regexp.MustCompile(`^assets="\$\(go tool setup-envtest use ` + versionSetupEnvtestRejects + ` -p path\)" && KUBEBUILDER_ASSETS="\$assets" go test \./\.\.\.$`)
+
+func requireVerifyToRunTheTestsOfTheModuleWithTheAssetsOfEnvtest(plan string) error {
+	if !slices.ContainsFunc(strings.Split(plan, "\n"), assetsOfEnvtest.MatchString) {
+		return errors.New("make -n verify has no line that runs the go test of every package of the module with KUBEBUILDER_ASSETS taken from setup-envtest for the version of ENVTEST_K8S_VERSION, and only when setup-envtest succeeds")
+	}
+	return nil
+}
+
+func TestMakeVerifyRunsTheTestsOfTheModuleWithTheAssetsOfEnvtest(t *testing.T) {
+	cmd := exec.CommandContext(t.Context(), "make", "--no-print-directory", "verify", "ENVTEST_K8S_VERSION="+versionSetupEnvtestRejects)
+	cmd.Dir = root
+	if err := requireVerifyToRunTheTestsOfTheModuleWithTheAssetsOfEnvtest(recipeOf(t, cmd)); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestAVerifyThatRunsNoTestsOfTheModuleWithTheAssetsOfEnvtestIsRefused(t *testing.T) {
+	const (
+		version = versionSetupEnvtestRejects
+		module  = `assets="$(go tool setup-envtest use ` + version + ` -p path)" && KUBEBUILDER_ASSETS="$assets" go test ./...` + "\n"
+		api     = "cd api && go test ./...\n"
+		other   = "go mod tidy -diff\ngolangci-lint run ./...\n"
+	)
+	cases := []struct {
+		name, plan, want string
+	}{
+		{"the assets for the module and none for the API's", other + module + api, ""},
+		{"the assets for the module after the API's", other + api + module, ""},
+		{"a version of Kubernetes written out in place of ENVTEST_K8S_VERSION", other + strings.Replace(module, version, "1.35.0", 1) + api, "has no line"},
+		{"no tests", other + api, "has no line"},
+		{"no plan", "", "has no line"},
+		{"an empty assignment", other + "KUBEBUILDER_ASSETS= go test ./...\n" + api, "has no line"},
+		{"an assignment that runs go test whether setup-envtest succeeds or not", other + `KUBEBUILDER_ASSETS="$(go tool setup-envtest use ` + version + ` -p path)" go test ./...` + "\n" + api, "has no line"},
+		{"go test after a semicolon, whatever setup-envtest did", other + `assets="$(go tool setup-envtest use ` + version + ` -p path)"; KUBEBUILDER_ASSETS="$assets" go test ./...` + "\n" + api, "has no line"},
+		{"assets that setup-envtest did not give", other + `assets="/opt/envtest" && KUBEBUILDER_ASSETS="$assets" go test ./...` + "\n" + api, "has no line"},
+		{"a variable that the test does not get", other + `assets="$(go tool setup-envtest use ` + version + ` -p path)" && KUBEBUILDER_ASSETS= go test ./...` + "\n" + api, "has no line"},
+		{"a part of the module", other + strings.Replace(module, "./...", "./internal/...", 1) + api, "has no line"},
+		{"the assets for the API's module alone", other + "cd api && " + module + "go test ./...\n", "has no line"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			err := requireVerifyToRunTheTestsOfTheModuleWithTheAssetsOfEnvtest(c.plan)
+			switch {
+			case c.want == "" && err != nil:
+				t.Fatalf("want accepted, got %v", err)
+			case c.want != "" && (err == nil || !strings.Contains(err.Error(), c.want)):
+				t.Fatalf("want an error with %q, got %v", c.want, err)
+			}
+		})
+	}
+}
+
+var ignoreInTheMakefile = regexp.MustCompile(`(?m)^ *\.IGNORE\b`)
+
+func requireTheMakeOfTheTestsToTakeNoVariable(plan string) error {
+	for line := range strings.SplitSeq(plan, "\n") {
+		words := strings.Fields(line)
+		if len(words) == 0 || filepath.Base(words[0]) != "make" || !slices.Contains(words, "test") {
+			continue
+		}
+		if i := slices.IndexFunc(words, func(w string) bool { return strings.Contains(w, "=") }); i >= 0 {
+			return fmt.Errorf("the make that verify runs the tests in takes %s on its command line, which reaches every make that the tests run, through MAKEFLAGS and the environment: %s", words[i], line)
+		}
+		return nil
+	}
+	return errors.New("make -n verify runs no make that makes test")
+}
+
+func TestTheMakeOfTheTestsInVerifyTakesNoVariable(t *testing.T) {
+	cmd := exec.CommandContext(t.Context(), "make", "--no-print-directory", "verify")
+	cmd.Dir = root
+	if err := requireTheMakeOfTheTestsToTakeNoVariable(recipeOf(t, cmd)); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestAVerifyThatGivesTheMakeOfTheTestsAVariableIsRefused(t *testing.T) {
+	cases := []struct {
+		name, plan, want string
+	}{
+		{"no variable", "go mod tidy -diff\nmake --no-print-directory components lint test verify-release\n", ""},
+		{"the make by its path", "/usr/bin/make --no-print-directory lint test verify-release\n", ""},
+		{"a variable after the targets", "make --no-print-directory lint test release-components KO_PUSH=false\n", "takes KO_PUSH=false"},
+		{"a variable before the targets", "/usr/bin/make IMAGE_TAG=v0.0.0-verify lint test\n", "takes IMAGE_TAG=v0.0.0-verify"},
+		{"a variable on a make that does not make test", "make --no-print-directory generate GENERATED=x\nmake lint test\n", ""},
+		{"no make that makes test", "make --no-print-directory lint\n", "runs no make that makes test"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			err := requireTheMakeOfTheTestsToTakeNoVariable(c.plan)
+			switch {
+			case c.want == "" && err != nil:
+				t.Fatalf("want accepted, got %v", err)
+			case c.want != "" && (err == nil || !strings.Contains(err.Error(), c.want)):
+				t.Fatalf("want an error with %q, got %v", c.want, err)
+			}
+		})
+	}
+}
+
+func requireTheMakefileToHaveNoIgnore(makefile []byte) error {
+	if ignoreInTheMakefile.Match(makefile) {
+		return errors.New("the Makefile has .IGNORE, with which make goes on past the failed lines of the recipes that it names, or of all of them: make verify passes whatever they find, and the verify job of ci.yml sees only the failure of the test rule")
+	}
+	return nil
+}
+
+func TestTheMakefileHasNoIgnore(t *testing.T) {
+	makefile, err := os.ReadFile(filepath.Join(root, "Makefile"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := requireTheMakefileToHaveNoIgnore(makefile); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestAMakefileWithIgnoreIsRefused(t *testing.T) {
+	const rules = "lint:\n\tgolangci-lint run ./...\ntest:\n\tgo test ./...\n"
+	cases := []struct {
+		name, makefile, want string
+	}{
+		{"no .IGNORE", rules, ""},
+		{"a comment that names .IGNORE", "# .IGNORE: test\n" + rules, ""},
+		{"a recipe line that names .IGNORE", rules + "\techo .IGNORE: test\n", ""},
+		{".IGNORE for the test target", ".IGNORE: test\n" + rules, "has .IGNORE"},
+		{".IGNORE for the lint target", ".IGNORE: lint\n" + rules, "has .IGNORE"},
+		{".IGNORE for the verify target", ".IGNORE: verify\n" + rules, "has .IGNORE"},
+		{".IGNORE for every target", rules + ".IGNORE:\n", "has .IGNORE"},
+		{".IGNORE with a space before its colon", ".IGNORE : lint\n" + rules, "has .IGNORE"},
+		{".IGNORE after a space", " .IGNORE: lint\n" + rules, "has .IGNORE"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			err := requireTheMakefileToHaveNoIgnore([]byte(c.makefile))
+			switch {
+			case c.want == "" && err != nil:
+				t.Fatalf("want accepted, got %v", err)
+			case c.want != "" && (err == nil || !strings.Contains(err.Error(), c.want)):
+				t.Fatalf("want an error with %q, got %v", c.want, err)
+			}
+		})
+	}
+}
+
+func planOfVerify(t *testing.T) string {
+	t.Helper()
+	cmd := exec.CommandContext(t.Context(), "make", "--no-print-directory", "verify")
+	cmd.Dir = root
+	return recipeOf(t, cmd)
+}
+
+func TestVerifyChecksTheImageItRenders(t *testing.T) {
+	out := planOfVerify(t)
+
+	render := strings.Index(out, "--platform=linux/amd64,linux/arm64 --push=false --tags=v0.0.0-verify")
+	check := strings.Index(out, "go run ./hack/releasecheck image --repository=ghcr.io/lodia-io/cluster-api-provider-lodia --tag=v0.0.0-verify out/control-plane-components.yaml")
+	if render < 0 || check < render {
+		t.Errorf("want the render of the components YAML with the tag, then the check of its image with the same tag; the render is at %d and the check at %d of:\n%s", render, check, out)
+	}
+}
+
+func TestVerifyRendersConfigDefaultOnce(t *testing.T) {
+	out := planOfVerify(t)
+
+	if got := strings.Count(out, " build config/default"); got != 1 {
+		t.Errorf("want one render of config/default in the plan of verify, got %d in:\n%s", got, out)
+	}
+}
+
+func TestVerifyRunsTheMetadataCheck(t *testing.T) {
+	out := planOfVerify(t)
+
+	if !slices.Contains(strings.Split(out, "\n"), "go run ./hack/releasecheck metadata") {
+		t.Errorf("want the metadata check as a line of its own in:\n%s", out)
+	}
+}
+
+func TestAFailedRenderStopsEveryTargetThatReadsIt(t *testing.T) {
+	for _, target := range []string{"components", "upgrade-components", "release-components"} {
+		t.Run(target, func(t *testing.T) {
+			dir := t.TempDir()
+			cmd := exec.CommandContext(t.Context(), "make", "--no-print-directory", target, "KUSTOMIZE=./no-such-package", "RENDER="+filepath.Join(dir, "default.yaml"), "RELEASE_DIR="+dir, "PIN_DIR="+dir)
+			cmd.Dir = root
+
+			out, err := cmd.CombinedOutput()
+
+			if err == nil {
+				t.Fatalf("want the target to fail with a failed render, got:\n%s", out)
+			}
+			for _, name := range []string{"default.yaml", "control-plane-components.yaml"} {
+				if _, statErr := os.Stat(filepath.Join(dir, name)); !errors.Is(statErr, os.ErrNotExist) {
+					t.Errorf("the failed render left %s: %v", name, statErr)
+				}
+			}
+		})
+	}
+}

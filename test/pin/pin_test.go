@@ -12,6 +12,8 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+
+	clusterctlv1 "sigs.k8s.io/cluster-api/cmd/clusterctl/api/v1alpha3"
 )
 
 const (
@@ -33,6 +35,32 @@ func TestThePinIsTheFileThatAReaderOfAnotherCommitReads(t *testing.T) {
 	}
 	if release.Version == "" || release.ComponentsURL() == release.MetadataURL() {
 		t.Errorf("the pin names %+v", release)
+	}
+}
+
+func TestTheNewestSeriesIsTheHighestMajorAndOfThatTheHighestMinorWhereverItStands(t *testing.T) {
+	series := func(versions ...[2]int32) []clusterctlv1.ReleaseSeries {
+		var out []clusterctlv1.ReleaseSeries
+		for _, v := range versions {
+			out = append(out, clusterctlv1.ReleaseSeries{Major: v[0], Minor: v[1]})
+		}
+		return out
+	}
+	for name, c := range map[string]struct {
+		series []clusterctlv1.ReleaseSeries
+		want   [2]int32
+	}{
+		"one":                           {series([2]int32{0, 1}), [2]int32{0, 1}},
+		"the last":                      {series([2]int32{0, 1}, [2]int32{0, 2}), [2]int32{0, 2}},
+		"the first":                     {series([2]int32{0, 2}, [2]int32{0, 1}), [2]int32{0, 2}},
+		"a higher major, a lower minor": {series([2]int32{0, 9}, [2]int32{1, 0}), [2]int32{1, 0}},
+		"a higher minor, a lower major": {series([2]int32{1, 0}, [2]int32{0, 9}), [2]int32{1, 0}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if got := NewestSeries(c.series); [2]int32{got.Major, got.Minor} != c.want {
+				t.Errorf("the newest of %v is %d.%d, want %d.%d", c.series, got.Major, got.Minor, c.want[0], c.want[1])
+			}
+		})
 	}
 }
 
@@ -105,7 +133,7 @@ func TestAFileIsDownloadedOnceAndReadFromTheCacheAfter(t *testing.T) {
 	d := serve(t, http.StatusOK)
 	dir := filepath.Join(t.TempDir(), "not", "there", "yet")
 	for range 2 {
-		got, err := Fetch(t.Context(), dir, d.url, Checksum([]byte(body)))
+		got, err := Fetch(t.Context(), dir, d.url, checksum([]byte(body)))
 		if err != nil || string(got) != body {
 			t.Fatalf("got %q and %v", got, err)
 		}
@@ -124,7 +152,7 @@ func TestACachedFileWithAnotherSumIsReplacedByTheDownload(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "components.yaml"), []byte("kind: Other\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	got, err := Fetch(t.Context(), dir, d.url, Checksum([]byte(body)))
+	got, err := Fetch(t.Context(), dir, d.url, checksum([]byte(body)))
 	if err != nil || string(got) != body {
 		t.Fatalf("got %q and %v", got, err)
 	}
@@ -150,7 +178,7 @@ func TestADownloadWithAnotherSumIsRefusedAndNotCached(t *testing.T) {
 
 func TestADownloadThatIsNotAnsweredWithOKIsRefused(t *testing.T) {
 	d := serve(t, http.StatusNotFound)
-	_, err := Fetch(t.Context(), t.TempDir(), d.url, Checksum([]byte(body)))
+	_, err := Fetch(t.Context(), t.TempDir(), d.url, checksum([]byte(body)))
 	if err == nil || !strings.Contains(err.Error(), "404") {
 		t.Fatalf("want the refusal of the status, got %v", err)
 	}

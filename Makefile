@@ -5,6 +5,7 @@ E2E_MINOR_CLUSTER ?= capl-e2e-minor
 E2E_DIR = $(CURDIR)/work/e2e/$(E2E_CLUSTER)
 LODIA_DIR = $(CURDIR)/work/lodia
 PIN_DIR = $(CURDIR)/work/pin
+RENDER = $(CURDIR)/work/default.yaml
 LODIA_COMMIT = f91168b1248dc18151a0c2d442fe2050593a0866
 REMOVE_WORKERS = docker ps --all --quiet --filter label=io.x-k8s.kind.cluster=$(E2E_CLUSTER)-w | xargs -r docker rm --force --volumes
 KUSTOMIZE = sigs.k8s.io/kustomize/kustomize/v5@v5.7.0
@@ -21,13 +22,12 @@ RELEASE_IMAGE = go run ./hack/releasecheck image --repository=$(IMAGE_REPOSITORY
 RELEASE_WORKFLOW = $(GITHUB_REPO)/.github/workflows/release.yml
 VERIFY_IDENTITY = --certificate-identity https://github.com/$(RELEASE_WORKFLOW)@refs/tags/$(IMAGE_TAG) --certificate-oidc-issuer https://token.actions.githubusercontent.com
 VERIFY_ATTESTATION = -R $(GITHUB_REPO) --signer-workflow $(RELEASE_WORKFLOW) --source-ref refs/tags/$(IMAGE_TAG)
-GENERATED = api/v1alpha1/zz_generated.deepcopy.go api/crds/*.yaml config/crd/bases/*.yaml config/rbac/role.yaml
+GENERATED = api/v1alpha1/zz_generated.deepcopy.go api/crds/*.yaml config/rbac/role.yaml
 
 .PHONY: generate
-generate: ## regenerate deepcopy functions, the CRDs in api/crds with the copy kustomize reads in config/crd/bases, and the controller's ClusterRole
+generate: ## regenerate deepcopy functions, the CRDs in api/crds, and the controller's ClusterRole
 	go tool controller-gen object:headerFile=hack/boilerplate.go.txt paths=./api/...
 	go tool controller-gen crd paths=./api/... output:crd:artifacts:config=api/crds
-	rm -f config/crd/bases/*.yaml && cp api/crds/*.yaml config/crd/bases/
 	go tool controller-gen rbac:roleName=manager-role paths=./internal/... output:rbac:artifacts:config=config/rbac
 
 .PHONY: lint
@@ -43,21 +43,24 @@ test: ## unit and envtest tests; envtest runs a real API server and etcd
 	assets="$$(go tool setup-envtest use $(ENVTEST_K8S_VERSION) -p path)" && KUBEBUILDER_ASSETS="$$assets" go test ./...
 	cd api && go test ./...
 
+.PHONY: render
+render: ## render config/default into $(RENDER), which the targets that read the render take, so that a failed kustomize stops them before they read anything
+	mkdir -p $(dir $(RENDER))
+	go run $(KUSTOMIZE) build config/default > $(RENDER).tmp
+	mv $(RENDER).tmp $(RENDER)
+
 .PHONY: components
-components: ## render config/default and check that every variable has a non-empty default, its Namespace, labels and manager container as rendered, and, on what clusterctl installs with the defaults and with explicit values, the roles that reach the manager's ServiceAccount, the kubeadm bootstrap provider's grant and the subjects of every binding
-	@rendered="$$(go run $(KUSTOMIZE) build config/default)" || exit 1; \
-	printf '%s\n' "$$rendered" | go run ./test/components
+components: render ## check the render of config/default: every variable has a non-empty default, its Namespace, labels and manager container as rendered, and, on what clusterctl installs with the defaults and with explicit values, the roles that reach the manager's ServiceAccount, the kubeadm bootstrap provider's grant and the subjects of every binding
+	go run ./test/components < $(RENDER)
 
 .PHONY: upgrade-components
-upgrade-components: ## compare the render of config/default with the components of the release that test/pin names, which the first run downloads into $(PIN_DIR) and checks against the pinned sha256: fail on a cluster-scoped object of the release, or a custom resource of a CRD that carries the provider label, that clusterctl's upgrade keeps and the render drops or renames, a ClusterRoleBinding whose roleRef the render changes, a CRD version that the release serves and the render drops or does not serve, and a storage version that the render drops
-	@rendered="$$(go run $(KUSTOMIZE) build config/default)" || exit 1; \
-	printf '%s\n' "$$rendered" | go run ./test/components upgrade $(PIN_DIR)
+upgrade-components: render ## compare the render of config/default with the components of the release that test/pin names, which the first run downloads into $(PIN_DIR) and checks against the pinned sha256: fail on a cluster-scoped object of the release, or a custom resource of a CRD that carries the provider label, that clusterctl's upgrade keeps and the render drops or renames, a ClusterRoleBinding whose roleRef the render changes, a CRD version that the release serves and the render drops or does not serve, and a storage version that the render drops
+	go run ./test/components upgrade $(PIN_DIR) < $(RENDER)
 
 .PHONY: release-components
-release-components: ## write $(RELEASE_DIR)/control-plane-components.yaml: config/default with the manager's image built by ko for $(PLATFORMS) and named by digest in $(IMAGE_REPOSITORY), tagged $(IMAGE_TAG), pushed unless KO_PUSH=false
-	@rendered="$$(go run $(KUSTOMIZE) build config/default)" || exit 1; \
-	mkdir -p $(RELEASE_DIR) && \
-	printf '%s\n' "$$rendered" | KO_DOCKER_REPO=$(IMAGE_REPOSITORY) go run $(KO) resolve --bare --platform=$(PLATFORMS) --push=$(KO_PUSH) --tags=$(IMAGE_TAG) -f - > $(RELEASE_DIR)/control-plane-components.yaml.tmp && \
+release-components: render ## write $(RELEASE_DIR)/control-plane-components.yaml: config/default with the manager's image built by ko for $(PLATFORMS) and named by digest in $(IMAGE_REPOSITORY), tagged $(IMAGE_TAG), pushed unless KO_PUSH=false
+	mkdir -p $(RELEASE_DIR)
+	KO_DOCKER_REPO=$(IMAGE_REPOSITORY) go run $(KO) resolve --bare --platform=$(PLATFORMS) --push=$(KO_PUSH) --tags=$(IMAGE_TAG) -f $(RENDER) > $(RELEASE_DIR)/control-plane-components.yaml.tmp
 	mv $(RELEASE_DIR)/control-plane-components.yaml.tmp $(RELEASE_DIR)/control-plane-components.yaml
 
 .PHONY: release-image
@@ -93,7 +96,7 @@ release-verify-attestations: ## run what a user runs for the tag IMAGE_TAG, with
 	gh attestation verify metadata.yaml $(VERIFY_ATTESTATION)
 
 .PHONY: release-check
-release-check: ## refuse TAG before it is pushed: a semver tag with a series in metadata.yaml at COMMIT, a series for every tag there is, COMMIT on origin/main with every run of ci.yml green, the local tags TAG and api/TAG at COMMIT, the pin of the upgrade e2e at COMMIT naming the newest published release below TAG; reads GitHub with $$GITHUB_TOKEN, or with gh's
+release-check: ## refuse TAG before it is pushed: a semver tag with a series in metadata.yaml at COMMIT, a series for every tag there is, TAG above every published release of its line, COMMIT on origin/main with every run of ci.yml green, the local tags TAG and api/TAG at COMMIT, the pin of the upgrade e2e at COMMIT naming the newest published release below TAG; reads GitHub with $$GITHUB_TOKEN, or with gh's
 	@[ -n "$(TAG)" ] || { echo "usage: make release-check TAG=vX.Y.Z [COMMIT=<sha>]"; exit 1; }
 	git fetch --quiet --tags origin main
 	GITHUB_TOKEN="$${GITHUB_TOKEN:-$$(gh auth token)}" go run ./hack/releasecheck tag --commit="$(COMMIT)" "$(TAG)"
@@ -108,8 +111,13 @@ verify: ## the check that says a change is done
 	[ "$$before" = "$$(cat $(GENERATED) | cksum)" ] || { echo "make generate changed the generated files: review and commit them"; exit 1; }
 	go mod tidy -diff
 	cd api && go mod tidy -diff
-	$(MAKE) --no-print-directory components upgrade-components metadata lint test
-	$(MAKE) --no-print-directory release-components release-image KO_PUSH=false IMAGE_TAG=v0.0.0-verify
+	$(MAKE) --no-print-directory components upgrade-components metadata lint test verify-release
+
+# A variable on the command line of verify's make would reach, through MAKEFLAGS and the environment, every make that the tests of make test run.
+.PHONY: verify-release
+verify-release: KO_PUSH = false
+verify-release: IMAGE_TAG = v0.0.0-verify
+verify-release: release-components release-image ## the release's render and the check of its image, with no push
 
 # LC_ALL=C: a range in a case pattern follows the locale, and on macOS en_US.UTF-8 puts A in a-z.
 .PHONY: e2e-cluster
@@ -127,34 +135,24 @@ e2e-lodia: ## fetch Lodia at LODIA_COMMIT, the commit go.mod pins, into $(LODIA_
 	git -C $(LODIA_DIR) fetch --quiet --depth 1 https://github.com/lodia-io/lodia.git $(LODIA_COMMIT)
 	git -C $(LODIA_DIR) checkout --quiet --force --detach $(LODIA_COMMIT)
 
-.PHONY: e2e
-e2e: e2e-cluster ## the e2e suite, on a kind cluster of its own that e2e-cluster accepts, that it deletes afterwards with the containers of the Cluster the suite creates
-	$(MAKE) --no-print-directory e2e-lodia
-	mkdir -p $(E2E_DIR)
-	go tool kind create cluster --name $(E2E_CLUSTER) --kubeconfig $(E2E_DIR)/kubeconfig --config test/e2e/testdata/kind.yaml
-	rm -rf $(E2E_DIR)/artifacts
-	$(REMOVE_WORKERS) && E2E_KUBECONFIG=$(E2E_DIR)/kubeconfig go test -v -tags e2e -count=1 -timeout 64m ./test/e2e/...; status=$$?; \
-	$(REMOVE_WORKERS) || status=1; \
-	go tool kind delete cluster --name $(E2E_CLUSTER) --kubeconfig $(E2E_DIR)/kubeconfig; exit $$status
-
-.PHONY: e2e-upgrade
+e2e: E2E_TAGS = e2e
+e2e: E2E_TIMEOUT = 64m
+e2e: E2E_RUN =
 e2e-upgrade: E2E_CLUSTER = $(E2E_UPGRADE_CLUSTER)
-e2e-upgrade: e2e-cluster ## the upgrade e2e: the previous release that test/pin names installed through clusterctl, a worker that joins, and clusterctl's upgrade to the tree's build, on a kind cluster of its own that e2e-cluster accepts, that it deletes afterwards with the containers of the Cluster the suite creates
-	$(MAKE) --no-print-directory e2e-lodia
-	mkdir -p $(E2E_DIR)
-	go tool kind create cluster --name $(E2E_CLUSTER) --kubeconfig $(E2E_DIR)/kubeconfig --config test/e2e/testdata/kind.yaml
-	rm -rf $(E2E_DIR)/artifacts
-	$(REMOVE_WORKERS) && E2E_KUBECONFIG=$(E2E_DIR)/kubeconfig go test -v -tags e2e,upgrade -count=1 -timeout 46m -run '^TestTheProviderUpgradesFromThePreviousRelease$$' ./test/e2e/...; status=$$?; \
-	$(REMOVE_WORKERS) || status=1; \
-	go tool kind delete cluster --name $(E2E_CLUSTER) --kubeconfig $(E2E_DIR)/kubeconfig; exit $$status
-
-.PHONY: e2e-minor
+e2e-upgrade: E2E_TAGS = e2e,upgrade
+e2e-upgrade: E2E_TIMEOUT = 46m
+e2e-upgrade: E2E_RUN = -run '^TestTheProviderUpgradesFromThePreviousRelease$$'
 e2e-minor: E2E_CLUSTER = $(E2E_MINOR_CLUSTER)
-e2e-minor: e2e-cluster ## the minor step e2e: a Cluster at v1.36.4 with a worker that joined, its control plane stepped to v1.37.0 by Lodia while a second MachineDeployment at v1.37.0 waits for it, on a kind cluster of its own that e2e-cluster accepts, that it deletes afterwards with the containers of the Cluster the suite creates
+e2e-minor: E2E_TAGS = e2e,minor
+e2e-minor: E2E_TIMEOUT = 47m
+e2e-minor: E2E_RUN = -run '^TestAMinorStepHoldsNewWorkersUntilLodiaRunsIt$$'
+
+.PHONY: e2e e2e-upgrade e2e-minor
+e2e e2e-upgrade e2e-minor: e2e-cluster ## the suite of the target, with the tags, -timeout and -run of its variables, on a kind cluster of its own that e2e-cluster accepts, which it deletes afterwards with the containers of the Cluster the suite creates
 	$(MAKE) --no-print-directory e2e-lodia
 	mkdir -p $(E2E_DIR)
 	go tool kind create cluster --name $(E2E_CLUSTER) --kubeconfig $(E2E_DIR)/kubeconfig --config test/e2e/testdata/kind.yaml
 	rm -rf $(E2E_DIR)/artifacts
-	$(REMOVE_WORKERS) && E2E_KUBECONFIG=$(E2E_DIR)/kubeconfig go test -v -tags e2e,minor -count=1 -timeout 47m -run '^TestAMinorStepHoldsNewWorkersUntilLodiaRunsIt$$' ./test/e2e/...; status=$$?; \
+	$(REMOVE_WORKERS) && E2E_KUBECONFIG=$(E2E_DIR)/kubeconfig go test -v -tags $(E2E_TAGS) -count=1 -timeout $(E2E_TIMEOUT) $(E2E_RUN) ./test/e2e/...; status=$$?; \
 	$(REMOVE_WORKERS) || status=1; \
 	go tool kind delete cluster --name $(E2E_CLUSTER) --kubeconfig $(E2E_DIR)/kubeconfig; exit $$status

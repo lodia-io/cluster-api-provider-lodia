@@ -86,24 +86,6 @@ func (r release) version() string {
 	return path.Base(path.Dir(r.url))
 }
 
-func (r release) manifest(ctx context.Context, dir string) ([]byte, error) {
-	raw, err := r.fetch(ctx, dir)
-	if err != nil {
-		return nil, err
-	}
-	rendered, err := yamlprocessor.NewSimpleProcessor().Process(raw, func(name string) (string, error) {
-		return "", fmt.Errorf("%s is not set", name)
-	})
-	if err != nil {
-		return nil, fmt.Errorf("render %s: %w", r.url, err)
-	}
-	pinned, err := requireDigests(rendered, r.images)
-	if err != nil {
-		return nil, fmt.Errorf("%s: %w", r.url, err)
-	}
-	return pinned, nil
-}
-
 func (r release) unrendered(ctx context.Context, dir string) ([]byte, error) {
 	raw, err := r.fetch(ctx, dir)
 	if err != nil {
@@ -130,30 +112,29 @@ func apply(ctx context.Context, cfg *envconf.Config, manifest []byte) error {
 	return decoder.DecodeEach(ctx, bytes.NewReader(manifest), createWhenWebhooksAnswer(c, time.Minute, 2*time.Second))
 }
 
-func applyRelease(ctx context.Context, cfg *envconf.Config, r release) error {
-	manifest, err := r.manifest(ctx, workDir(cfg))
+func installCertManager(ctx context.Context, cfg *envconf.Config) error {
+	raw, err := certManager.fetch(ctx, workDir(cfg))
 	if err != nil {
 		return err
 	}
-	if err := apply(ctx, cfg, manifest); err != nil {
-		return fmt.Errorf("apply %s: %w", r.url, err)
+	rendered, err := yamlprocessor.NewSimpleProcessor().Process(raw, func(name string) (string, error) {
+		return "", fmt.Errorf("%s is not set", name)
+	})
+	if err != nil {
+		return fmt.Errorf("render %s: %w", certManager.url, err)
 	}
-	return nil
-}
-
-func available(ctx context.Context, cfg *envconf.Config, namespace string, names ...string) error {
+	manifest, err := requireDigests(rendered, certManager.images)
+	if err != nil {
+		return fmt.Errorf("%s: %w", certManager.url, err)
+	}
+	if err := apply(ctx, cfg, manifest); err != nil {
+		return fmt.Errorf("apply %s: %w", certManager.url, err)
+	}
 	c, err := newClient(cfg)
 	if err != nil {
 		return err
 	}
-	return deploymentsAvailable(ctx, c, namespace, 2*time.Minute, 2*time.Second, names...)
-}
-
-func installCertManager(ctx context.Context, cfg *envconf.Config) error {
-	if err := applyRelease(ctx, cfg, certManager); err != nil {
-		return err
-	}
-	return available(ctx, cfg, "cert-manager", "cert-manager", "cert-manager-cainjector", "cert-manager-webhook")
+	return deploymentsAvailable(ctx, c, "cert-manager", 2*time.Minute, 2*time.Second, "cert-manager", "cert-manager-cainjector", "cert-manager-webhook")
 }
 
 func installLodia(ctx context.Context, cfg *envconf.Config) error {

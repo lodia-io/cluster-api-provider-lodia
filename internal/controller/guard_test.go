@@ -13,7 +13,6 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
-	corev1ac "k8s.io/client-go/applyconfigurations/core/v1"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	clusterctlv1 "sigs.k8s.io/cluster-api/cmd/clusterctl/api/v1alpha3"
 	"sigs.k8s.io/cluster-api/util/secret"
@@ -54,11 +53,6 @@ func untilControlPlane(t *testing.T, r *controller.Reconciler, lcp *v1alpha1.Lod
 		}
 	}
 	t.Fatal("no ControlPlane after six passes")
-}
-
-func isControlPlaneApply(obj runtime.ApplyConfiguration) bool {
-	_, secret := obj.(*corev1ac.SecretApplyConfiguration)
-	return !secret
 }
 
 func TestTheUIDIsRecordedBeforeTheControlPlaneIsApplied(t *testing.T) {

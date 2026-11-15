@@ -35,6 +35,7 @@ import (
 	apiextensionsv1beta1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1beta1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	addonsv1 "sigs.k8s.io/cluster-api/api/addons/v1beta2"
 	controlplanev1 "sigs.k8s.io/cluster-api/api/controlplane/kubeadm/v1beta2"
@@ -198,23 +199,6 @@ func TestEveryCallAgainstAClusterThatDoesNotAnswerEndsWithinItsBoundAndOneDiscov
 	}
 }
 
-func TestNoCallReadsAKubeconfigOrTheCurrentContext(t *testing.T) {
-	for call, run := range calls {
-		t.Run(call, func(t *testing.T) {
-			s := serve(t, neverAnswers)
-			c := newClusterctl(t, s)
-			ctx, cancel := context.WithTimeout(t.Context(), bound)
-			defer cancel()
-			if _, err := within(t, call, func() error { return run(ctx, c) }); err == nil {
-				t.Fatalf("%s says nothing about a cluster that did not answer", call)
-			}
-			if s.asked() == 0 {
-				t.Errorf("%s did not reach the cluster of the rest config", call)
-			}
-		})
-	}
-}
-
 func TestEveryClusterClientTheFactoryMakesReachesTheClusterOfTheRestConfig(t *testing.T) {
 	TrapTheDefaultKubeconfig(t)
 	s := serve(t, neverAnswers)
@@ -237,6 +221,45 @@ func TestEveryClusterClientTheFactoryMakesReachesTheClusterOfTheRestConfig(t *te
 				t.Errorf("the client reaches %s with the request timeout %s, want %s and %s", got.Host, got.Timeout, s.url, request)
 			}
 		})
+	}
+}
+
+func hasARateLimiter(t *testing.T, cfg *rest.Config) bool {
+	t.Helper()
+	clientset, err := kubernetes.NewForConfig(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return clientset.CoreV1().RESTClient().GetRateLimiter() != nil
+}
+
+func TestAConfigThatSetsNoQPSKeepsClientGosRateLimiter(t *testing.T) {
+	if !hasARateLimiter(t, &rest.Config{Host: "https://unused.invalid"}) {
+		t.Fatal("a client of a config with no QPS has no rate limiter, so the tests that none is there see nothing")
+	}
+}
+
+func TestTheConfigsOfTheProxyHaveNoRateLimiter(t *testing.T) {
+	p := newProxy(&rest.Config{Host: "https://unused.invalid"}, request, discovery)
+	if hasARateLimiter(t, p.cfg) {
+		t.Error("the config that the proxy lists, discovers and checks the version with has a rate limiter")
+	}
+	got, err := p.GetConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hasARateLimiter(t, got) {
+		t.Error("the config that the proxy gives clusterctl has a rate limiter")
+	}
+}
+
+func TestTheConfigsOfNewClientHaveNoRateLimiter(t *testing.T) {
+	requests, discovered := clientConfigs(&rest.Config{Host: "https://unused.invalid"}, request, discovery)
+	if hasARateLimiter(t, requests) {
+		t.Error("the config of the client's requests has a rate limiter")
+	}
+	if hasARateLimiter(t, discovered) {
+		t.Error("the config of the client's discovery has a rate limiter")
 	}
 }
 
@@ -528,7 +551,7 @@ func TestTheListingHoldsTheImportsOfTestFilesAndOfTheTagsItIsGiven(t *testing.T)
 }
 
 func TestNoPackageOfTheDependencyGraphBuildsClusterctlClientsFromAPath(t *testing.T) {
-	for name, tags := range map[string]string{"untagged": "", "e2e": "e2e", "upgrade": "e2e,upgrade"} {
+	for name, tags := range map[string]string{"untagged": "", "e2e": "e2e", "upgrade": "e2e,upgrade", "minor": "e2e,minor"} {
 		t.Run(name, func(t *testing.T) {
 			for _, f := range buildingClustersFromAPath(listPackages(t, moduleRoot, tags)) {
 				t.Error(f)
@@ -628,6 +651,105 @@ func TestEveryClusterctlClientIsBuiltThroughTheFactory(t *testing.T) {
 	}
 	if missing := notScanned(listPackages(t, moduleRoot, "e2e"), scanned); len(missing) > 0 {
 		t.Fatalf("the scan read no Go file in the directories %v, which hold packages of the module", missing)
+	}
+}
+
+func isTheProxyType(e ast.Expr) bool {
+	ident, ok := e.(*ast.Ident)
+	return ok && ident.Name == "proxy"
+}
+
+func makesAProxy(n ast.Node) bool {
+	switch n := n.(type) {
+	case *ast.CompositeLit:
+		return isTheProxyType(n.Type)
+	case *ast.ValueSpec:
+		return isTheProxyType(n.Type)
+	case *ast.Field:
+		return isTheProxyType(n.Type)
+	case *ast.CallExpr:
+		ident, ok := n.Fun.(*ast.Ident)
+		return ok && ident.Name == "new" && len(n.Args) == 1 && isTheProxyType(n.Args[0])
+	}
+	return false
+}
+
+func proxiesMadeOutsideNewProxy(path string, src any) ([]string, error) {
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, path, src, parser.SkipObjectResolution)
+	if err != nil {
+		return nil, err
+	}
+	var found []string
+	ast.PreorderStack(file, nil, func(n ast.Node, stack []ast.Node) bool {
+		if !makesAProxy(n) {
+			return true
+		}
+		for _, outer := range slices.Backward(stack) {
+			if fn, ok := outer.(*ast.FuncDecl); ok && fn.Name.Name == "newProxy" {
+				return true
+			}
+		}
+		found = append(found, fmt.Sprintf("%s makes or declares a proxy", fset.Position(n.Pos())))
+		return true
+	})
+	return found, nil
+}
+
+func TestTheScanRefusesAProxyThatNewProxyDidNotMake(t *testing.T) {
+	cases := []struct {
+		name, src string
+		want      int
+	}{
+		{"the literal of newProxy", "package p\nfunc newProxy() *proxy { return &proxy{cfg: nil} }\n", 0},
+		{"a literal in New", "package p\nfunc New() { p := &proxy{cfg: nil}; use(p) }\n", 1},
+		{"a literal that is no pointer", "package p\nfunc New() { use(proxy{}) }\n", 1},
+		{"a literal outside a function", "package p\nvar p = &proxy{}\n", 1},
+		{"a literal of a method", "package p\nfunc (p *proxy) NewClient() { use(&proxy{}) }\n", 1},
+		{"a call of newProxy", "package p\nfunc New() { use(newProxy(nil, 0, 0)) }\n", 0},
+		{"a literal of another type", "package p\nfunc New() { use(&server{}) }\n", 0},
+		{"new in New", "package p\nfunc New() { p := new(proxy); use(p) }\n", 1},
+		{"new outside a function", "package p\nvar p = new(proxy)\n", 1},
+		{"new in newProxy", "package p\nfunc newProxy() *proxy { return new(proxy) }\n", 0},
+		{"new of another type", "package p\nfunc New() { use(new(server)) }\n", 0},
+		{"a variable declared in New", "package p\nfunc New() { var p proxy; use(&p) }\n", 1},
+		{"a variable declared outside a function", "package p\nvar p proxy\n", 1},
+		{"a variable declared in newProxy", "package p\nfunc newProxy() *proxy { var p proxy; return &p }\n", 0},
+		{"a variable of a pointer", "package p\nfunc New() { var p *proxy; use(p) }\n", 0},
+		{"a variable of another type", "package p\nfunc New() { var s server; use(&s) }\n", 0},
+		{"a field of the type", "package p\ntype wrapper struct{ p proxy }\n", 1},
+		{"a parameter of the type", "package p\nfunc New(p proxy) {}\n", 1},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			found, err := proxiesMadeOutsideNewProxy("p.go", c.src)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(found) != c.want {
+				t.Errorf("the scan found %d, want %d: %v", len(found), c.want, found)
+			}
+		})
+	}
+}
+
+func TestEveryProxyIsMadeByNewProxy(t *testing.T) {
+	files, err := filepath.Glob("*.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	files = slices.DeleteFunc(files, func(name string) bool { return strings.HasSuffix(name, "_test.go") })
+	if !slices.Contains(files, "proxy.go") {
+		t.Fatalf("the scan reads %v, and not proxy.go", files)
+	}
+	for _, name := range files {
+		found, err := proxiesMadeOutsideNewProxy(name, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, f := range found {
+			t.Errorf("%s outside newProxy, which sets the QPS that gives its clients no rate limiter", f)
+		}
 	}
 }
 

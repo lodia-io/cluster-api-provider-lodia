@@ -14,6 +14,11 @@ import (
 	"sigs.k8s.io/cluster-api/cmd/clusterctl/client/yamlprocessor"
 )
 
+const (
+	previousKubernetes = "v1.36.4"
+	newestKubernetes   = "v1.37.0"
+)
+
 func testdataVariables(cluster, kubernetes string) map[string]string {
 	return map[string]string{"CLUSTER_NAME": cluster, "KUBERNETES_VERSION": kubernetes}
 }

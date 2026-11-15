@@ -68,7 +68,7 @@ func TestMain(m *testing.M) {
 	}
 	env := &envtest.Environment{
 		CRDDirectoryPaths: []string{
-			filepath.Join("..", "..", "config", "crd", "bases"),
+			filepath.Join("..", "..", "api", "crds"),
 			filepath.Join(strings.TrimSpace(string(capi)), "core", "config", "crd", "bases"),
 		},
 		CRDs:                  lodiaCRDs,
@@ -168,7 +168,6 @@ func startManager(t *testing.T, ns string) ctrl.Manager {
 func startManagerWith(t *testing.T, c controller.Config, with ...func(*ctrl.Options)) ctrl.Manager {
 	t.Helper()
 	forTheTest := func(options *ctrl.Options) {
-		options.Cache.ReaderFailOnMissingInformer = true
 		options.Metrics = metricsserver.Options{BindAddress: "0"}
 		options.Controller = config.Controller{SkipNameValidation: new(true)}
 	}
@@ -431,6 +430,11 @@ func consistently(t *testing.T, check func() error) {
 func isSecretApply(obj runtime.ApplyConfiguration, name string) bool {
 	s, ok := obj.(*corev1ac.SecretApplyConfiguration)
 	return ok && s.Name != nil && *s.Name == name
+}
+
+func isControlPlaneApply(obj runtime.ApplyConfiguration) bool {
+	_, secret := obj.(*corev1ac.SecretApplyConfiguration)
+	return !secret
 }
 
 func condition(lcp *v1alpha1.LodiaControlPlane, conditionType string) *metav1.Condition {

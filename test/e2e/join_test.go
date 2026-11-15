@@ -8,6 +8,7 @@ package e2e
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -54,7 +55,7 @@ func TestAWorkerJoinsAClusterOfLodiasControlPlane(t *testing.T) {
 			return ctx
 		}).
 		Assess("the objects are applied, and the DevCluster, whose infrastructure the suite manages, is marked provisioned", func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
-			bounded, cancel := endAfter(ctx, bounds.Apply)
+			bounded, cancel := within(ctx, bounds.Apply)
 			defer cancel()
 			if err := applyTheCluster(bounded, cfg, k8s, key, newestKubernetes); err != nil {
 				t.Fatal(err)
@@ -197,11 +198,11 @@ func TestAWorkerJoinsAClusterOfLodiasControlPlane(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			bounded, cancel := endAfter(ctx, bounds.Move)
+			bounded, cancel := within(ctx, bounds.Move)
 			defer cancel()
 			options := clusterctl.MoveOptions{FromKubeconfig: clusterctlproxy.Kubeconfig, ToKubeconfig: clusterctlproxy.Kubeconfig, Namespace: key.Namespace}
 			if err := clusterctlproxy.MoveUntilBlocked(bounded, c, options, "LodiaControlPlane", key.Name); err != nil {
-				t.Fatal(cutShort(bounded, err))
+				t.Fatal(errors.Join(err, context.Cause(bounded)))
 			}
 			return ctx
 		}).

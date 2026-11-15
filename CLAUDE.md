@@ -24,22 +24,23 @@ Read **Authority** first; **Out of scope** is binding, findings outside it go to
 ## Commands
 
 - The repository is two Go modules, the manager at the root and the API in `api/`: `go build`, `go vet` and `go test` run in the directory of the module they are for, and `go test ./...` from the root does not reach `api/`.
-- `make generate` — deepcopy functions, the CRDs in `api/crds` with their copy in `config/crd/bases`, and the controller's ClusterRole in `config/rbac/role.yaml`; commit the result.
+- `make generate` — deepcopy functions, the CRDs in `api/crds`, and the controller's ClusterRole in `config/rbac/role.yaml`; commit the result.
 - `make verify` — the one check whose exit code says a change is done: generated files current, both modules tidy, `config/default` rendered and checked, and compared with the components of the release that `test/pin/previous-release.yaml` names, `metadata.yaml`, the release's render with no push, lint and unit and envtest tests of both modules.
   It needs `origin/main` fetched, and CI runs it on every pull request.
 - `make e2e` — the suite in `test/e2e` on a kind cluster of its own; it refuses any other cluster (`docs/decisions/e2e-on-a-named-cluster.md`), and CI runs it.
 - `make e2e-upgrade` — the upgrade from the previous release, which `test/pin/previous-release.yaml` names, to the tree's build, on a kind cluster of its own; CI runs it too.
 - `make e2e-minor` — a minor step of a Cluster's control plane, v1.36.4 to v1.37.0, with a second MachineDeployment held until Lodia has run it, on a kind cluster of its own; CI runs it too.
-- `make release-check TAG=vX.Y.Z` — refuses a tag before it is pushed, a local `vX.Y.Z` or `api/vX.Y.Z` that is missing or at another commit, and a commit whose upgrade pin is not the newest published release below the tag.
+- `make release-check TAG=vX.Y.Z` — refuses a tag before it is pushed, a tag at or below a published release of its line, a local `vX.Y.Z` or `api/vX.Y.Z` that is missing or at another commit, and a commit whose upgrade pin is not the newest published release below the tag.
 - Cluster API moves in both `go.mod` files: `go get sigs.k8s.io/cluster-api/api@vX` in `api/`, `go get sigs.k8s.io/cluster-api/api@vX sigs.k8s.io/cluster-api@vX` in the root, then `go mod tidy` in each.
   `sigs.k8s.io/cluster-api@vX` alone leaves `sigs.k8s.io/cluster-api/api` at the old version.
   Lodia's `go.lodia.io/lodia/api` moves the same way, with `LODIA_COMMIT` in the `Makefile`; `TestTheAPIModulePinsWhatTheMainModuleDoes` fails when the two `go.mod` files differ on either module.
 
 ## Layout
 
-- `api/crds/*.yaml`, their copy in `config/crd/bases`, `config/rbac/role.yaml` and `api/v1alpha1/zz_generated.deepcopy.go` are generated and never edited; `make verify` fails when `make generate` changes them.
+- `api/crds/*.yaml`, `config/rbac/role.yaml` and `api/v1alpha1/zz_generated.deepcopy.go` are generated and never edited; `make verify` fails when `make generate` changes them.
 - Only `suite_test.go`, `install_test.go`, `steps_test.go`, `join_test.go`, `upgrade_test.go`, `minor_test.go` and the two `lodia_*_test.go` in `test/e2e` carry the build tags `e2e`, `upgrade` and `minor`: `make e2e` runs `e2e` without `upgrade` or `minor`, `make e2e-upgrade` both `e2e` and `upgrade`, and `make e2e-minor` both `e2e` and `minor`.
   `go test ./...` runs the rest of `test/e2e` as unit tests, the bounds and the check of the waits among them.
+- `test/build` holds the tests that read what `make -n verify` plans and the render of `config/default`, the `go.mod` files, `api/crds/Kustomization`, the `Makefile` itself and `.github/workflows/ci.yml`; `hack/releasecheck` holds those that read the release targets of the `Makefile` and `.github/workflows/release.yml`, beside the code of `make release-check`; no end-to-end job runs either (`CONTRIBUTING.md`, "Build and test").
 - Docs tests, so a change to the docs can fail a test: `test/docs/names_test.go` reads every tracked Markdown file for names of the API group that the API does not define, and holds that `docs/README.md` and `docs/decisions/hosted-control-planes-do-not-move.md` name the UID annotation and `CopyOfAnotherObject`; `cmd/cluster-api-provider-lodia/main_test.go` reads the operator's fields under their headings in `docs/README.md` and requires its sentence that several instances of the provider are not supported.
 
 ## Rules

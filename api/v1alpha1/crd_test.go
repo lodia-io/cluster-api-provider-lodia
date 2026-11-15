@@ -18,8 +18,6 @@ import (
 	"go.lodia.io/cluster-api-provider-lodia/api/crds"
 )
 
-var bases = crds.FS
-
 func crd(t *testing.T, fsys fs.FS, name string) *apiextensionsv1.CustomResourceDefinition {
 	t.Helper()
 	raw, err := fs.ReadFile(fsys, name)
@@ -48,7 +46,7 @@ var ignore = []cmp.Option{
 }
 
 func TestTheSpecPassesLodiasSchemaThrough(t *testing.T) {
-	ours := specOf(crd(t, bases, "controlplane.lodia.io_lodiacontrolplanes.yaml"))
+	ours := specOf(crd(t, crds.FS, "controlplane.lodia.io_lodiacontrolplanes.yaml"))
 	lodias := specOf(crd(t, lodiacrds.FS, "lodia.io_controlplanes.yaml"))
 
 	for name, want := range lodias.Properties {
@@ -77,7 +75,7 @@ func TestTheSpecPassesLodiasSchemaThrough(t *testing.T) {
 }
 
 func TestTheSpecHasNeitherTheNetworkNorLodiasPause(t *testing.T) {
-	ours := specOf(crd(t, bases, "controlplane.lodia.io_lodiacontrolplanes.yaml"))
+	ours := specOf(crd(t, crds.FS, "controlplane.lodia.io_lodiacontrolplanes.yaml"))
 	for _, name := range []string{"network", "paused"} {
 		if _, ok := ours.Properties[name]; ok {
 			t.Errorf("spec.%s is in the CRD: the network comes from the Cluster, and Lodia's pause stays an operator's break-glass switch", name)
@@ -86,8 +84,8 @@ func TestTheSpecHasNeitherTheNetworkNorLodiasPause(t *testing.T) {
 }
 
 func TestTheTemplateIsTheSpecWithoutWhatTheClusterSets(t *testing.T) {
-	ours := specOf(crd(t, bases, "controlplane.lodia.io_lodiacontrolplanes.yaml"))
-	template := templateSpecOf(crd(t, bases, "controlplane.lodia.io_lodiacontrolplanetemplates.yaml"))
+	ours := specOf(crd(t, crds.FS, "controlplane.lodia.io_lodiacontrolplanes.yaml"))
+	template := templateSpecOf(crd(t, crds.FS, "controlplane.lodia.io_lodiacontrolplanetemplates.yaml"))
 
 	for _, name := range []string{"version", "controlPlaneEndpoint", "restoreFrom"} {
 		delete(ours.Properties, name)
@@ -108,12 +106,12 @@ func TestTheTemplateIsTheSpecWithoutWhatTheClusterSets(t *testing.T) {
 }
 
 func TestTheCRDsCarryTheContractLabel(t *testing.T) {
-	files, err := fs.Glob(bases, "*.yaml")
+	files, err := fs.Glob(crds.FS, "*.yaml")
 	if err != nil || len(files) != 2 {
 		t.Fatalf("CRDs %v: %v", files, err)
 	}
 	for _, f := range files {
-		labels := crd(t, bases, f).Labels
+		labels := crd(t, crds.FS, f).Labels
 		if v := labels["cluster.x-k8s.io/v1beta2"]; v != "v1alpha1" {
 			t.Errorf("%s: cluster.x-k8s.io/v1beta2 is %q", f, v)
 		}

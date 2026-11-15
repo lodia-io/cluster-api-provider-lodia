@@ -18,7 +18,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/util/wait"
-	"k8s.io/client-go/util/flowcontrol"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"go.lodia.io/cluster-api-provider-lodia/internal/controller"
@@ -100,24 +99,14 @@ func (s snapshot) changesTo(next snapshot) []string {
 	return changes
 }
 
-// endAfter ends the context after d as context.WithTimeout does, but by
-// cancelling it. A request that starts under a deadline is refused by client-go's
-// rate limiter at once, with an error that is no context's, when its token is
-// due after the deadline or when the deadline has just passed and the context's
-// timer has not run, which a tick at the end of a window brings about:
-// https://github.com/golang/time/blob/v0.15.0/rate/rate.go#L268-L277
-// https://github.com/kubernetes/client-go/blob/v0.37.2/rest/request.go#L672-L678
-func endAfter(ctx context.Context, d time.Duration) (context.Context, context.CancelFunc) {
-	ctx, cancel := context.WithCancelCause(ctx)
-	timer := time.AfterFunc(d, func() { cancel(fmt.Errorf("%w after %s", context.DeadlineExceeded, d)) })
-	return ctx, func() {
-		timer.Stop()
-		cancel(context.Canceled)
-	}
+// within ends the context after d, with a cause that names d: a request that
+// the end of the context cuts short reports only context.DeadlineExceeded.
+func within(ctx context.Context, d time.Duration) (context.Context, context.CancelFunc) {
+	return context.WithTimeoutCause(ctx, d, fmt.Errorf("%w after %s", context.DeadlineExceeded, d))
 }
 
-// endedBy gives a poll's error the cause that endAfter gave its context, since
-// the poll reports only context.Canceled.
+// endedBy gives a poll's error the cause that within gave its context, since
+// the poll reports only the context's own error.
 func endedBy(ctx context.Context, err error) error {
 	if cause := context.Cause(ctx); cause != nil && wait.Interrupted(err) {
 		return cause
@@ -125,20 +114,10 @@ func endedBy(ctx context.Context, err error) error {
 	return err
 }
 
-// cutShort gives the error of a call that the end of bounded cut short the
-// cause that endAfter gave it, since the call reports only context.Canceled.
-func cutShort(bounded context.Context, err error) error {
-	cause := context.Cause(bounded)
-	if err == nil || cause == nil {
-		return err
-	}
-	return errors.Join(err, cause)
-}
-
 // settle waits until settleReads reads in a row agree with the one before,
 // which the first read has none of.
 func settle(ctx context.Context, c client.Reader, namespace string, bound, interval time.Duration) (snapshot, error) {
-	bounded, cancel := endAfter(ctx, bound)
+	bounded, cancel := within(ctx, bound)
 	defer cancel()
 	var previous snapshot
 	var agreed int
@@ -170,7 +149,7 @@ func settle(ctx context.Context, c client.Reader, namespace string, bound, inter
 }
 
 func hold(ctx context.Context, c client.Reader, namespace string, window, interval time.Duration, baseline snapshot) error {
-	windowed, cancel := endAfter(ctx, window)
+	windowed, cancel := within(ctx, window)
 	defer cancel()
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
@@ -197,25 +176,13 @@ func hold(ctx context.Context, c client.Reader, namespace string, window, interv
 // one.
 type scriptedReads struct {
 	client.Reader
-	n         atomic.Int32
-	lists     atomic.Int32
-	deadlined atomic.Int32
-	change    func(read int, kind string, obj *unstructured.Unstructured)
-	hangFrom  int
-	failFrom  int
-	limiter   flowcontrol.RateLimiter
+	n        atomic.Int32
+	change   func(read int, kind string, obj *unstructured.Unstructured)
+	hangFrom int
+	failFrom int
 }
 
 func (r *scriptedReads) List(ctx context.Context, list client.ObjectList, opts ...client.ListOption) error {
-	r.lists.Add(1)
-	if _, ok := ctx.Deadline(); ok {
-		r.deadlined.Add(1)
-	}
-	if r.limiter != nil {
-		if err := r.limiter.Wait(ctx); err != nil {
-			return fmt.Errorf("client rate limiter Wait returned an error: %w", err)
-		}
-	}
 	if r.failFrom > 0 && int(r.n.Load()) >= r.failFrom {
 		return errors.New("the API server is gone")
 	}
@@ -244,15 +211,6 @@ func (r *scriptedReads) List(ctx context.Context, list client.ObjectList, opts .
 
 func scripted(change func(read int, kind string, obj *unstructured.Unstructured)) *scriptedReads {
 	return &scriptedReads{Reader: newQuickStartNamespace().client(), change: change}
-}
-
-func limitedToSnapshots(t *testing.T, r *scriptedReads, snapshots int) {
-	t.Helper()
-	counted := scripted(nil)
-	if _, err := snapshotOf(t.Context(), counted, quickStartKey.Namespace); err != nil {
-		t.Fatal(err)
-	}
-	r.limiter = flowcontrol.NewTokenBucketRateLimiter(0.001, snapshots*int(counted.lists.Load()))
 }
 
 func providersEntry(obj *unstructured.Unstructured, change func(*metav1.ManagedFieldsEntry)) {
@@ -375,38 +333,43 @@ func TestSettleReturnsAfterFourReadsInARowThatAgree(t *testing.T) {
 	cases := []struct {
 		name      string
 		change    func(int, string, *unstructured.Unstructured)
+		failFrom  int
 		wantReads int32
 		failure   string
 	}{
-		{"nothing changes: the first read has none to agree with, and four agree", nil, 5, ""},
-		{"a Machine written by the third read: four reads agree after it", written(3), 7, ""},
+		{"nothing changes: the first read has none to agree with, and four agree", nil, 0, 5, ""},
+		{"a Machine written by the third read: four reads agree after it", written(3), 0, 7, ""},
 		{"three agree, then a write, then four agree", func(read int, kind string, obj *unstructured.Unstructured) {
 			if kind == "Machine" {
 				obj.SetResourceVersion(fmt.Sprint(map[bool]int{true: 1, false: 2}[read <= 4]))
 			}
-		}, 9, ""},
+		}, 0, 9, ""},
 		{"a write on every read", func(read int, kind string, obj *unstructured.Unstructured) {
 			if kind == "Machine" {
 				obj.SetResourceVersion(fmt.Sprint(read))
 			}
-		}, 0, "have not agreed"},
+		}, 0, 0, "the resourceVersion went from"},
 		{"a loop of the provider's on the ControlPlane", func(read int, kind string, obj *unstructured.Unstructured) {
 			if kind == "ControlPlane" {
 				providersEntry(obj, func(e *metav1.ManagedFieldsEntry) { e.Time = &metav1.Time{Time: time.Unix(int64(read), 0)} })
 			}
-		}, 0, "the managedFields entry of cluster-api-provider-lodia changed"},
+		}, 0, 0, "the managedFields entry of cluster-api-provider-lodia changed"},
 		{"a ControlPlane that Lodia writes on every read", func(read int, kind string, obj *unstructured.Unstructured) {
 			if kind == "ControlPlane" || kind == "Etcd" {
 				obj.SetResourceVersion(fmt.Sprint(read))
 			}
-		}, 5, ""},
+		}, 0, 5, ""},
+		{"a read fails", nil, 1, 0, "the API server is gone"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			r := scripted(c.change)
+			r.failFrom = c.failFrom
 			stable, err := settle(t.Context(), r, quickStartKey.Namespace, 500*time.Millisecond, 10*time.Millisecond)
 			requireFailure(t, err, c.failure)
 			if err != nil {
+				requireFailure(t, err, "after 500ms, 4 reads in a row have not agreed")
+				requireFailure(t, err, "context deadline exceeded after 500ms")
 				return
 			}
 			if got := r.n.Load(); got != c.wantReads {
@@ -424,34 +387,35 @@ func TestHoldFailsAtTheFirstChangeAndOtherwiseTakesTheWholeWindow(t *testing.T) 
 	baseline, err := snapshotOf(t.Context(), scripted(nil), quickStartKey.Namespace)
 	requireNoError(t, err)
 	cases := []struct {
-		name     string
-		change   func(read int, kind string, obj *unstructured.Unstructured)
-		hangFrom int
-		failure  string
+		name               string
+		change             func(read int, kind string, obj *unstructured.Unstructured)
+		hangFrom, failFrom int
+		failure            string
 	}{
-		{"nothing changes", nil, 0, ""},
+		{"nothing changes", nil, 0, 0, ""},
 		{"Lodia and etcd-druid write on every read", func(read int, kind string, obj *unstructured.Unstructured) {
 			if kind == "Etcd" || kind == "ControlPlane" {
 				obj.SetResourceVersion(fmt.Sprint(read))
 			}
-		}, 0, ""},
-		{"a read that the end of the window cuts short", nil, 3, ""},
+		}, 0, 0, ""},
+		{"a read that the end of the window cuts short", nil, 3, 0, ""},
 		{"a Machine is written on the third read", func(read int, kind string, obj *unstructured.Unstructured) {
 			if kind == "Machine" && read >= 3 {
 				obj.SetResourceVersion("written")
 			}
-		}, 0, "Machine w-md-0-abc-1: the resourceVersion"},
+		}, 0, 0, "Machine w-md-0-abc-1: the resourceVersion"},
 		{"the provider's apply changes the ControlPlane on the third read", func(read int, kind string, obj *unstructured.Unstructured) {
 			if kind == "ControlPlane" && read >= 3 {
 				providersEntry(obj, func(e *metav1.ManagedFieldsEntry) { e.Time = &metav1.Time{Time: time.Unix(int64(read), 0)} })
 			}
-		}, 0, "the managedFields entry of cluster-api-provider-lodia changed"},
+		}, 0, 0, "the managedFields entry of cluster-api-provider-lodia changed"},
+		{"a read fails on the third", nil, 0, 2, "the API server is gone"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
 			r := scripted(c.change)
-			r.hangFrom = c.hangFrom
+			r.hangFrom, r.failFrom = c.hangFrom, c.failFrom
 			start := time.Now()
 			err := hold(t.Context(), r, quickStartKey.Namespace, window, interval, baseline)
 			requireFailure(t, err, c.failure)
@@ -460,85 +424,6 @@ func TestHoldFailsAtTheFirstChangeAndOtherwiseTakesTheWholeWindow(t *testing.T) 
 				t.Errorf("the window ended after %s, before its %s", took, window)
 			case c.failure != "" && took >= window:
 				t.Errorf("the change was found after %s, not at the first read that saw it", took)
-			}
-		})
-	}
-}
-
-func TestHoldEndsQuietlyWhereTheClientsLimiterWouldHoldAReadPastTheWindowAndFailsOnAnyOtherError(t *testing.T) {
-	const interval, window = 100 * time.Millisecond, 5*100*time.Millisecond + 50*time.Millisecond
-	baseline, err := snapshotOf(t.Context(), scripted(nil), quickStartKey.Namespace)
-	requireNoError(t, err)
-	written := func(read int, kind string, obj *unstructured.Unstructured) {
-		if kind == "Machine" && read >= 2 {
-			obj.SetResourceVersion("written")
-		}
-	}
-	cases := []struct {
-		name     string
-		change   func(read int, kind string, obj *unstructured.Unstructured)
-		snapshot int
-		failFrom int
-		failure  string
-	}{
-		{"the token of the third snapshot is due after the window", nil, 2, 0, ""},
-		{"a Machine is written on the second read, ahead of a limiter that holds a later one", written, 3, 0, "Machine w-md-0-abc-1: the resourceVersion"},
-		{"a read fails on the third, ahead of a limiter that holds a later one", nil, 4, 2, "the API server is gone"},
-	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			t.Parallel()
-			r := scripted(c.change)
-			r.failFrom = c.failFrom
-			if c.snapshot > 0 {
-				limitedToSnapshots(t, r, c.snapshot)
-			}
-			start := time.Now()
-			err := hold(t.Context(), r, quickStartKey.Namespace, window, interval, baseline)
-			requireFailure(t, err, c.failure)
-			if took := time.Since(start); c.failure == "" && took < window {
-				t.Errorf("the window ended after %s, before its %s", took, window)
-			}
-			if n := r.deadlined.Load(); n > 0 {
-				t.Errorf("%d reads ran under a deadline, which makes the limiter refuse a read at once with an error that is no context's", n)
-			}
-		})
-	}
-}
-
-func TestSettleNamesWhyTheReadsDisagreeWhereTheClientsLimiterWouldHoldAReadPastItsBound(t *testing.T) {
-	const interval, bound = 50 * time.Millisecond, 400 * time.Millisecond
-	written := func(read int, kind string, obj *unstructured.Unstructured) {
-		if kind == "Machine" {
-			obj.SetResourceVersion(fmt.Sprint(read))
-		}
-	}
-	cases := []struct {
-		name     string
-		change   func(read int, kind string, obj *unstructured.Unstructured)
-		snapshot int
-		failFrom int
-		failure  string
-	}{
-		{"writes on every read, and a limiter that holds the third", written, 2, 0, "the resourceVersion went from 1 to 2"},
-		{"a read fails", nil, 0, 1, "the API server is gone"},
-	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			r := scripted(c.change)
-			r.failFrom = c.failFrom
-			if c.snapshot > 0 {
-				limitedToSnapshots(t, r, c.snapshot)
-			}
-			_, err := settle(t.Context(), r, quickStartKey.Namespace, bound, interval)
-			if err == nil || !strings.Contains(err.Error(), "have not agreed") || !strings.Contains(err.Error(), c.failure) {
-				t.Errorf("want a failure to agree for the reason %q, got %v", c.failure, err)
-			}
-			if err != nil && strings.Contains(err.Error(), "rate limiter") {
-				t.Errorf("the failure blames the limiter: %v", err)
-			}
-			if n := r.deadlined.Load(); n > 0 {
-				t.Errorf("%d reads ran under a deadline, which makes the limiter refuse a read at once with an error that is no context's", n)
 			}
 		})
 	}
@@ -556,22 +441,14 @@ func TestTheStabilityChecksReadAsOftenAndAsLongAsClusterAPIsDo(t *testing.T) {
 	}
 }
 
-func TestAnErrorOfACallThatItsBoundCutShortNamesTheBoundAndTheCauseOfTheEnd(t *testing.T) {
-	ended, cancel := endAfter(t.Context(), time.Millisecond)
+func TestWithinEndsItsContextAtItsBoundWithACauseThatNamesIt(t *testing.T) {
+	bounded, cancel := within(t.Context(), 20*time.Millisecond)
 	defer cancel()
-	<-ended.Done()
-	running, stop := endAfter(t.Context(), time.Minute)
-	defer stop()
-	refused := errors.New("forbidden")
-
-	err := cutShort(ended, fmt.Errorf("patch: %w", context.Canceled))
-	if !errors.Is(err, context.DeadlineExceeded) || !errors.Is(err, context.Canceled) || !strings.Contains(err.Error(), "patch") || !strings.Contains(err.Error(), "context deadline exceeded after 1ms") {
-		t.Errorf("a call cut short fails with %v, want its own error and the cause of the end with its bound", err)
+	<-bounded.Done()
+	if err := bounded.Err(); !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("the context ended with %v", err)
 	}
-	if err := cutShort(running, refused); !errors.Is(err, refused) || err.Error() != refused.Error() {
-		t.Errorf("a call that failed before its bound ended fails with %v, want its own error as it is", err)
-	}
-	if err := cutShort(ended, nil); err != nil {
-		t.Errorf("a call that did not fail fails with %v", err)
+	if cause := context.Cause(bounded); !errors.Is(cause, context.DeadlineExceeded) || cause.Error() != "context deadline exceeded after 20ms" {
+		t.Errorf("the cause of the end is %v, want the deadline and the bound", cause)
 	}
 }

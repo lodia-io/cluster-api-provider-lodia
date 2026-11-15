@@ -8,7 +8,7 @@ Workers join through Cluster API's kubeadm bootstrap provider (CABPK) with the b
 `LodiaControlPlaneTemplate` holds the same spec, but the version, `controlPlaneEndpoint` and `restoreFrom`, for ClusterClasses.
 
 Go, controller-runtime; the manager runs as a Deployment of one replica (`cluster-api-provider-lodia-system`, leader election) on a management cluster that runs Lodia and Cluster API.
-Pinned sources: Cluster API [v1.15.0-beta.0] (a3b7b6f); kubeadm and Kubernetes v1.35.0; and Lodia's API module at [lodia-io/lodia@f91168b][lo].
+Pinned sources: Cluster API [v1.15.0-beta.0] (a3b7b6f); kubeadm and Kubernetes v1.37.2, as `k8s.io/*` v0.37.2 in `go.mod`; and Lodia's API module at [lodia-io/lodia@f91168b][lo].
 
 ## What it owns
 
@@ -56,8 +56,9 @@ No admission webhooks: [no-admission-webhooks](decisions/no-admission-webhooks.m
 ### The API module
 
 The types are the Go module `go.lodia.io/cluster-api-provider-lodia/api` ([project-home](decisions/project-home.md)): the package `v1alpha1`, and the package `crds`, which holds the two CRDs as `crds.FS`.
-`make generate` writes the CRDs from the types' markers into `api/crds` and copies them into `config/crd/bases`, which `config/default` reads: kustomize loads no file outside the kustomization's root by default ([load restrictor][ks-restrictor]).
-`make verify` fails when either is stale.
+`make generate` writes the CRDs from the types' markers into `api/crds`, and `config/default` reads that directory through `api/crds/Kustomization`, which has no extension so that the `*.yaml` pattern of `crds.FS` skips it.
+kustomize keeps the files of a kustomization inside its root by default ([load restrictor][ks-restrictor]), and a directory resource gets a loader of its own, rooted at that directory ([New][ks-new], [Load][ks-load]), so the CRDs need no copy under `config/`.
+`make verify` fails when they are stale.
 A platform that imports the types requires `go.lodia.io/cluster-api-provider-lodia/api` alone, and gets no controller-runtime and no `sigs.k8s.io/cluster-api`.
 It does get `k8s.io/client-go` through `k8s.io/apiextensions-apiserver`, and `k8s.io/*` at v0.37.2 or later, the floor of Cluster API v1.15.0-beta.0's API module ([why](decisions/project-home.md#why)).
 It never requires `go.lodia.io/cluster-api-provider-lodia`: `v0.1.0-alpha.1` of that module holds the same package, and a build that requires both fails with an ambiguous import ([ambiguous imports](https://go.dev/ref/mod#resolve-pkg-mod)).
@@ -110,8 +111,10 @@ What another controller owns is left alone ([decision](decisions/objects-of-anot
 ### The cache and the watches
 
 The cache holds no Secret data.
+It fails a typed read of a type it has no informer for ([`ReaderFailOnMissingInformer`][cr-fail-on-missing]) instead of starting one, which for a Secret would hold the data of every Secret labelled `lodia.io/control-plane`.
 The provider watches the metadata of Secrets labelled `lodia.io/control-plane` ([labels][lo-labels]), maps `<cp>-admin-kubeconfig` and `<cp>-ca-bundle` to the `LodiaControlPlane` of the Cluster of that name, and reads both, and its own two, from the API server on every pass.
 `ControlPlane` and `Cluster` events map the same way, through the Cluster's `controlPlaneRef`, so a leftover `ControlPlane` of another owner wakes the provider when it goes.
+A `Cluster` update passes only when the Cluster's generation changed ([`GenerationChangedPredicate`][cr-generation-changed]), so an update of its metadata or status starts no pass.
 The cache resyncs every 10 minutes by default, Cluster API's default ([--sync-period][capi-sync]), which repairs the provider's own Secrets, which no watch covers, and a missed delete event.
 
 ### RBAC
@@ -333,7 +336,7 @@ Install Cluster API at [the version the provider needs](#the-cluster-api-version
 clusterctl init --core cluster-api:v1.15.0-beta.0 --bootstrap kubeadm:v1.15.0-beta.0 --control-plane lodia --infrastructure <yours>
 ```
 
-`--control-plane lodia` installs the newest release of the provider, and `--control-plane lodia:v0.1.0-alpha.1` pins a version.
+`--control-plane lodia` installs the newest release of the provider, and `--control-plane lodia:v0.1.0-alpha.2` pins a version.
 A named control plane provider replaces the kubeadm one that `init` adds on its first run otherwise ([defaults](https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/cmd/clusterctl/client/init.go#L275-L297)).
 While every release is a pre-release, `latest` is the newest one; once a stable release exists, `latest` skips pre-releases ([selection](https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/cmd/clusterctl/client/repository/repository_versions.go#L86-L153)).
 
@@ -352,7 +355,7 @@ clusterctl reads a variable from the environment, and from its configuration fil
 | `CAPI_INSECURE_DIAGNOSTICS` | `false` | whether it serves them without TLS and authentication |
 
 The defaults of the first two are the namespace and the name that a clusterctl install of the kubeadm bootstrap provider gives its ServiceAccount ([namespace](https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/bootstrap/kubeadm/config/default/kustomization.yaml#L1-L4), [name](https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/bootstrap/kubeadm/config/rbac/service_account.yaml#L1-L5)); set them when yours differ.
-The manifest binds that ServiceAccount's user, `system:serviceaccount:<namespace>:<name>` ([form](https://github.com/kubernetes/kubernetes/blob/v1.35.0/staging/src/k8s.io/apiserver/pkg/authentication/serviceaccount/util.go#L53-L57)), to a ClusterRole that grants `get` on `lodiacontrolplanes` and nothing else ([why](decisions/kubeadm-bootstrap-grant.md)).
+The manifest binds that ServiceAccount's user, `system:serviceaccount:<namespace>:<name>` ([form](https://github.com/kubernetes/kubernetes/blob/v1.37.2/staging/src/k8s.io/apiserver/pkg/authentication/serviceaccount/util.go#L76-L80)), to a ClusterRole that grants `get` on `lodiacontrolplanes` and nothing else ([why](decisions/kubeadm-bootstrap-grant.md)).
 
 clusterctl keeps no variable's value in the cluster, and processes the variables again at every `clusterctl upgrade` ([inventory](https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/cmd/clusterctl/client/repository/components.go#L120-L138), [upgrade](https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/cmd/clusterctl/client/cluster/upgrader.go#L353-L373)).
 A value given to `init` and not to `upgrade` falls back to its default, and the grant then names the default ServiceAccount.
@@ -389,7 +392,7 @@ metadata:
   name: lodia
   namespace: cluster-api-provider-lodia-system
 spec:
-  version: v0.1.0-alpha.1
+  version: v0.1.0-alpha.2
   fetchConfig:
     url: https://github.com/lodia-io/cluster-api-provider-lodia/releases/latest/control-plane-components.yaml
   configSecret:
@@ -540,7 +543,7 @@ To give the copy a new, empty control plane, remove its annotation `controlplane
 - [no-admission-webhooks](decisions/no-admission-webhooks.md) — CEL only, Lodia's spec rules repeated and held by a test, the network's rules left to Lodia.
 - [least-privilege-rbac](decisions/least-privilege-rbac.md) — RBAC from markers, leader election in the manager's namespace on its own Lease.
 - [releases-through-clusterctl](decisions/releases-through-clusterctl.md) — a GitHub release with the two files clusterctl reads, the image on ghcr.io by digest, keyless signatures and attestations of the image and both files, signed tags by hand with the API module's beside them, pre-releases until Cluster API v1.15.0.
-- [e2e-on-a-named-cluster](decisions/e2e-on-a-named-cluster.md) — the suite's own kind cluster, installed through clusterctl, a worker that joins, an upgrade from the previous release, every wait bounded.
+- [e2e-on-a-named-cluster](decisions/e2e-on-a-named-cluster.md) — the suite's own kind cluster, installed through clusterctl, a worker that joins, an upgrade from the previous release, a minor step through Lodia, every wait bounded.
 
 ## Contracts this provider implements
 
@@ -632,11 +635,15 @@ To give the copy a new, empty control plane, remove its annotation `controlplane
 
 <!-- kustomize v5.7.0 -->
 [ks-restrictor]: https://github.com/kubernetes-sigs/kustomize/blob/kustomize/v5.7.0/kustomize/commands/build/flagloadrestrictor.go#L16-L25
+[ks-new]: https://github.com/kubernetes-sigs/kustomize/blob/kustomize/v5.7.0/api/internal/loader/fileloader.go#L150-L182
+[ks-load]: https://github.com/kubernetes-sigs/kustomize/blob/kustomize/v5.7.0/api/internal/loader/fileloader.go#L290-L305
 
 <!-- controller-runtime, kubeadm, Kubernetes -->
-[kubeadm-discovery]: https://github.com/kubernetes/kubernetes/blob/v1.35.0/cmd/kubeadm/app/discovery/token/token.go#L59-L152
-[kubeadm-pins]: https://github.com/kubernetes/kubernetes/blob/v1.35.0/cmd/kubeadm/app/discovery/token/token.go#L191-L209
-[kubeadm-jws]: https://github.com/kubernetes/kubernetes/blob/v1.35.0/cmd/kubeadm/app/discovery/token/token.go#L211-L259
+[cr-fail-on-missing]: https://github.com/kubernetes-sigs/controller-runtime/blob/v0.25.2/pkg/cache/cache.go#L130-L137
+[cr-generation-changed]: https://github.com/kubernetes-sigs/controller-runtime/blob/v0.25.2/pkg/predicate/predicate.go#L215-L227
+[kubeadm-discovery]: https://github.com/kubernetes/kubernetes/blob/v1.37.2/cmd/kubeadm/app/discovery/token/token.go#L59-L152
+[kubeadm-pins]: https://github.com/kubernetes/kubernetes/blob/v1.37.2/cmd/kubeadm/app/discovery/token/token.go#L191-L209
+[kubeadm-jws]: https://github.com/kubernetes/kubernetes/blob/v1.37.2/cmd/kubeadm/app/discovery/token/token.go#L211-L259
 
 <!-- the reference providers -->
 [kp-patchcluster]: https://github.com/clastix/cluster-api-control-plane-provider-kamaji/blob/v0.21.0/controllers/kamajicontrolplane_controller_cluster_patch.go#L104-L151

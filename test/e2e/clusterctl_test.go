@@ -34,6 +34,7 @@ import (
 	"sigs.k8s.io/yaml"
 
 	"go.lodia.io/cluster-api-provider-lodia/test/clusterctlproxy"
+	"go.lodia.io/cluster-api-provider-lodia/test/pin"
 )
 
 const (
@@ -108,12 +109,7 @@ func developmentVersion(metadata []byte) (string, error) {
 	if len(m.ReleaseSeries) == 0 {
 		return "", errors.New("metadata.yaml has no release series")
 	}
-	newest := slices.MaxFunc(m.ReleaseSeries, func(a, b clusterctlv1.ReleaseSeries) int {
-		if a.Major != b.Major {
-			return int(a.Major - b.Major)
-		}
-		return int(a.Minor - b.Minor)
-	})
+	newest := pin.NewestSeries(m.ReleaseSeries)
 	return fmt.Sprintf("v%d.%d.%d", newest.Major, newest.Minor, developmentPatch), nil
 }
 
