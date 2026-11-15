@@ -52,7 +52,7 @@ Every release but `v0.1.0-alpha.1` is signed and attested.
 - `Makefile` — `release-components`, `release-image`, `release-login`, `release-sign`, `release-verify-signatures`, `release-verify-attestations`, `release-check` and `metadata`; `make verify` runs the release's render without a push, `release-image` and `metadata`.
 - `.github/workflows/release.yml` — the release and the cleanup job; `.ko.yaml` — the base image.
 - `metadata.yaml` — the series; `hack/releasecheck` — the tag check, which includes both tags at the commit, and the metadata check.
-- `hack/releasecheck/check_test.go` — `TestTheTagCheckRefuses` and `TestTheMetadataCheck`; `hack/releasecheck/release_test.go` — `TestTheReleaseWorkflowStartsOnEveryTagAndCleansUpUnlessTheReleaseSucceeds`, `TestTheReleaseWorkflowGrantsOnlyWhatItUses`, `TestTheReleaseWorkflowPullsTheImageThatTheMakefileChecks`, `TestTheReleaseWorkflowPinsEveryActionToACommitWithItsVersion`, `TestTheMakefileSignsAndVerifiesTheImageAndTheFilesOfTheRelease` and `TestVerifyChecksTheImageItRenders`.
+- `hack/releasecheck/check_test.go` — `TestTheTagCheckRefuses` and `TestTheMetadataCheck`; `hack/releasecheck/release_test.go` — `TestTheReleaseWorkflowStartsOnEveryTagAndCleansUpUnlessTheReleaseSucceeds`, `TestTheReleaseWorkflowGrantsOnlyWhatItUses`, `TestTheReleaseWorkflowPullsTheImageThatTheMakefileChecks`, `TestTheReleaseWorkflowPinsEveryActionToACommitWithItsVersion`, `TestTheMakefileSignsAndVerifiesTheImageAndTheFilesOfTheRelease`; `test/build/makefile_test.go` — `TestVerifyChecksTheImageItRenders`.
 
 <!-- Cluster API v1.15.0-beta.0 -->
 [cc-components]: https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/docs/book/src/developer/providers/contracts/clusterctl.md?plain=1#L215-L259

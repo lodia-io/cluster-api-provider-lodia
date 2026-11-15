@@ -174,3 +174,57 @@ func TestAMakefileWithIgnoreIsRefused(t *testing.T) {
 		})
 	}
 }
+
+func planOfVerify(t *testing.T) string {
+	t.Helper()
+	cmd := exec.CommandContext(t.Context(), "make", "--no-print-directory", "verify")
+	cmd.Dir = root
+	return recipeOf(t, cmd)
+}
+
+func TestVerifyChecksTheImageItRenders(t *testing.T) {
+	out := planOfVerify(t)
+
+	render := strings.Index(out, "--platform=linux/amd64,linux/arm64 --push=false --tags=v0.0.0-verify")
+	check := strings.Index(out, "go run ./hack/releasecheck image --repository=ghcr.io/lodia-io/cluster-api-provider-lodia --tag=v0.0.0-verify out/control-plane-components.yaml")
+	if render < 0 || check < render {
+		t.Errorf("want the render of the components YAML with the tag, then the check of its image with the same tag; the render is at %d and the check at %d of:\n%s", render, check, out)
+	}
+}
+
+func TestVerifyRendersConfigDefaultOnce(t *testing.T) {
+	out := planOfVerify(t)
+
+	if got := strings.Count(out, " build config/default"); got != 1 {
+		t.Errorf("want one render of config/default in the plan of verify, got %d in:\n%s", got, out)
+	}
+}
+
+func TestVerifyRunsTheMetadataCheck(t *testing.T) {
+	out := planOfVerify(t)
+
+	if !slices.Contains(strings.Split(out, "\n"), "go run ./hack/releasecheck metadata") {
+		t.Errorf("want the metadata check as a line of its own in:\n%s", out)
+	}
+}
+
+func TestAFailedRenderStopsEveryTargetThatReadsIt(t *testing.T) {
+	for _, target := range []string{"components", "upgrade-components", "release-components"} {
+		t.Run(target, func(t *testing.T) {
+			dir := t.TempDir()
+			cmd := exec.CommandContext(t.Context(), "make", "--no-print-directory", target, "KUSTOMIZE=./no-such-package", "RENDER="+filepath.Join(dir, "default.yaml"), "RELEASE_DIR="+dir, "PIN_DIR="+dir)
+			cmd.Dir = root
+
+			out, err := cmd.CombinedOutput()
+
+			if err == nil {
+				t.Fatalf("want the target to fail with a failed render, got:\n%s", out)
+			}
+			for _, name := range []string{"default.yaml", "control-plane-components.yaml"} {
+				if _, statErr := os.Stat(filepath.Join(dir, name)); !errors.Is(statErr, os.ErrNotExist) {
+					t.Errorf("the failed render left %s: %v", name, statErr)
+				}
+			}
+		})
+	}
+}
