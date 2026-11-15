@@ -173,6 +173,9 @@ const (
 func requireOnlyPullRequestsToBeCancelled(workflow []byte) error {
 	var ci struct {
 		Concurrency map[string]any `json:"concurrency"`
+		Jobs        map[string]struct {
+			Concurrency any `json:"concurrency"`
+		} `json:"jobs"`
 	}
 	if err := yaml.Unmarshal(workflow, &ci); err != nil {
 		return err
@@ -181,6 +184,11 @@ func requireOnlyPullRequestsToBeCancelled(workflow []byte) error {
 		return errors.New("ci.yml has no concurrency: a pull request that is pushed to again would go on with its superseded run")
 	}
 	var errs []error
+	for _, name := range slices.Sorted(maps.Keys(ci.Jobs)) {
+		if ci.Jobs[name].Concurrency != nil {
+			errs = append(errs, fmt.Errorf("the job %s of ci.yml has a concurrency of its own, which can cancel a run of main: %s", name, whyMainIsNotCancelled))
+		}
+	}
 	if got := ci.Concurrency["group"]; got != groupOfCI {
 		errs = append(errs, fmt.Errorf("the concurrency group of ci.yml is %q, want %q, so that a push to main has a group of its own and a pull request one by its ref: %s", got, groupOfCI, whyMainIsNotCancelled))
 	}
@@ -215,6 +223,9 @@ func TestACIThatCancelsARunOfMainIsRefused(t *testing.T) {
 		{"a group of one name", "concurrency:\n  group: ci\n  cancel-in-progress: " + cancellationOfCI + "\n", "the concurrency group of ci.yml is"},
 		{"a group by head_ref", "concurrency:\n  group: ci-${{ github.head_ref || github.run_id }}\n  cancel-in-progress: " + cancellationOfCI + "\n", "the concurrency group of ci.yml is"},
 		{"a queue of runs", concurrencyOfCI + "  queue: max\n", "has queue"},
+		{"jobs without a concurrency", concurrencyOfCI + "jobs:\n  verify:\n    runs-on: ubuntu-latest\n", ""},
+		{"a job with a group and a cancellation of its own", concurrencyOfCI + "jobs:\n  verify:\n    runs-on: ubuntu-latest\n    concurrency:\n      group: verify\n      cancel-in-progress: true\n", "the job verify of ci.yml has a concurrency of its own"},
+		{"a job with a concurrency of one name", concurrencyOfCI + "jobs:\n  verify:\n    runs-on: ubuntu-latest\n  e2e:\n    runs-on: ubuntu-latest\n    concurrency: e2e\n", "the job e2e of ci.yml has a concurrency of its own"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
