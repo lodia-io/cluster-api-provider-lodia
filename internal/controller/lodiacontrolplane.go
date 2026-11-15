@@ -464,8 +464,12 @@ func report(lcp *v1alpha1.LodiaControlPlane, u *unstructured.Unstructured, secre
 		lcp.Status.Initialization.ControlPlaneInitialized = new(true)
 	}
 	if k := cp.Status.Kubernetes; k != nil && k.Version != "" {
-		lcp.Status.Version = k.Version
-		lcp.Status.Versions = []clusterv1.StatusVersion{{Version: k.Version}}
+		v := k.Version
+		if c := cp.Status.Components; c != nil && c.APIServer != nil && c.APIServer.Version != "" {
+			v = c.APIServer.Version
+		}
+		lcp.Status.Version = v
+		lcp.Status.Versions = []clusterv1.StatusVersion{{Version: v}}
 	}
 	if err := conditions.SetMirrorConditionFromUnstructured(u, lcp, lodiav1alpha1.ConditionReachable,
 		conditions.TargetConditionType(clusterv1.AvailableCondition)); err != nil {
