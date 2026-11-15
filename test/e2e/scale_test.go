@@ -1043,16 +1043,12 @@ func requireEveryWaitBounded(t *testing.T, name string) {
 	}
 }
 
-func TestEveryWaitOfTheJoinTestIsBoundedByAFieldOfTheBoundsThatNoOtherWaitTakes(t *testing.T) {
-	requireEveryWaitBounded(t, "join_test.go")
-}
-
-func TestEveryWaitOfTheUpgradeTestIsBoundedByAFieldOfItsOwnBoundsThatNoOtherWaitTakes(t *testing.T) {
-	requireEveryWaitBounded(t, "upgrade_test.go")
-}
-
-func TestEveryWaitOfTheMinorTestIsBoundedByAFieldOfItsOwnBoundsThatNoOtherWaitTakes(t *testing.T) {
-	requireEveryWaitBounded(t, "minor_test.go")
+func TestEveryWaitOfEveryWaitedFileIsBoundedByAFieldOfItsOwnBoundsThatNoOtherWaitTakes(t *testing.T) {
+	for _, name := range slices.Sorted(maps.Keys(waitedFiles)) {
+		t.Run(name, func(t *testing.T) {
+			requireEveryWaitBounded(t, name)
+		})
+	}
 }
 
 func TestTheCheckOfTheWaitsRefusesWhatBreaksTheSumOfTheBounds(t *testing.T) {

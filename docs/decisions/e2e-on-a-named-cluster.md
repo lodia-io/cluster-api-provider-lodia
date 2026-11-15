@@ -47,7 +47,7 @@ Decided 2026-11-09; the second job, `e2e-upgrade`, and the third, `e2e-minor`, a
 
 - The suite needs Docker and helm, and runs where the Docker network `kind` is routable, as on GitHub's Linux runners.
   Docker Desktop does not route it, so the suite does not run on macOS.
-- A new bound joins the model of the job whose test waits, `boundSet` for `e2e`, `upgradeBoundSet` for `e2e-upgrade` and `minorBoundSet` for `e2e-minor`, in `TestTheBoundsFitUnderTheTimeouts`, and a new wait is checked by `TestEveryWaitOfTheJoinTestIsBoundedByAFieldOfTheBoundsThatNoOtherWaitTakes`, `TestEveryWaitOfTheUpgradeTestIsBoundedByAFieldOfItsOwnBoundsThatNoOtherWaitTakes` or `TestEveryWaitOfTheMinorTestIsBoundedByAFieldOfItsOwnBoundsThatNoOtherWaitTakes`, which also fail a wait on a context that `context.WithTimeout` made.
+- A new bound joins the model of the job whose test waits, `boundSet` for `e2e`, `upgradeBoundSet` for `e2e-upgrade` and `minorBoundSet` for `e2e-minor`, in `TestTheBoundsFitUnderTheTimeouts`, and a new wait is checked by `TestEveryWaitOfEveryWaitedFileIsBoundedByAFieldOfItsOwnBoundsThatNoOtherWaitTakes`, whose subtest for each row of `waitedFiles` also fails a wait on a context that `context.WithTimeout` made.
 - The upgrade job reaches ghcr.io for the release's image and GitHub for its two files, and the pin moves by hand after each release ([CONTRIBUTING](../../CONTRIBUTING.md#release-a-version)); nothing in it holds the clusterctl variables, which equal the manifest's defaults there, and `test/components` does, with explicit values.
 
 ## Code
