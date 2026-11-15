@@ -30,7 +30,7 @@ metadata:
   namespace: capi-join
 spec:
   clusterName: ${CLUSTER_NAME}
-  replicas: 1
+  replicas: 0
   selector:
     matchLabels:
   template:
