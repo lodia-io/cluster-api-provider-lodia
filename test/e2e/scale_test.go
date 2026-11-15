@@ -114,15 +114,19 @@ func runningWorkers(ctx context.Context, k8s client.Reader, key client.ObjectKey
 	if err := k8s.List(ctx, machines, client.InNamespace(key.Namespace), client.MatchingLabels{clusterv1.ClusterNameLabel: key.Name}); err != nil {
 		return nil, err
 	}
-	if len(machines.Items) != want {
-		return nil, fmt.Errorf("%d Machines, want %d", len(machines.Items), want)
+	return requireRunning(machines.Items, want)
+}
+
+func requireRunning(machines []clusterv1.Machine, want int) ([]clusterv1.Machine, error) {
+	if len(machines) != want {
+		return nil, fmt.Errorf("%d Machines, want %d", len(machines), want)
 	}
-	for _, m := range machines.Items {
+	for _, m := range machines {
 		if m.Status.Phase != string(clusterv1.MachinePhaseRunning) || m.Status.NodeRef.Name == "" {
 			return nil, fmt.Errorf("Machine %s is %s, its nodeRef is %q", m.Name, m.Status.Phase, m.Status.NodeRef.Name)
 		}
 	}
-	return machines.Items, nil
+	return machines, nil
 }
 
 func machineOn(machines []clusterv1.Machine, node string) (*clusterv1.Machine, error) {
@@ -1044,6 +1048,10 @@ func TestEveryWaitOfTheJoinTestIsBoundedByAFieldOfTheBoundsThatNoOtherWaitTakes(
 
 func TestEveryWaitOfTheUpgradeTestIsBoundedByAFieldOfItsOwnBoundsThatNoOtherWaitTakes(t *testing.T) {
 	requireEveryWaitBounded(t, "upgrade_test.go", "upgradeBounds", upgradeBounds, nil)
+}
+
+func TestEveryWaitOfTheMinorTestIsBoundedByAFieldOfItsOwnBoundsThatNoOtherWaitTakes(t *testing.T) {
+	requireEveryWaitBounded(t, "minor_test.go", "minorBounds", minorBounds, nil)
 }
 
 func TestTheCheckOfTheWaitsRefusesWhatBreaksTheSumOfTheBounds(t *testing.T) {

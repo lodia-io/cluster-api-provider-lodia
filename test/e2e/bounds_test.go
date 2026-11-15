@@ -85,6 +85,24 @@ var upgradeBounds = upgradeBoundSet{
 	Deleted:     3 * time.Minute,
 }
 
+type minorBoundSet struct {
+	Apply, Initialized, Kindnet, Running, Ready, Available, Stepped, NextRunning, NextReady, Kept, Deleted time.Duration
+}
+
+var minorBounds = minorBoundSet{
+	Apply:       time.Minute,
+	Initialized: 4 * time.Minute,
+	Kindnet:     time.Minute,
+	Running:     3 * time.Minute,
+	Ready:       3 * time.Minute,
+	Available:   time.Minute,
+	Stepped:     5 * time.Minute,
+	NextRunning: 3 * time.Minute,
+	NextReady:   3 * time.Minute,
+	Kept:        time.Minute,
+	Deleted:     3 * time.Minute,
+}
+
 const (
 	// callsWithoutBound covers the calls between the waits, of which the first
 	// to fail ends the test, and what a poll overshoots by.
@@ -260,6 +278,7 @@ type job struct {
 var jobs = []job{
 	{"e2e", "e2e", "e2e", "", total(bounds)},
 	{"e2e-upgrade", "e2e-upgrade", "e2e,upgrade", "TestTheProviderUpgradesFromThePreviousRelease", bounds.Install + bounds.Dump + total(upgradeBounds)},
+	{"e2e-minor", "e2e-minor", "e2e,minor", "TestAMinorStepHoldsNewWorkersUntilLodiaRunsIt", bounds.Install + bounds.Dump + total(minorBounds)},
 }
 
 var targetRule = regexp.MustCompile(`(?m)^([A-Za-z][\w.-]*):.*\n((?:\t.*(?:\n|$)|\n)*)`)
@@ -480,7 +499,7 @@ func TestALintThatLacksTheTagsOfAJobIsRefused(t *testing.T) {
 }
 
 func TestTotalAddsEveryBound(t *testing.T) {
-	for name, b := range map[string]any{"the join test's": &boundSet{}, "the upgrade test's": &upgradeBoundSet{}} {
+	for name, b := range map[string]any{"the join test's": &boundSet{}, "the upgrade test's": &upgradeBoundSet{}, "the minor test's": &minorBoundSet{}} {
 		t.Run(name, func(t *testing.T) {
 			var want time.Duration
 			fields := reflect.ValueOf(b).Elem()
@@ -789,7 +808,7 @@ func TestTheTestsOfThePackageHoldTheOnesOfTheTaggedFilesAndNotItsTestMain(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{"TestTheProviderUpgradesFromThePreviousRelease", "TestTheBoundsFitUnderTheTimeouts"} {
+	for _, name := range []string{"TestTheProviderUpgradesFromThePreviousRelease", "TestAMinorStepHoldsNewWorkersUntilLodiaRunsIt", "TestTheBoundsFitUnderTheTimeouts"} {
 		if !slices.Contains(tests, name) {
 			t.Errorf("the package declares no %s: %v", name, tests)
 		}

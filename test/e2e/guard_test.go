@@ -161,7 +161,7 @@ func TestEachTargetThatRunsTheSuiteCreatesAClusterOfItsOwnThatTheGuardAccepts(t 
 	creates := regexp.MustCompile(`kind create cluster --name (\S+) --kubeconfig (\S+)`)
 	runs := regexp.MustCompile(`go test [^;&|\n]*-tags e2e`)
 	clusters := make(map[string]string)
-	for target, tags := range map[string]string{"e2e": "-tags e2e ", "e2e-upgrade": "-tags e2e,upgrade "} {
+	for target, tags := range map[string]string{"e2e": "-tags e2e ", "e2e-upgrade": "-tags e2e,upgrade ", "e2e-minor": "-tags e2e,minor "} {
 		t.Run(target, func(t *testing.T) {
 			cmd := exec.CommandContext(t.Context(), "make", "--no-print-directory", target)
 			cmd.Dir = root
