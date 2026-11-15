@@ -47,7 +47,8 @@ The rewrite of a ServiceAccount subject into the provider's namespace, which clu
 
 A release YAML is checked against a sha256 kept in [`install_test.go`](install_test.go), and every `image:` in it gets a digest from the same file; an `image:` without one fails the install, and so does any container or init container image of the decoded documents that has none, whatever the shape of its line.
 cert-manager's YAML is rendered with Cluster API's `yamlprocessor` at its defaults and applied by the suite; the three Cluster API YAMLs reach clusterctl with their variables, which it processes.
-Every create the suite makes itself, cert-manager's and the testdata's, is retried for a minute on a webhook or x509 error, since a webhook can be `Available` before its certificate is in place, which clusterctl [guards](https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/cmd/clusterctl/client/cluster/cert_manager.go#L565-L571) against with a throwaway Issuer and Certificate; clusterctl retries its own creates.
+Every create that the install and the first step of each test make themselves, cert-manager's and the testdata's, is retried for a minute on a webhook or x509 error, since a webhook can be `Available` before its certificate is in place, which clusterctl [guards](https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/cmd/clusterctl/client/cluster/cert_manager.go#L565-L571) against with a throwaway Issuer and Certificate; clusterctl retries its own creates.
+The creates of `md-1`'s objects at step 7 of the minor step test are made once and not retried, since the webhooks of the same kinds have answered at its first step.
 kind is a `go tool`; ko and kustomize run through `go run` at pinned versions, which keeps them out of `go.mod` (kustomize's is in the `Makefile`, ko's in the `Makefile` and in `tool_test.go`, and `TestTheSuiteAndTheMakefileRunTheSameKo` fails when they differ); helm v4.3.1 comes from the workflow.
 
 To move a pin, change the version, the sum and the digests together, the sum of `metadata.yaml` with them for Cluster API, and the version in the table above.
@@ -192,7 +193,7 @@ The window takes its whole 2 minutes whenever it passes, and its length is Clust
 Both steps end their reads at their bound by cancelling the context, and not by a deadline, as `until`, both waits of `pauseCycle`, the apply before step 1, the move of step 10 and the install do, with the creates and the polls of Deployments inside them, as far as the checks below read a call written `context.X` or `wait.X`: a package imported under another name, or by a dot import, is not followed.
 A failure that such a bound cuts short names its cause, `context deadline exceeded after` the bound, beside the `context canceled` that a request reports.
 The check of the waits holds the apply, the move and the upgrade to a context that `endAfter` made, and fails a `context.WithTimeout` in its place.
-`TestTheInstallRunsItsWaitsOnAContextThatEndAfterEndsAtTheBoundOfTheInstall` in [`endafter_test.go`](endafter_test.go) holds the install, which both jobs run through the one function that `suite_test.go` hands to `testenv.Setup`, to one context, made once by `endAfter(ctx, bounds.Install)`.
+`TestTheInstallRunsItsWaitsOnAContextThatEndAfterEndsAtTheBoundOfTheInstall` in [`endafter_test.go`](endafter_test.go) holds the install, which the three jobs run through the one function that `suite_test.go` hands to `testenv.Setup`, to one context, made once by `endAfter(ctx, bounds.Install)`.
 It fails every other call written `context.X` in the install, `context.WithTimeout` and `context.Background()` among them, a wait on the suite's own context, a context that the install assigns again, and an `endAfter` inside a loop or a function literal, which would give each round a bound of its own.
 `TestTheFailureOfACallOnAContextThatEndAfterMadeGoesThroughCutShort` holds that the status patch before step 1, the move, the upgrade and the install report their failure through `cutShort` on that context, and fails `t.Fatal`, `t.FailNow` or `require` on the error as it is.
 The call has to be the init of an `if` or be kept for the `if` that follows it, and that `if`'s body has to call `cutShort(bounded, err)` with the error, or the call has to be an argument of `cutShort`; a function that returns no error goes in the check's `namesItsCause`.
@@ -223,10 +224,17 @@ The `DevCluster` carries the annotation `cluster.x-k8s.io/managed-by`, which Clu
 The infrastructure contract [gives](https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/docs/book/src/developer/providers/contracts/infra-cluster.md?plain=1#L475-L490) the rest to whoever manages such an infrastructure, so the suite patches the one field `DevCluster.status.initialization.provisioned` once.
 No assertion reads it.
 
+`TestEveryObjectOfTheTestdataIsAcceptedByTheCRDOfItsKind` in [`crds_test.go`](crds_test.go) creates every object of the files of `testdata`, rendered at v1.36.4 and at v1.37.0, with dry-run, against the API server of an envtest that has the CRDs of Cluster API and its kubeadm bootstrap provider at the version of `go.mod`, Lodia's and the provider's.
+`TestEveryObjectOfAManifestIsCreated` creates on a fake client, which applies no schema: a `KubeadmConfigTemplate` with an empty `spec.template.spec` passed them and was refused by [CABPK's CRD](https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/bootstrap/kubeadm/config/crd/bases/bootstrap.cluster.x-k8s.io_kubeadmconfigtemplates.yaml#L2331-L2333) at step 7 of the first run of the minor step job.
+No webhook runs under envtest, so what only a webhook refuses is left to the first step of each job.
+The `DevCluster` and the `DevMachineTemplate` are left out: CAPD's CRDs are in [Cluster API's `test` module](https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/test/go.mod#L1), which this module does not depend on.
+The test skips without `KUBEBUILDER_ASSETS`, as the envtest suite of `internal/controller` does, so that `make e2e`, which runs the package's unit tests without envtest's binaries, skips it.
+`make test`, which `make verify` runs, sets the variable, and `TestTheTestTargetThatMakeVerifyRunsSetsTheAssetsOfEnvtest` holds that.
+
 ## The upgrade test
 
 `make e2e-upgrade` runs `TestTheProviderUpgradesFromThePreviousRelease` alone, with `-run` and the build tags `e2e` and `upgrade`, on the kind cluster `capl-e2e-upgrade` that it creates and deletes as `make e2e` does its own; CI runs it as the job `e2e-upgrade`, on every pull request and every push to `main`, beside the job `e2e`.
-The tags split the tests: `join_test.go` is behind `e2e` and neither `upgrade` nor `minor`, `upgrade_test.go` and `lodia_upgrade_test.go` behind both `e2e` and `upgrade`, `minor_test.go` behind `e2e` and `minor`, and `suite_test.go`, `install_test.go` and `steps_test.go`, which hold the install and the steps that the two tests share, behind `e2e`.
+The tags split the tests: `join_test.go` is behind `e2e` and neither `upgrade` nor `minor`, `upgrade_test.go` and `lodia_upgrade_test.go` behind both `e2e` and `upgrade`, `minor_test.go` behind `e2e` and `minor`, and `suite_test.go`, `install_test.go` and `steps_test.go`, which hold the install and the steps that the three tests share, behind `e2e`.
 `lodia_join_test.go`, behind `e2e` and not `upgrade`, gives the install the tree's build for the join test and for the minor step test, and `lodia_upgrade_test.go` the release and the tree's build.
 It is a job of its own, and not a step of the join test or a test on its cluster:
 - the join test's Cluster is made by the tree's build that `Init` installs, and an upgrade from a release needs the release running when the Cluster is made, so installing the release there would leave the tree's `Init` and its creation of the `ControlPlane` and the Secrets untested ([the decision](../../docs/decisions/e2e-on-a-named-cluster.md));
@@ -234,7 +242,8 @@ It is a job of its own, and not a step of the join test or a test on its cluster
 - Cluster API runs each of its upgrade specs on a management cluster of its own, a [kind cluster](https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/test/e2e/clusterctl_upgrade.go#L283-L296) or a workload cluster made into one.
 
 The unit tests of the package, about a minute of them on CI, run in `make verify` and in the join job, so the upgrade job leaves them out and its bounds need no time for them.
-`TestTheBoundsFitUnderTheTimeouts` holds the `-run` of the target and that the package declares the test, since `go test` with a pattern that matches nothing passes.
+`TestTheBoundsFitUnderTheTimeouts` holds the `-run` of the target, and that the job's build tags compile a file that declares that test, since `go test` with a pattern that matches nothing passes.
+It holds also that every test of a file with a build tag is compiled by one job and no other, since a job that compiles another job's test runs it on its own cluster beside its own, outside its bounds, and a test that no job compiles runs nowhere: [`TestEachJobIsHeldToTheTestsOfTheFilesItsBuildTagsCompile`](bounds_test.go) holds that check on files of its own.
 The three jobs run on three runners in parallel, so the join job keeps its 64 and 74 minutes.
 
 ### What it installs
@@ -306,7 +315,7 @@ The upgrade has a set of bounds of its own, `upgradeBounds` in [`bounds_test.go`
 They add up to 26.5 minutes, and with `Install` and `Dump` to 43.5, which `TestTheBoundsFitUnderTheTimeouts` fits under `-timeout 46m` of `make e2e-upgrade` and `timeout-minutes: 56` of the job, as it fits the join test's under 64 and 74.
 About 12 minutes after the install is an estimate, not a measurement.
 The release's image comes from ghcr.io, which the suite's pulls of quay.io, registry.k8s.io and gcr.io did not include; the pull is inside `Init`'s wait for the Deployment, and the digest fixes what comes.
-`TestEveryWaitOfTheUpgradeTestIsBoundedByAFieldOfItsOwnBoundsThatNoOtherWaitTakes` holds every wait of `upgrade_test.go` to a field of `upgradeBounds` that no other wait takes, as the check for the join test does for `bounds`, `TestEachTargetThatRunsTheSuiteCreatesAClusterOfItsOwnThatTheGuardAccepts` that the two targets share no cluster and no directory and that `make -n` of each runs the suite once, through no prerequisite and no recursive make besides its own line, and `TestTheBoundsFitUnderTheTimeouts` that every target of the `Makefile` that runs `go test` with `-tags e2e` has a job in the model, and that each job of `ci.yml` that makes one makes its own alone.
+`TestEveryWaitOfTheUpgradeTestIsBoundedByAFieldOfItsOwnBoundsThatNoOtherWaitTakes` holds every wait of `upgrade_test.go` to a field of `upgradeBounds` that no other wait takes, as the check for the join test does for `bounds`, `TestEachTargetThatRunsTheSuiteCreatesAClusterOfItsOwnThatTheGuardAccepts` that the targets share no cluster and no directory and that `make -n` of each runs the suite once, through no prerequisite and no recursive make besides its own line, and `TestTheBoundsFitUnderTheTimeouts` that every target of the `Makefile` that runs `go test` with `-tags e2e` has a job in the model, and that each job of `ci.yml` that makes one makes its own alone.
 `ApplyUpgrade` is among the calls whose timeouts the Proxy's and the suite's tests hold: `TestEveryCallAgainstAClusterThatDoesNotAnswerEndsWithinItsBoundAndOneDiscoveryTimeout`, `TestTheClusterctlClientEndsItsCallsAtTheSuitesTimeouts` and `TestTheClusterctlClientsRequestsAskForTheirOwnTimeouts`.
 The checks of steps 7 to 14 are plain functions that `upgraded_test.go` holds on fake clients; nothing but a run of the job holds that the steps call them.
 
@@ -334,7 +343,7 @@ A new bound is a field of `minorBounds`, as the join test's are of `bounds`.
 ### The steps
 
 The steps are numbered here apart from the join test's.
-The first six are the join test's apply and its steps 1, 4, 5, 6 and 9, with the Cluster at v1.36.4 and the kubelet's version asserted:
+The first six are the join test's apply, its steps 1, 4 and 6, the `Machine` of its step 5 and its step 9, with the Cluster at v1.36.4 and the kubelet's version asserted:
 
 1. The objects of [`testdata`](testdata) are applied in `capi-join`, and the `DevCluster` is marked provisioned.
 2. `Cluster` `ControlPlaneInitialized`.
@@ -359,7 +368,8 @@ Each poll of the wait reads in this order: it lists the `Machine`s of `md-1`, th
   The MachineSet creates a `Machine` only while no entry of `status.versions` is below `spec.version` ([the check](https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/core/reconcilers/machineset/machineset_preflight.go#L186-L197), [upgrading](https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/internal/contract/controlplane.go#L295-L353)), and the copy only moves forward, so a `Machine` that exists before the copy read after it says v1.37.0 was created under an upgrade.
 - A `LodiaControlPlane` of v1.37.0 while Lodia's `ControlPlane` read after it still has `status.kubernetes.upgrade` or a part that does not run v1.37.0, among `status.components.apiServer`, `controllerManager`, `scheduler` and `status.addons`, fails the step.
   Lodia's report only moves forward as well, so a read made after the copy shows at least what the copy was made from.
-  A provider that copies a version before Lodia has rolled every part fails here.
+  A provider that copies a version that runs ahead of Lodia's report by more than a poll fails here: `spec.version`, `status.target.version` and `status.components.apiServer.version` do ([the steps](https://github.com/lodia-io/lodia/blob/f91168b1248dc18151a0c2d442fe2050593a0866/docs/decisions/upgrades-and-maintenance-windows.md?plain=1#L19-L31)).
+  A copy of the controller manager's or the scheduler's version may pass, since Workloads renders both at `status.components.apiServer.version` and Tenant renders the addons at the oldest of the three components ([the renderers](https://github.com/lodia-io/lodia/blob/f91168b1248dc18151a0c2d442fe2050593a0866/docs/decisions/upgrades-and-maintenance-windows.md?plain=1#L12-L14)), so it runs ahead of `status.kubernetes.version` only from the later of the two reports to the apply of the addons, and the step sees it only when a poll falls in that window.
 - The MachineSet of `md-1` has to say once that the control plane is upgrading: its `ScalingUp` names `ControlPlaneIsStable` and "is upgrading" ([the message](https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/core/reconcilers/machineset/machineset_controller_status.go#L111-L175), [the check](https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/core/reconcilers/machineset/machineset_preflight.go#L196)).
   The absence of a `Machine` alone would also be that of a MachineSet that scales up nothing, so this is the positive proof of the hold.
   The message is Cluster API's text, so a bump that changes it fails every run, and a control plane that reports no version at all holds the MachineSet as "provisioning" ([the check](https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/core/reconcilers/machineset/machineset_preflight.go#L186-L188)) and fails it too.
@@ -395,12 +405,13 @@ The `Ready` of the `LodiaControlPlane` may read `Unknown` with `LatestGeneration
 | `Deleted` | 3 minutes | step 11 |
 
 They add up to 28 minutes, and with `Install` and `Dump` to 45, which `TestTheBoundsFitUnderTheTimeouts` fits under `-timeout 47m` of `make e2e-minor` and `timeout-minutes: 57` of the job, as it fits the other two.
+`TestAJobAddsTheInstallAndTheDumpToTheBoundsOfAnySetButTheJoinTests` holds that `Install` and `Dump` of the join test's set are in the sum of each of the other two jobs.
 Both fit with no spare minute: the 45 and the 2 minutes of calls without a bound are the 47, and the 47 and the 10 minutes outside the binary are the 57.
 `TestEveryWaitOfTheMinorTestIsBoundedByAFieldOfItsOwnBoundsThatNoOtherWaitTakes` holds every wait of `minor_test.go` to a field of `minorBounds` that no other wait takes, and `TestEachTargetThatRunsTheSuiteCreatesAClusterOfItsOwnThatTheGuardAccepts` that the three targets share no cluster and no directory.
 About 6 minutes of test after the install is an estimate, not a measurement.
 
 The checks of steps 5 to 10 are plain functions that `stepped_test.go` holds on fake clients: `TestAMinorStepIsHeldOrBrokenAsTheOrderedReadsOfEachPollSayAndTheHoldIsSeenOnce` holds the rules of step 7 on a script of what each read finds, with the order of the reads, `TestAPollListsTheMachinesThenReadsTheCopyThenLodiasReport` and the tests beside it.
-Nothing but a run of the job holds that the steps call them.
+Nothing but a run of the job holds that the steps call them, and for step 7's verdict only a throwaway run against a broken provider does, since the verdict returns nil for a provider that follows the rules, called or not.
 It writes to `work/e2e/capl-e2e-minor/artifacts` on failure, which CI uploads as `e2e-minor-artifacts`.
 
 ## On failure
