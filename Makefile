@@ -47,7 +47,7 @@ components: ## render config/default and check that every variable has a non-emp
 	printf '%s\n' "$$rendered" | go run ./test/components
 
 .PHONY: upgrade-components
-upgrade-components: ## compare the render of config/default with the components of the release that test/pin names, which the first run downloads into $(PIN_DIR) and checks against the pinned sha256: fail on a cluster-scoped object of the release that clusterctl's upgrade keeps and the render drops or renames, a ClusterRoleBinding whose roleRef the render changes and a CRD version that the release serves and the render drops
+upgrade-components: ## compare the render of config/default with the components of the release that test/pin names, which the first run downloads into $(PIN_DIR) and checks against the pinned sha256: fail on a cluster-scoped object of the release that clusterctl's upgrade keeps and the render drops or renames, a ClusterRoleBinding whose roleRef the render changes, a CRD version that the release serves and the render drops or does not serve, and a storage version that the render drops
 	@rendered="$$(go run $(KUSTOMIZE) build config/default)" || exit 1; \
 	printf '%s\n' "$$rendered" | go run ./test/components upgrade $(PIN_DIR)
 
@@ -142,6 +142,6 @@ e2e-upgrade: e2e-cluster ## the upgrade e2e: the previous release that test/pin 
 	mkdir -p $(E2E_DIR)
 	go tool kind create cluster --name $(E2E_CLUSTER) --kubeconfig $(E2E_DIR)/kubeconfig --config test/e2e/testdata/kind.yaml
 	rm -rf $(E2E_DIR)/artifacts
-	$(REMOVE_WORKERS) && E2E_KUBECONFIG=$(E2E_DIR)/kubeconfig go test -v -tags e2e,upgrade -count=1 -timeout 46m ./test/e2e/...; status=$$?; \
+	$(REMOVE_WORKERS) && E2E_KUBECONFIG=$(E2E_DIR)/kubeconfig go test -v -tags e2e,upgrade -count=1 -timeout 46m -run '^TestTheProviderUpgradesFromThePreviousRelease$$' ./test/e2e/...; status=$$?; \
 	$(REMOVE_WORKERS) || status=1; \
 	go tool kind delete cluster --name $(E2E_CLUSTER) --kubeconfig $(E2E_DIR)/kubeconfig; exit $$status

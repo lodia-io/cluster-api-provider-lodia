@@ -22,11 +22,13 @@ import (
 	admissionregistrationv1beta1 "k8s.io/api/admissionregistration/v1beta1"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	apiextensionsv1beta1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1beta1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/apimachinery/pkg/util/sets"
+	"k8s.io/apimachinery/pkg/util/wait"
 	clientdiscovery "k8s.io/client-go/discovery"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
@@ -144,8 +146,9 @@ func (p *proxy) CheckClusterAvailable(context.Context) error {
 	return errors.New("CheckClusterAvailable is not on the path of Init, Move or ApplyUpgrade")
 }
 
-// ListResources lists as clusterctl's own proxy does, except that its discovery
-// ends with the context and that no read is retried.
+// ListResources lists as clusterctl's own proxy does, except that its
+// discovery ends with the context. Each read is retried as clusterctl's is, on
+// the call's context, so that the retries end with it.
 // https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/cmd/clusterctl/client/cluster/proxy.go#L207-L308
 func (p *proxy) ListResources(ctx context.Context, labels map[string]string, namespaces ...string) ([]unstructured.Unstructured, error) {
 	cfg := rest.CopyConfig(p.cfg)
@@ -158,12 +161,15 @@ func (p *proxy) ListResources(ctx context.Context, labels map[string]string, nam
 	if err != nil {
 		return nil, err
 	}
-	resourceList, err := discoveryClient.ServerPreferredResourcesWithContext(ctx)
-	if err != nil {
+	var resourceList []*metav1.APIResourceList
+	if err := retryRead(ctx, func(ctx context.Context) (err error) {
+		resourceList, err = discoveryClient.ServerPreferredResourcesWithContext(ctx)
+		return err
+	}); err != nil {
 		return nil, fmt.Errorf("failed to list api resources: %w", err)
 	}
 	crdList := &apiextensionsv1.CustomResourceDefinitionList{}
-	if err := c.List(ctx, crdList); err != nil {
+	if err := retryRead(ctx, func(ctx context.Context) error { return c.List(ctx, crdList) }); err != nil {
 		return nil, fmt.Errorf("failed to list CRDs: %w", err)
 	}
 	crdsToExclude := sets.New[string]()
@@ -194,7 +200,9 @@ func (p *proxy) ListResources(ctx context.Context, labels map[string]string, nam
 				objects := &unstructured.UnstructuredList{}
 				objects.SetAPIVersion(group.GroupVersion)
 				objects.SetKind(kind.Kind + "List")
-				if err := c.List(ctx, objects, client.MatchingLabels(labels), client.InNamespace(namespace)); err != nil {
+				if err := retryRead(ctx, func(ctx context.Context) error {
+					return c.List(ctx, objects, client.MatchingLabels(labels), client.InNamespace(namespace))
+				}); err != nil {
 					return nil, fmt.Errorf("failed to list objects for the %q GroupVersionKind: %w", gv.WithKind(kind.Kind), err)
 				}
 				listed = append(listed, objects.Items...)
@@ -202,6 +210,28 @@ func (p *proxy) ListResources(ctx context.Context, labels map[string]string, nam
 		}
 	}
 	return listed, nil
+}
+
+// retryRead repeats a read as clusterctl's own proxy does, nine tries over
+// about fifteen seconds, and gives up with the context.
+// https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/cmd/clusterctl/client/cluster/client.go#L238-L258
+// https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/cmd/clusterctl/client/cluster/client.go#L299-L310
+func retryRead(ctx context.Context, read func(context.Context) error) error {
+	backoff := wait.Backoff{Duration: 250 * time.Millisecond, Factor: 1.5, Steps: 9, Jitter: 0.1}
+	tries := 0
+	if err := wait.ExponentialBackoffWithContext(ctx, backoff, func(ctx context.Context) (bool, error) {
+		tries++
+		if err := read(ctx); err != nil {
+			if tries < backoff.Steps {
+				return false, nil
+			}
+			return false, err
+		}
+		return true, nil
+	}); err != nil {
+		return fmt.Errorf("action failed after %d attempts: %w", tries, err)
+	}
+	return nil
 }
 
 func (p *proxy) GetContexts(string) ([]string, error) {
