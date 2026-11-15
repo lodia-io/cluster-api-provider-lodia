@@ -44,3 +44,10 @@ body:
       label: Lodia commit or chart version
     validations:
       required: true
+  - type: input
+    id: kubernetes
+    attributes:
+      label: Kubernetes versions
+      description: The management cluster's, and the `LodiaControlPlane`'s `spec.version`.
+    validations:
+      required: true
