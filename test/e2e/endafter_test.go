@@ -9,6 +9,7 @@ import (
 	"go/parser"
 	"go/token"
 	"go/types"
+	"maps"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -18,6 +19,7 @@ import (
 var (
 	namesItsCause   = []string{"apply", "applyTheCluster"}
 	cutsShortInside = []string{"applyTheCluster"}
+	derivesAContext = []string{"context.WithCancel", "context.WithCancelCause", "context.WithValue", "logr.NewContext"}
 )
 
 func identNamed(e ast.Expr, name string) bool {
@@ -46,7 +48,13 @@ func repeats(n ast.Node) bool {
 	return false
 }
 
-var contextsThatEndByADeadline = []string{"context.WithTimeout", "context.WithTimeoutCause", "context.WithDeadline", "context.WithDeadlineCause"}
+var (
+	callsThatMakeADeadline = []string{
+		"context.WithTimeout", "context.WithTimeoutCause", "context.WithDeadline", "context.WithDeadlineCause",
+		"wait.PollUntilContextTimeout", "wait.Poll", "wait.PollWithContext", "wait.PollImmediate", "wait.PollImmediateWithContext",
+	}
+	callsThatMakeARootContext = []string{"context.Background", "context.TODO", "context.WithoutCancel"}
+)
 
 func problemAt(fset *token.FileSet, n ast.Node, format string, args ...any) string {
 	return fmt.Sprintf("%s: %s", fset.Position(n.Pos()), fmt.Sprintf(format, args...))
@@ -144,6 +152,14 @@ func problemsWithTheCutShort(fset *token.FileSet, file *ast.File) ([]string, int
 		}
 		made[scope][name] = true
 	}
+	scopeOf := func(stack []ast.Node, name string) ast.Node {
+		for _, scope := range slices.Backward(stack) {
+			if made[scope][name] {
+				return scope
+			}
+		}
+		return nil
+	}
 	ast.PreorderStack(file, nil, func(n ast.Node, stack []ast.Node) bool {
 		switch n := n.(type) {
 		case *ast.FuncDecl:
@@ -153,33 +169,64 @@ func problemsWithTheCutShort(fset *token.FileSet, file *ast.File) ([]string, int
 		case *ast.AssignStmt:
 			call, ok := singleCall(n)
 			ident, isIdent := n.Lhs[0].(*ast.Ident)
-			if ok && isIdent && calleeOf(call) == "endAfter" {
+			if !ok || !isIdent {
+				break
+			}
+			switch callee := calleeOf(call); {
+			case callee == "endAfter":
 				bind(innermostFunction(stack), ident.Name)
+			case slices.Contains(derivesAContext, callee):
+				if parent, ok := argumentOf(call, 0).(*ast.Ident); ok {
+					if scope := scopeOf(stack, parent.Name); scope != nil {
+						bind(scope, ident.Name)
+					}
+				}
 			}
 		case *ast.CallExpr:
 			callee := calleeOf(n)
-			if callee == "cutShort" || callee == "endAfter" || strings.HasPrefix(callee, "context.") || slices.Contains(namesItsCause, callee) {
+			if callee == "cutShort" || callee == "endAfter" || strings.HasPrefix(callee, "context.") || slices.Contains(derivesAContext, callee) {
 				break
 			}
 			var bounded string
 			for _, arg := range n.Args {
 				ident, ok := arg.(*ast.Ident)
-				if ok && slices.ContainsFunc(stack, func(scope ast.Node) bool { return made[scope][ident.Name] }) {
+				if ok && scopeOf(stack, ident.Name) != nil {
 					bounded = ident.Name
 					break
 				}
 			}
-			if bounded == "" {
-				break
-			}
-			checked++
-			if !goesThroughCutShort(stack, bounded) {
-				problems = append(problems, problemAt(fset, n, "the error of %s runs on %s, which endAfter ends, and does not go through cutShort(%s, err): the call is the init of an if, or is kept for the if that follows it, whose body calls cutShort(%s, err), or is an argument of cutShort(%s, …); a function that returns no error or cuts short itself goes in namesItsCause, and in cutsShortInside when its body is to be read", types.ExprString(n.Fun), bounded, bounded, bounded, bounded))
+			switch {
+			case bounded == "":
+			case slices.Contains(namesItsCause, callee):
+				if slices.Contains(cutsShortInside, callee) {
+					checked++
+				}
+			default:
+				checked++
+				if !goesThroughCutShort(stack, bounded) {
+					problems = append(problems, problemAt(fset, n, "the error of %s runs on %s, which endAfter ends, and does not go through cutShort(%s, err): the call is the init of an if, or is kept for the if that follows it, whose body calls cutShort(%s, err), or is an argument of cutShort(%s, …); a function that returns no error goes in namesItsCause; a helper that cuts short itself takes its context as its first parameter and goes in namesItsCause and cutsShortInside of endafter_test.go and, when it waits, in waitsOnTheCallersContext of scale_test.go", types.ExprString(n.Fun), bounded, bounded, bounded, bounded))
+				}
 			}
 		}
 		return true
 	})
 	return problems, checked
+}
+
+func problemsWithTheCutShortOfTheFiles(fset *token.FileSet, files []*ast.File) []string {
+	var problems []string
+	checked := make(map[string]int)
+	for _, file := range files {
+		found, n := problemsWithTheCutShort(fset, file)
+		problems = append(problems, found...)
+		checked[fset.Position(file.FileStart).Filename] = n
+	}
+	for _, name := range []string{"suite_test.go", "steps_test.go", "join_test.go", "upgrade_test.go"} {
+		if checked[name] == 0 {
+			problems = append(problems, fmt.Sprintf("%s holds no call on a context that endAfter made, and the install, the status patch before step 1, the move and the upgrade are such calls", name))
+		}
+	}
+	return problems
 }
 
 func innermostFunction(stack []ast.Node) ast.Node {
@@ -221,7 +268,7 @@ func goesThroughCutShort(stack []ast.Node, bounded string) bool {
 
 func statementAfter(block *ast.BlockStmt, stmt ast.Stmt) ast.Stmt {
 	at := slices.Index(block.List, stmt)
-	if at < 0 || at+1 == len(block.List) {
+	if at+1 == len(block.List) {
 		return nil
 	}
 	return block.List[at+1]
@@ -245,12 +292,19 @@ func cutsShortAnErrorOf(body *ast.BlockStmt, bounded string, assigned []ast.Expr
 	return found
 }
 
-func problemsWithDeadlines(fset *token.FileSet, files []*ast.File) []string {
+func problemsWithContextsOfTheirOwn(fset *token.FileSet, files []*ast.File) []string {
 	var problems []string
 	for _, file := range files {
 		for n := range ast.Preorder(file) {
-			if call, ok := n.(*ast.CallExpr); ok && slices.Contains(contextsThatEndByADeadline, calleeOf(call)) {
-				problems = append(problems, problemAt(fset, call, "%s makes a context that ends by a deadline in a file of the suite, under which a request is refused by client-go's rate limiter with an error that is no context's", calleeOf(call)))
+			call, ok := n.(*ast.CallExpr)
+			if !ok {
+				continue
+			}
+			switch callee := calleeOf(call); {
+			case slices.Contains(callsThatMakeADeadline, callee):
+				problems = append(problems, problemAt(fset, call, "%s ends by a deadline in a file of the suite, where every wait ends by cancelling a context that endAfter made, since a request under a deadline is refused by client-go's rate limiter with an error that is no context's", callee))
+			case slices.Contains(callsThatMakeARootContext, callee):
+				problems = append(problems, problemAt(fset, call, "%s makes a context that no bound of the suite ends, in a file where every context comes from the one that the step or the install is given", callee))
 			}
 		}
 	}
@@ -301,27 +355,17 @@ func TestTheInstallRunsItsWaitsOnAContextThatEndAfterEndsAtTheBoundOfTheInstall(
 	}
 }
 
-func TestNoFileWithABuildTagMakesAContextThatEndsByADeadline(t *testing.T) {
+func TestNoFileWithABuildTagMakesAContextOfItsOwn(t *testing.T) {
 	fset, files := taggedFiles(t)
-	for _, problem := range problemsWithDeadlines(fset, files) {
+	for _, problem := range problemsWithContextsOfTheirOwn(fset, files) {
 		t.Error(problem)
 	}
 }
 
 func TestTheFailureOfACallOnAContextThatEndAfterMadeGoesThroughCutShort(t *testing.T) {
 	fset, files := taggedFiles(t)
-	checked := make(map[string]int)
-	for _, file := range files {
-		problems, n := problemsWithTheCutShort(fset, file)
-		checked[fset.Position(file.FileStart).Filename] = n
-		for _, problem := range problems {
-			t.Error(problem)
-		}
-	}
-	for _, name := range []string{"suite_test.go", "steps_test.go", "join_test.go", "upgrade_test.go"} {
-		if checked[name] == 0 {
-			t.Errorf("%s holds no call on a context that endAfter made, and the install, the status patch before step 1, the move and the upgrade are such calls", name)
-		}
+	for _, problem := range problemsWithTheCutShortOfTheFiles(fset, files) {
+		t.Error(problem)
 	}
 }
 
@@ -418,10 +462,22 @@ func TestTheCheckOfCutShortRefusesAFailureThatReachesItsReportAsItIs(t *testing.
 		{"an apply on the bounded context, which names its cause itself", inAStep(made + "if err := apply(bounded, cfg, manifest); err != nil {\nt.Fatal(err)\n}"), ""},
 		{"applyTheCluster on the bounded context", inAStep(made + "if err := applyTheCluster(bounded, cfg, k8s, key); err != nil {\nt.Fatal(err)\n}"), ""},
 		{"a context that endAfter did not make", inAStep("bounded, cancel := context.WithCancel(ctx)\nif err := wait(bounded); err != nil {\nt.Fatal(err)\n}"), ""},
+		{"a call on a context derived by context.WithCancel through cutShort", inAStep(made + "inner, stop := context.WithCancel(bounded)\ndefer stop()\nif err := wait(inner); err != nil {\nt.Fatal(cutShort(inner, err))\n}"), ""},
+		{"a call on a context derived by context.WithCancelCause through cutShort", inAStep(made + "inner, stop := context.WithCancelCause(bounded)\ndefer stop(nil)\nif err := wait(inner); err != nil {\nt.Fatal(cutShort(inner, err))\n}"), ""},
+		{"a call on a context derived by context.WithValue through cutShort", inAStep(made + "inner := context.WithValue(bounded, key, value)\nif err := wait(inner); err != nil {\nt.Fatal(cutShort(inner, err))\n}"), ""},
+		{"a call on a context derived by logr.NewContext through cutShort", inAStep(made + "inner := logr.NewContext(bounded, logger)\nif err := wait(inner); err != nil {\nt.Fatal(cutShort(inner, err))\n}"), ""},
+		{"a call on a context derived from a derived one through cutShort", inAStep(made + "first := logr.NewContext(bounded, logger)\ninner, stop := context.WithCancel(first)\ndefer stop()\nif err := wait(inner); err != nil {\nt.Fatal(cutShort(inner, err))\n}"), ""},
+		{"a call on a context derived from one that endAfter did not make", inAStep("inner := logr.NewContext(ctx, logger)\nif err := wait(inner); err != nil {\nt.Fatal(err)\n}"), ""},
 		{"a context that endAfter made in another step", inTwoSteps(made+"if err := wait(bounded); err != nil {\nt.Fatal(cutShort(bounded, err))\n}", "bounded, cancel := context.WithCancel(ctx)\nif err := wait(bounded); err != nil {\nt.Fatal(err)\n}"), ""},
 		{"an error kept and cut short by the if that follows", inAStep(made + "err := wait(bounded)\nif err != nil {\nt.Fatal(cutShort(bounded, err))\n}"), ""},
 		{"an error assigned to a variable and cut short by the if that follows", inAStep(made + "var err error\nerr = wait(bounded)\nif err != nil {\nt.Fatal(cutShort(bounded, fmt.Errorf(\"wait: %w\", err)))\n}"), ""},
 		{"the cause of the bounded context in a log", inAStep(made + "if err := wait(bounded); err != nil {\nt.Fatal(cutShort(bounded, err))\n}\nt.Logf(\"ended: %v\", context.Cause(bounded))"), ""},
+		{"a call on a context derived by context.WithCancel as it is", inAStep(made + "inner, stop := context.WithCancel(bounded)\ndefer stop()\nif err := wait(inner); err != nil {\nt.Fatal(err)\n}"), "the error of wait runs on inner, which endAfter ends, and does not go through cutShort(inner, err)"},
+		{"a call on a context derived by context.WithCancelCause as it is", inAStep(made + "inner, stop := context.WithCancelCause(bounded)\ndefer stop(nil)\nif err := wait(inner); err != nil {\nt.Fatal(err)\n}"), "the error of wait runs on inner"},
+		{"a call on a context derived by context.WithValue as it is", inAStep(made + "inner := context.WithValue(bounded, key, value)\nif err := wait(inner); err != nil {\nt.Fatal(err)\n}"), "the error of wait runs on inner"},
+		{"a call on a context derived by logr.NewContext as it is", inAStep(made + "inner := logr.NewContext(bounded, logger)\nif err := wait(inner); err != nil {\nt.Fatal(err)\n}"), "the error of wait runs on inner"},
+		{"a call on a context derived from a derived one as it is", inAStep(made + "first := logr.NewContext(bounded, logger)\ninner, stop := context.WithCancel(first)\ndefer stop()\nif err := wait(inner); err != nil {\nt.Fatal(err)\n}"), "the error of wait runs on inner"},
+		{"a call on a context derived in a closure of the step, as it is", inAStep(made + "var inner context.Context\nfunc() {\ninner = logr.NewContext(bounded, logger)\n}()\nif err := wait(inner); err != nil {\nt.Fatal(err)\n}"), "the error of wait runs on inner"},
 		{"t.Fatal on the error as it is", inAStep(made + "if err := wait(bounded); err != nil {\nt.Fatal(err)\n}"), "the error of wait runs on bounded, which endAfter ends, and does not go through cutShort(bounded, err)"},
 		{"t.Fatal on an error that wraps it", inAStep(made + "if err := wait(bounded); err != nil {\nt.Fatal(fmt.Errorf(\"wait: %w\", err))\n}"), "does not go through cutShort(bounded, err)"},
 		{"t.FailNow after the error is logged", inAStep(made + "if err := wait(bounded); err != nil {\nt.Log(err)\nt.FailNow()\n}"), "does not go through cutShort(bounded, err)"},
@@ -437,7 +493,7 @@ func TestTheCheckOfCutShortRefusesAFailureThatReachesItsReportAsItIs(t *testing.
 		{"a call in a closure of the step", inAStep(made + "func() {\nif err := wait(bounded); err != nil {\nt.Fatal(err)\n}\n}()"), "does not go through cutShort(bounded, err)"},
 		{"an error that the step returns as it is", inAStep(made + "return wait(bounded)"), "does not go through cutShort(bounded, err)"},
 		{"a method of the receiver", inAStep(made + "if err := c.Move(bounded, options); err != nil {\nt.Fatal(err)\n}"), "the error of c.Move"},
-		{"the bounded context as a later argument of a helper", inAStep(made + "moveOrFail(t, bounded, options)"), "a function that returns no error or cuts short itself goes in namesItsCause, and in cutsShortInside when its body is to be read"},
+		{"the bounded context as a later argument of a helper", inAStep(made + "aHelperThatNoFileDeclares(t, bounded, options)"), "a helper that cuts short itself takes its context as its first parameter and goes in namesItsCause and cutsShortInside of endafter_test.go and, when it waits, in waitsOnTheCallersContext of scale_test.go"},
 		{"the patch through cutShort", inFunction("applyTheCluster", "return cutShort(ctx, "+cluster+")"), ""},
 		{"an apply and then the patch through cutShort", inFunction("applyTheCluster", "if err := apply(ctx, cfg, manifest); err != nil {\nreturn err\n}\nreturn cutShort(ctx, "+cluster+")"), ""},
 		{"a render that takes no context", inFunction("applyTheCluster", "manifest, err := render(file, name)\nreturn cutShort(ctx, "+cluster+")"), ""},
@@ -446,6 +502,9 @@ func TestTheCheckOfCutShortRefusesAFailureThatReachesItsReportAsItIs(t *testing.
 		{"another call on the context", inFunction("applyTheCluster", "if err := other(ctx); err != nil {\nreturn err\n}\nreturn cutShort(ctx, "+cluster+")"), "the error of other"},
 		{"the patch through cutShort where the context is not the first parameter", inFunctionOf("applyTheCluster", "t *testing.T, ctx context.Context", "return cutShort(ctx, "+cluster+")"), ""},
 		{"the patch as it is where the context is not the first parameter", inFunctionOf("applyTheCluster", "t *testing.T, ctx context.Context", "return "+cluster), "does not go through cutShort(ctx, err)"},
+		{"the patch as it is where a cancel function comes first", inFunctionOf("applyTheCluster", "cancel context.CancelFunc, ctx context.Context", "return "+cluster), "does not go through cutShort(ctx, err)"},
+		{"the patch as it is where a context of another package comes first", inFunctionOf("applyTheCluster", "request echo.Context, ctx context.Context", "return "+cluster), "does not go through cutShort(ctx, err)"},
+		{"a function with no name for its context", "package p\nfunc applyTheCluster(context.Context, *envconf.Config) error {\nreturn nil\n}\n", ""},
 		{"the patch as it is in a function that cuts nothing short", inFunction("helper", "return "+cluster), ""},
 	}
 	for _, c := range cases {
@@ -467,18 +526,106 @@ func TestTheCheckOfCutShortRefusesAFailureThatReachesItsReportAsItIs(t *testing.
 	}
 }
 
-func TestTheCheckOfDeadlinesRefusesAContextThatEndsByADeadlineWhereverItIsMade(t *testing.T) {
+func TestTheCheckOfCutShortCountsTheCallsItHolds(t *testing.T) {
+	made := "bounded, cancel := endAfter(ctx, bounds.Apply)\ndefer cancel()\n"
+	inAStep := func(body string) string {
+		return "package p\nfunc TestX() {\nf := func(ctx context.Context, t *testing.T) {\n" + body + "\n}\n}\n"
+	}
+	cases := []struct {
+		name, source string
+		want         int
+	}{
+		{"a call that goes through cutShort", inAStep(made + "if err := wait(bounded); err != nil {\nt.Fatal(cutShort(bounded, err))\n}"), 1},
+		{"a call that does not", inAStep(made + "if err := wait(bounded); err != nil {\nt.Fatal(err)\n}"), 1},
+		{"a function that cuts short itself, on the bounded context", inAStep(made + "if err := applyTheCluster(bounded, cfg, k8s, key); err != nil {\nt.Fatal(err)\n}"), 1},
+		{"a function that cuts short itself, on a context that endAfter did not make", inAStep("if err := applyTheCluster(ctx, cfg, k8s, key); err != nil {\nt.Fatal(err)\n}"), 0},
+		{"a function that names its cause itself", inAStep(made + "if err := apply(bounded, cfg, manifest); err != nil {\nt.Fatal(err)\n}"), 0},
+		{"cutShort and endAfter", inAStep(made + "err = cutShort(bounded, err)"), 0},
+		{"a context derived from the bounded one", inAStep(made + "inner, stop := context.WithCancel(bounded)\ndefer stop()\nfirst := logr.NewContext(inner, logger)\nt.Log(context.Cause(first))"), 0},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			fset := token.NewFileSet()
+			file, err := parser.ParseFile(fset, "x.go", c.source, 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, got := problemsWithTheCutShort(fset, file); got != c.want {
+				t.Fatalf("got %d calls, want %d", got, c.want)
+			}
+		})
+	}
+}
+
+func TestTheCheckOfCutShortWantsACallOnAContextThatEndAfterMadeInEachFileItNames(t *testing.T) {
+	const (
+		held = "package p\nfunc TestX() {\nf := func(ctx context.Context, t *testing.T) {\nbounded, cancel := endAfter(ctx, bounds.Apply)\nif err := wait(bounded); err != nil {\nt.Fatal(cutShort(bounded, err))\n}\n}\n}\n"
+		none = "package p\nfunc TestX() {}\n"
+	)
+	cases := []struct {
+		name  string
+		files map[string]string
+		want  []string
+	}{
+		{"a call in each", map[string]string{"suite_test.go": held, "steps_test.go": held, "join_test.go": held, "upgrade_test.go": held}, nil},
+		{"none in the install", map[string]string{"suite_test.go": none, "steps_test.go": held, "join_test.go": held, "upgrade_test.go": held}, []string{"suite_test.go holds no call"}},
+		{"none in the steps", map[string]string{"suite_test.go": held, "steps_test.go": none, "join_test.go": held, "upgrade_test.go": held}, []string{"steps_test.go holds no call"}},
+		{"none in the join test", map[string]string{"suite_test.go": held, "steps_test.go": held, "join_test.go": none, "upgrade_test.go": held}, []string{"join_test.go holds no call"}},
+		{"none in the upgrade test", map[string]string{"suite_test.go": held, "steps_test.go": held, "join_test.go": held, "upgrade_test.go": none}, []string{"upgrade_test.go holds no call"}},
+		{"a file that is not read", map[string]string{"suite_test.go": held, "steps_test.go": held, "upgrade_test.go": held}, []string{"join_test.go holds no call"}},
+		{"none in a file that the check does not name", map[string]string{"suite_test.go": held, "steps_test.go": held, "join_test.go": held, "upgrade_test.go": held, "install_test.go": none}, nil},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			fset := token.NewFileSet()
+			var files []*ast.File
+			for _, name := range slices.Sorted(maps.Keys(c.files)) {
+				file, err := parser.ParseFile(fset, name, c.files[name], 0)
+				if err != nil {
+					t.Fatal(err)
+				}
+				files = append(files, file)
+			}
+			problems := problemsWithTheCutShortOfTheFiles(fset, files)
+			if len(problems) != len(c.want) {
+				t.Fatalf("got %q, want problems with %q", problems, c.want)
+			}
+			for i, want := range c.want {
+				if !strings.Contains(problems[i], want) {
+					t.Fatalf("want a problem with %q, got %q", want, problems[i])
+				}
+			}
+		})
+	}
+}
+
+func TestTheCheckOfContextsOfTheirOwnRefusesADeadlineAndARootContextWhereverTheyAreMade(t *testing.T) {
+	const deadline = " ends by a deadline"
+	const root = " makes a context that no bound of the suite ends"
 	cases := []struct {
 		name, body, want string
 	}{
 		{"a context that endAfter makes", "bounded, cancel := endAfter(ctx, bounds.Apply)", ""},
-		{"contexts that end by cancelling or carry a value", "a, cancel := context.WithCancel(ctx)\nb := context.WithValue(ctx, k, v)\nc := context.WithoutCancel(ctx)", ""},
+		{"contexts that end by cancelling or carry a value", "a, cancel := context.WithCancel(ctx)\nb, cancel := context.WithCancelCause(ctx)\nc := context.WithValue(ctx, k, v)", ""},
 		{"a timeout that is not a context's", "helm.WithTimeout(\"5m\")", ""},
-		{"context.WithTimeout", "bounded, cancel := context.WithTimeout(ctx, time.Minute)", "context.WithTimeout makes a context that ends by a deadline"},
-		{"context.WithDeadline", "bounded, cancel := context.WithDeadline(ctx, when)", "context.WithDeadline makes a context that ends by a deadline"},
-		{"context.WithTimeoutCause", "bounded, cancel := context.WithTimeoutCause(ctx, time.Minute, err)", "context.WithTimeoutCause makes a context that ends by a deadline"},
-		{"context.WithDeadlineCause", "bounded, cancel := context.WithDeadlineCause(ctx, when, err)", "context.WithDeadlineCause makes a context that ends by a deadline"},
-		{"a deadline inside a function that a step calls", "func() {\nctx, cancel := context.WithTimeout(ctx, time.Minute)\n}()", "context.WithTimeout makes a context that ends by a deadline"},
+		{"a poll that ends with the context", "wait.PollUntilContextCancel(ctx, time.Second, true, f)\nwait.PollUntilWithContext(ctx, time.Second, f)\nwait.PollInfinite(time.Second, f)", ""},
+		{"the test for an interrupted wait", "wait.Interrupted(err)", ""},
+		{"a poll of another package", "other.PollUntilContextTimeout(ctx, time.Second, time.Minute, true, f)\nother.Background()", ""},
+		{"context.WithTimeout", "bounded, cancel := context.WithTimeout(ctx, time.Minute)", "context.WithTimeout" + deadline},
+		{"context.WithDeadline", "bounded, cancel := context.WithDeadline(ctx, when)", "context.WithDeadline" + deadline},
+		{"context.WithTimeoutCause", "bounded, cancel := context.WithTimeoutCause(ctx, time.Minute, err)", "context.WithTimeoutCause" + deadline},
+		{"context.WithDeadlineCause", "bounded, cancel := context.WithDeadlineCause(ctx, when, err)", "context.WithDeadlineCause" + deadline},
+		{"wait.PollUntilContextTimeout", "wait.PollUntilContextTimeout(ctx, time.Second, time.Minute, true, f)", "wait.PollUntilContextTimeout" + deadline},
+		{"wait.Poll", "wait.Poll(time.Second, time.Minute, f)", "wait.Poll" + deadline},
+		{"wait.PollWithContext", "wait.PollWithContext(ctx, time.Second, time.Minute, f)", "wait.PollWithContext" + deadline},
+		{"wait.PollImmediate", "wait.PollImmediate(time.Second, time.Minute, f)", "wait.PollImmediate" + deadline},
+		{"wait.PollImmediateWithContext", "wait.PollImmediateWithContext(ctx, time.Second, time.Minute, f)", "wait.PollImmediateWithContext" + deadline},
+		{"a deadline inside a function that a step calls", "func() {\nctx, cancel := context.WithTimeout(ctx, time.Minute)\n}()", "context.WithTimeout" + deadline},
+		{"a poll with a timeout in a function that a step calls", "func() {\nwait.PollUntilContextTimeout(ctx, time.Second, time.Minute, true, f)\n}()", "wait.PollUntilContextTimeout" + deadline},
+		{"context.Background", "available(context.Background(), cfg)", "context.Background" + root},
+		{"context.TODO", "fresh := context.TODO()", "context.TODO" + root},
+		{"context.WithoutCancel", "detached := context.WithoutCancel(ctx)", "context.WithoutCancel" + root},
+		{"a root context in a function that a step calls", "func() {\nfresh := context.Background()\n}()", "context.Background" + root},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -487,7 +634,7 @@ func TestTheCheckOfDeadlinesRefusesAContextThatEndsByADeadlineWhereverItIsMade(t
 			if err != nil {
 				t.Fatal(err)
 			}
-			problems := strings.Join(problemsWithDeadlines(fset, []*ast.File{file}), "\n")
+			problems := strings.Join(problemsWithContextsOfTheirOwn(fset, []*ast.File{file}), "\n")
 			switch {
 			case c.want == "" && problems != "":
 				t.Fatalf("want accepted, got %s", problems)
@@ -495,5 +642,24 @@ func TestTheCheckOfDeadlinesRefusesAContextThatEndsByADeadlineWhereverItIsMade(t
 				t.Fatalf("want a problem with %q, got %q", c.want, problems)
 			}
 		})
+	}
+}
+
+func TestTheCheckOfContextsOfTheirOwnReadsEveryFileItIsGiven(t *testing.T) {
+	fset := token.NewFileSet()
+	var files []*ast.File
+	for i, source := range []string{
+		"package p\nfunc a(ctx context.Context) {\nendAfter(ctx, bounds.Apply)\n}\n",
+		"package p\nfunc b(ctx context.Context) {\nwait.PollUntilContextTimeout(ctx, time.Second, time.Minute, true, f)\ncontext.Background()\n}\n",
+	} {
+		file, err := parser.ParseFile(fset, fmt.Sprintf("%d.go", i), source, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		files = append(files, file)
+	}
+	problems := problemsWithContextsOfTheirOwn(fset, files)
+	if len(problems) != 2 || !strings.HasPrefix(problems[0], "1.go:3:1: wait.PollUntilContextTimeout ends by a deadline") || !strings.HasPrefix(problems[1], "1.go:4:1: context.Background makes a context") {
+		t.Fatalf("got %q", problems)
 	}
 }
