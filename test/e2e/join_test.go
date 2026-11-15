@@ -1,7 +1,7 @@
 // Copyright 2026 The Lodia Authors.
 // SPDX-License-Identifier: Apache-2.0
 
-//go:build e2e
+//go:build e2e && !upgrade
 
 package e2e
 
@@ -9,22 +9,16 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
-	"text/template"
 	"time"
 
 	lodiav1alpha1 "go.lodia.io/lodia/api/v1alpha1"
 	corev1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-	"k8s.io/apimachinery/pkg/types"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	clusterctl "sigs.k8s.io/cluster-api/cmd/clusterctl/client"
-	"sigs.k8s.io/cluster-api/cmd/clusterctl/client/yamlprocessor"
 	"sigs.k8s.io/cluster-api/util/secret"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/e2e-framework/klient/decoder"
@@ -62,35 +56,14 @@ func TestAWorkerJoinsAClusterOfLodiasControlPlane(t *testing.T) {
 		Assess("the objects are applied, and the DevCluster, whose infrastructure the suite manages, is marked provisioned", func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
 			bounded, cancel := endAfter(ctx, bounds.Apply)
 			defer cancel()
-			for _, file := range []string{"cluster.yaml", "workers.yaml"} {
-				manifest, err := render(file, key.Name)
-				if err != nil {
-					t.Fatal(err)
-				}
-				if err := apply(bounded, cfg, manifest); err != nil {
-					t.Fatalf("apply %s: %v", file, err)
-				}
-			}
-			provisioned := &unstructured.Unstructured{}
-			provisioned.SetGroupVersionKind(devCluster)
-			provisioned.SetNamespace(key.Namespace)
-			provisioned.SetName(key.Name)
-			patch := client.RawPatch(types.MergePatchType, []byte(`{"status":{"initialization":{"provisioned":true}}}`))
-			if err := k8s.Status().Patch(bounded, provisioned, patch); err != nil {
-				t.Fatal(cutShort(bounded, err))
+			if err := applyTheCluster(bounded, cfg, k8s, key); err != nil {
+				t.Fatal(err)
 			}
 			return ctx
 		}).
 		Assess("the Cluster reports ControlPlaneInitialized", func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
 			until(ctx, t, bounds.Initialized, "ControlPlaneInitialized is True", func(ctx context.Context) error {
-				cluster := &clusterv1.Cluster{}
-				if err := k8s.Get(ctx, key, cluster); err != nil {
-					return err
-				}
-				if c := meta.FindStatusCondition(cluster.Status.Conditions, clusterv1.ClusterControlPlaneInitializedCondition); c == nil || c.Status != metav1.ConditionTrue {
-					return fmt.Errorf("ControlPlaneInitialized is %+v", c)
-				}
-				return nil
+				return requireInitialized(ctx, k8s, key)
 			})
 			return ctx
 		}).
@@ -126,28 +99,12 @@ func TestAWorkerJoinsAClusterOfLodiasControlPlane(t *testing.T) {
 		}).
 		Assess("kindnet, from the management node's own manifest, is applied in the tenant", func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
 			tenant = openTenant(ctx, t, k8s, key, tenantRequestTimeout)
-			cluster := &clusterv1.Cluster{}
-			if err := k8s.Get(ctx, key, cluster); err != nil {
-				t.Fatal(err)
-			}
-			management, err := kindCluster(cfg.KubeconfigFile())
+			rendered, err := kindnetOf(ctx, cfg, k8s, key)
 			if err != nil {
-				t.Fatal(err)
-			}
-			manifest, err := docker(ctx, "exec", management+"-control-plane", "cat", "/kind/manifests/default-cni.yaml")
-			if err != nil {
-				t.Fatal(err)
-			}
-			cni, err := template.New("cni").Parse(manifest)
-			if err != nil {
-				t.Fatal(err)
-			}
-			var rendered bytes.Buffer
-			if err := cni.Execute(&rendered, struct{ PodSubnet string }{cluster.Spec.ClusterNetwork.Pods.CIDRBlocks[0]}); err != nil {
 				t.Fatal(err)
 			}
 			until(ctx, t, bounds.Kindnet, "kindnet is applied", func(ctx context.Context) error {
-				return decoder.DecodeEach(ctx, bytes.NewReader(rendered.Bytes()), ignoreExisting(decoder.CreateHandler(tenant.resources)))
+				return decoder.DecodeEach(ctx, bytes.NewReader(rendered), ignoreExisting(decoder.CreateHandler(tenant.resources)))
 			})
 			return ctx
 		}).
@@ -231,14 +188,7 @@ func TestAWorkerJoinsAClusterOfLodiasControlPlane(t *testing.T) {
 		}).
 		Assess("the Cluster is Available", func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
 			until(ctx, t, bounds.Available, "Available is True", func(ctx context.Context) error {
-				cluster := &clusterv1.Cluster{}
-				if err := k8s.Get(ctx, key, cluster); err != nil {
-					return err
-				}
-				if c := meta.FindStatusCondition(cluster.Status.Conditions, clusterv1.ClusterAvailableCondition); c == nil || c.Status != metav1.ConditionTrue {
-					return fmt.Errorf("Available is %+v", c)
-				}
-				return nil
+				return requireAvailable(ctx, k8s, key)
 			})
 			return ctx
 		}).
@@ -392,45 +342,12 @@ func TestAWorkerJoinsAClusterOfLodiasControlPlane(t *testing.T) {
 			return ctx
 		}).
 		Assess("deleting the Cluster removes the LodiaControlPlane, the ControlPlane, the etcd claim, the copied Secrets and the worker's container", func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
-			etcd := lodiav1alpha1.EtcdName(key.Name)
-			owned := []client.Object{
-				&corev1.PersistentVolumeClaim{ObjectMeta: metav1.ObjectMeta{Namespace: key.Namespace, Name: etcd + "-" + etcd + "-0"}},
-				&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: key.Namespace, Name: secret.Name(key.Name, secret.Kubeconfig)}},
-				&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: key.Namespace, Name: secret.Name(key.Name, secret.ClusterCA)}},
-			}
-			for _, obj := range owned {
-				if err := k8s.Get(ctx, client.ObjectKeyFromObject(obj), obj); err != nil {
-					t.Fatalf("%T %s, whose removal this step checks: %v", obj, obj.GetName(), err)
-				}
-			}
-			containers, err := clusterContainers(ctx, key.Name)
+			owned, err := deleteTheCluster(ctx, k8s, key)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if len(containers) != 1 {
-				t.Fatalf("%d containers are labelled for the Cluster, want the worker's alone: %v", len(containers), containers)
-			}
-			if err := k8s.Delete(ctx, &clusterv1.Cluster{ObjectMeta: metav1.ObjectMeta{Namespace: key.Namespace, Name: key.Name}}); err != nil {
-				t.Fatal(err)
-			}
 			until(ctx, t, bounds.Deleted, "everything the Cluster made is gone", func(ctx context.Context) error {
-				for _, obj := range append([]client.Object{
-					&clusterv1.Cluster{ObjectMeta: metav1.ObjectMeta{Namespace: key.Namespace, Name: key.Name}},
-					&v1alpha1.LodiaControlPlane{ObjectMeta: metav1.ObjectMeta{Namespace: key.Namespace, Name: key.Name}},
-					&lodiav1alpha1.ControlPlane{ObjectMeta: metav1.ObjectMeta{Namespace: key.Namespace, Name: key.Name}},
-				}, owned...) {
-					if err := gone(k8s.Get(ctx, client.ObjectKeyFromObject(obj), obj)); err != nil {
-						return fmt.Errorf("%T %s: %w", obj, obj.GetName(), err)
-					}
-				}
-				left, err := clusterContainers(ctx, key.Name)
-				if err != nil {
-					return err
-				}
-				if len(left) > 0 {
-					return fmt.Errorf("containers %s are left", strings.Join(left, ", "))
-				}
-				return nil
+				return requireGone(ctx, k8s, key, owned)
 			})
 			return ctx
 		}).
@@ -442,17 +359,4 @@ func TestAWorkerJoinsAClusterOfLodiasControlPlane(t *testing.T) {
 		}).
 		Feature()
 	testenv.Test(t, f)
-}
-
-func render(file, cluster string) ([]byte, error) {
-	raw, err := os.ReadFile(filepath.Join("testdata", file))
-	if err != nil {
-		return nil, err
-	}
-	return yamlprocessor.NewSimpleProcessor().Process(raw, func(name string) (string, error) {
-		if name != "CLUSTER_NAME" {
-			return "", fmt.Errorf("%s is not set", name)
-		}
-		return cluster, nil
-	})
 }

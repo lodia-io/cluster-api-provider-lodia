@@ -115,3 +115,46 @@ func TestMakeAcceptsOnlyNamesWhoseClusterLodiaAccepts(t *testing.T) {
 		})
 	}
 }
+
+func TestEachTargetThatRunsTheSuiteCreatesAClusterOfItsOwnThatTheGuardAccepts(t *testing.T) {
+	creates := regexp.MustCompile(`kind create cluster --name (\S+) --kubeconfig (\S+)`)
+	runs := regexp.MustCompile(`go test [^;&|\n]*-tags e2e`)
+	var names []string
+	for target, tags := range map[string]string{"e2e": "-tags e2e ", "e2e-upgrade": "-tags e2e,upgrade "} {
+		t.Run(target, func(t *testing.T) {
+			cmd := exec.CommandContext(t.Context(), "make", "--no-print-directory", target)
+			cmd.Dir = root
+			recipe := recipeOf(t, cmd)
+			found := creates.FindStringSubmatch(recipe)
+			if found == nil {
+				t.Fatalf("the recipe creates no kind cluster:\n%s", recipe)
+			}
+			name, kubeconfigPath := found[1], found[2]
+			names = append(names, name)
+			if n := len(runs.FindAllString(recipe, -1)); n != 1 {
+				t.Errorf("the target runs go test with -tags e2e %d times, want once, since a suite that a prerequisite or a recursive make runs besides it is on the same cluster and under no bound of the target:\n%s", n, recipe)
+			}
+			if err := RequireNamedCluster(kubeconfig(t, "https://127.0.0.1:6443", "kind-"+name, "kind-"+name)); err != nil {
+				t.Errorf("the guard refuses the cluster %s: %v", name, err)
+			}
+			if out, err := exec.CommandContext(t.Context(), "make", "--no-print-directory", "-C", root, "e2e-cluster", "E2E_CLUSTER="+name).CombinedOutput(); err != nil {
+				t.Errorf("make e2e-cluster refuses %s: %v\n%s", name, err, out)
+			}
+			for _, want := range []string{
+				"E2E_KUBECONFIG=" + kubeconfigPath + " go test -v " + tags,
+				"label=io.x-k8s.kind.cluster=" + name + "-w",
+				"kind delete cluster --name " + name + " --kubeconfig " + kubeconfigPath,
+			} {
+				if !strings.Contains(recipe, want) {
+					t.Errorf("the recipe lacks %q:\n%s", want, recipe)
+				}
+			}
+			if !strings.HasSuffix(filepath.Dir(kubeconfigPath), filepath.Join("work", "e2e", name)) {
+				t.Errorf("the kubeconfig %s is not in work/e2e/%s", kubeconfigPath, name)
+			}
+		})
+	}
+	if len(names) == 2 && names[0] == names[1] {
+		t.Errorf("both targets create the cluster %s: two jobs on one host would share its directory and its kubeconfig", names[0])
+	}
+}

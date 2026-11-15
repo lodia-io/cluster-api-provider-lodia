@@ -8,12 +8,7 @@ package e2e
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
-	"errors"
 	"fmt"
-	"io"
-	"net/http"
 	"os"
 	"os/exec"
 	"path"
@@ -34,6 +29,8 @@ import (
 	"sigs.k8s.io/e2e-framework/klient/k8s"
 	"sigs.k8s.io/e2e-framework/pkg/envconf"
 	"sigs.k8s.io/e2e-framework/third_party/helm"
+
+	"go.lodia.io/cluster-api-provider-lodia/test/pin"
 )
 
 const lodiaRelease = "lodia"
@@ -82,23 +79,7 @@ var (
 )
 
 func (r release) fetch(ctx context.Context, dir string) ([]byte, error) {
-	cached := filepath.Join(dir, path.Base(r.url))
-	raw, err := os.ReadFile(cached)
-	if err != nil && !errors.Is(err, os.ErrNotExist) {
-		return nil, err
-	}
-	if checksum(raw) != r.sha256 {
-		if raw, err = download(ctx, r.url); err != nil {
-			return nil, err
-		}
-		if got := checksum(raw); got != r.sha256 {
-			return nil, fmt.Errorf("%s has sha256 %s, the suite pins %s", r.url, got, r.sha256)
-		}
-		if err := os.WriteFile(cached, raw, 0o644); err != nil {
-			return nil, err
-		}
-	}
-	return raw, nil
+	return pin.Fetch(ctx, dir, r.url, r.sha256)
 }
 
 func (r release) version() string {
@@ -133,31 +114,6 @@ func (r release) unrendered(ctx context.Context, dir string) ([]byte, error) {
 		return nil, fmt.Errorf("%s: %w", r.url, err)
 	}
 	return pinned, nil
-}
-
-func checksum(data []byte) string {
-	sum := sha256.Sum256(data)
-	return hex.EncodeToString(sum[:])
-}
-
-func download(ctx context.Context, url string) ([]byte, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		return nil, err
-	}
-	resp, err := (&http.Client{Timeout: time.Minute}).Do(req)
-	if err != nil {
-		return nil, err
-	}
-	body, err := io.ReadAll(resp.Body)
-	_ = resp.Body.Close()
-	if err != nil {
-		return nil, err
-	}
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("GET %s answers %s", url, resp.Status)
-	}
-	return body, nil
 }
 
 func ignoreExisting(create decoder.HandlerFunc) decoder.HandlerFunc {
@@ -262,11 +218,11 @@ func installProviders(ctx context.Context, cfg *envconf.Config) error {
 		}
 		providers = append(providers, clusterctlProvider{p.name, p.kind, p.from.version(), components, metadata})
 	}
-	lodia, err := lodiaProvider(ctx, cfg)
+	lodia, installed, err := lodiaProviders(ctx, cfg)
 	if err != nil {
 		return err
 	}
-	providers = append(providers, lodia)
+	providers = append(providers, lodia...)
 	var components [][]byte
 	for _, p := range providers {
 		components = append(components, p.components)
@@ -290,7 +246,7 @@ func installProviders(ctx context.Context, cfg *envconf.Config) error {
 		CoreProvider:            "cluster-api",
 		BootstrapProviders:      []string{"kubeadm"},
 		InfrastructureProviders: []string{"docker"},
-		ControlPlaneProviders:   []string{"lodia"},
+		ControlPlaneProviders:   []string{installed},
 		WaitProviders:           true,
 		WaitProviderTimeout:     providerWait,
 	}); err != nil {

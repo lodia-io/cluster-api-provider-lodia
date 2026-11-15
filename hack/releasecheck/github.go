@@ -68,3 +68,23 @@ func (g *githubCI) Runs(ctx context.Context, sha string) ([]Run, error) {
 	}
 	return runs, nil
 }
+
+func (g *githubCI) Releases(ctx context.Context) ([]string, error) {
+	var tags []string
+	opts := &github.ListOptions{PerPage: 100}
+	for {
+		page, resp, err := g.client.Repositories.ListReleases(ctx, g.owner, g.repo, opts)
+		if err != nil {
+			return nil, fmt.Errorf("listing the releases: %w", err)
+		}
+		for _, release := range page {
+			if !release.GetDraft() {
+				tags = append(tags, release.GetTagName())
+			}
+		}
+		if resp.NextPage == 0 {
+			return tags, nil
+		}
+		opts.Page = resp.NextPage
+	}
+}

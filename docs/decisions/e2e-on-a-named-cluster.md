@@ -1,6 +1,6 @@
 # The e2e suite runs only against its own kind cluster, installs the provider through clusterctl as users do, and bounds every wait
 
-Decided 2026-11-09.
+Decided 2026-11-09; the second job, `e2e-upgrade`, added 2026-11-15.
 
 ## Decision
 
@@ -12,11 +12,13 @@ Decided 2026-11-09.
   Lodia and etcd-druid are installed from Lodia's chart at the `LODIA_COMMIT` of the `Makefile`.
 - A worker joins through Cluster API's kubeadm bootstrap provider with the bootstrap objects that Lodia's Tenant controller writes, and a pod runs on it, read through the `<cluster>-kubeconfig` that the provider wrote.
 - A test outside the suite's tagged files that drives clusterctl, or loads the kubeconfig that `KUBECONFIG` names, first points `KUBECONFIG` at a kubeconfig of a cluster that never answers, and fails if that cluster is asked anything.
-  The suite's tagged files, `suite_test.go`, `install_test.go` and `join_test.go`, do not, and rely on the guard and on `E2E_KUBECONFIG`.
-- Every wait has a bound in the suite's model, the bounds add up to less than `go test`'s `-timeout`, and `-timeout` to less than the job's `timeout-minutes`.
+  The suite's tagged files, those with the build tag `e2e`, do not, and rely on the guard and on `E2E_KUBECONFIG`.
+- Every wait has a bound in the suite's model, the bounds of each job add up to less than its `go test`'s `-timeout`, and `-timeout` to less than the job's `timeout-minutes`.
   A wait that takes its bound from the context it runs on runs on a context that `endAfter` cancels at the end of the wait's window, never on one with a deadline.
-  A docker call, the dump, the unpause of `pauseCycle` and clusterctl's wait for the providers inside the install still end by a deadline ([`test/e2e/README.md`](../../test/e2e/README.md)).
-- CI runs `make e2e` as the job `e2e`, on every pull request and every push to `main`.
+  A docker call, the dump, the unpause of `pauseCycle` and clusterctl's wait for the providers inside the install and the upgrade still end by a deadline ([`test/e2e/README.md`](../../test/e2e/README.md)).
+- CI runs `make e2e` as the job `e2e` and `make e2e-upgrade` as the job `e2e-upgrade`, on every pull request and every push to `main`, each on a kind cluster of its own, `capl-e2e` and `capl-e2e-upgrade`.
+- `e2e-upgrade` installs through clusterctl the release that `test/pin/previous-release.yaml` names, pinned by the sha256 of its two files, joins a worker, and upgrades the provider to the tree's build with `clusterctl upgrade apply`: the new manager has to lead, and to leave what the release made as it was, the objects and the copied Secrets, the `Machine` and its Node, and the times of last transition of `Available`.
+- `make verify` compares the components of that release with the tree's render, and `make release-check` refuses a tag whose commit pins a release older than the newest one published below the tag, so that every release is upgrade-tested from the one before it.
 - What the provider shares with Lodia's guard is Lodia's [decision of the same name](https://github.com/lodia-io/lodia/blob/f91168b1248dc18151a0c2d442fe2050593a0866/docs/decisions/e2e-on-a-named-cluster.md).
 
 ## Why
@@ -27,6 +29,9 @@ Decided 2026-11-09.
   Through clusterctl, the path users take is the one tested, and the release's own render is what runs.
 - On 2026-11-13 a mutant of the suite's clusterctl factory made clusterctl fall back to its own proxy, which loads the current context's kubeconfig, and a test run reached a live cluster.
   The trap turns such a fallback into a failing test.
+- The upgrade is a job of its own: a management cluster holds one instance of the provider ([clusterctl](https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/cmd/clusterctl/client/cluster/upgrader.go#L375-L379)), so the release could follow the join test on its cluster only through a delete and an install of the release, which no user does, and the join test's own `Init` of the tree's build, which it tests because users take that path, has to stay in the join job.
+  The pin moves by hand and is checked at the tag, since the sums of a release exist only once it is published, and a test that fails once a newer release exists would fail every pull request for a cause outside it.
+- The static comparison names in seconds what the e2e shows on real objects: an object that clusterctl's upgrade keeps and the render drops or renames stays in every upgraded cluster, a `roleRef` that changes fails the upgrade, since it is immutable ([kubernetes](https://github.com/kubernetes/kubernetes/blob/v1.37.2/pkg/apis/rbac/validation/validation.go#L206)), and a CRD version that the release serves and the render drops or serves no more stops being served, which clusterctl refuses wherever a ClusterClass names it ([clusterctl](https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/cmd/clusterctl/client/cluster/upgrader.go#L660-L676)).
 - A step's own bound has to fail before `go test` gives up, since only the step's failure writes the artifacts.
 - A request that starts under a deadline is refused by client-go's rate limiter at once, with an error that is no context's, when its token is due after the deadline, which a tick at the end of a window brings about ([`test/e2e/README.md`](../../test/e2e/README.md)).
 
@@ -38,13 +43,16 @@ Decided 2026-11-09.
 
 - The suite needs Docker and helm, and runs where the Docker network `kind` is routable, as on GitHub's Linux runners.
   Docker Desktop does not route it, so the suite does not run on macOS.
-- A new bound joins the model in `TestTheBoundsFitUnderTheTimeouts`, and a new wait is checked by `TestEveryWaitOfTheJoinTestIsBoundedByAFieldOfTheBoundsThatNoOtherWaitTakes`, which also fails a wait on a context that `context.WithTimeout` made.
+- A new bound joins the model of the job whose test waits, `boundSet` for `e2e` and `upgradeBoundSet` for `e2e-upgrade`, in `TestTheBoundsFitUnderTheTimeouts`, and a new wait is checked by `TestEveryWaitOfTheJoinTestIsBoundedByAFieldOfTheBoundsThatNoOtherWaitTakes` or `TestEveryWaitOfTheUpgradeTestIsBoundedByAFieldOfItsOwnBoundsThatNoOtherWaitTakes`, which also fail a wait on a context that `context.WithTimeout` made.
+- The upgrade job reaches ghcr.io for the release's image and GitHub for its two files, and the pin moves by hand after each release ([CONTRIBUTING](../../CONTRIBUTING.md#release-a-version)); nothing in it holds the clusterctl variables, which equal the manifest's defaults there, and `test/components` does, with explicit values.
 
 ## Code
 
 - `test/e2e/guard.go` — `RequireNamedCluster`; `test/e2e/guard_test.go` — `TestRequireNamedCluster`, `TestMakeAndTheGuardAgreeOnTheClusterName` and `TestMakeAcceptsOnlyNamesWhoseClusterLodiaAccepts`.
 - `test/e2e/helm_test.go` — `refuseHelmKubeEnv` and `TestHelmKubeVariablesAreRefused`; `test/e2e/suite_test.go` calls it with the guard.
-- `Makefile` — `e2e`, `e2e-cluster` and `e2e-lodia`; `.github/workflows/ci.yml` — the job `e2e`.
+- `Makefile` — `e2e`, `e2e-upgrade`, `e2e-cluster`, `e2e-lodia` and `upgrade-components`; `.github/workflows/ci.yml` — the jobs `e2e` and `e2e-upgrade`.
 - `test/e2e/join_test.go` — `TestAWorkerJoinsAClusterOfLodiasControlPlane`; `test/e2e/install_test.go` and `test/e2e/clusterctl_test.go` — the install; `test/e2e/README.md` — the steps and the failure modes.
 - `test/clusterctlproxy/trap.go` — `TrapTheDefaultKubeconfig`; `test/clusterctlproxy/proxy_test.go` — `TestNoCallReadsAKubeconfigOrTheCurrentContext` and `TestEveryClusterctlClientIsBuiltThroughTheFactory`.
 - `test/e2e/bounds_test.go` — `TestTheBoundsFitUnderTheTimeouts`; `test/e2e/stable_test.go` — `endAfter`.
+- `test/e2e/upgrade_test.go` — `TestTheProviderUpgradesFromThePreviousRelease`; `test/e2e/upgraded_test.go` — its checks; `test/e2e/lodia_upgrade_test.go` — the install of the release; `test/pin` — the pin and the download by sha256.
+- `test/components/upgrade.go` — the comparison of `make verify`; `hack/releasecheck/check.go` — `requireUpgradePin`.

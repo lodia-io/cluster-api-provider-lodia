@@ -9,7 +9,9 @@
 //	releasecheck image --repository=REPOSITORY --tag=TAG components.yaml
 //
 // tag reads GitHub with $GITHUB_TOKEN, as the repository of origin, and
-// requires the local tags vX.Y.Z and api/vX.Y.Z at the commit.
+// requires the local tags vX.Y.Z and api/vX.Y.Z at the commit, and the pin of
+// the upgrade e2e at the commit to name the newest published release below the
+// tag.
 // image prints the one image the components YAML names.
 package main
 

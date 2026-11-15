@@ -113,3 +113,44 @@ func TestTheRepositoryIsOrigins(t *testing.T) {
 		t.Error("an origin outside github.com: want a refusal")
 	}
 }
+
+func TestTheReleasesAreThePublishedOnesOfEveryPage(t *testing.T) {
+	var asked []string
+	ci := githubAt(t, func(w http.ResponseWriter, r *http.Request) {
+		if want := "/repos/lodia-io/cluster-api-provider-lodia/releases"; r.URL.Path != want {
+			t.Errorf("asked for %s, want %s", r.URL.Path, want)
+		}
+		asked = append(asked, r.URL.Query().Get("page"))
+		switch r.URL.Query().Get("page") {
+		case "", "1":
+			w.Header().Set("Link", `<`+"http://"+r.Host+`/repos/lodia-io/cluster-api-provider-lodia/releases?page=2>; rel="next"`)
+			_, _ = w.Write([]byte(`[{"tag_name": "v0.1.0-alpha.3", "draft": true}, {"tag_name": "v0.1.0-alpha.2", "prerelease": true}]`))
+		default:
+			_, _ = w.Write([]byte(`[{"tag_name": "v0.1.0-alpha.1", "prerelease": true, "draft": false}]`))
+		}
+	})
+
+	got, err := ci.Releases(t.Context())
+
+	if err != nil {
+		t.Fatal(err)
+	}
+	if diff := cmp.Diff([]string{"v0.1.0-alpha.2", "v0.1.0-alpha.1"}, got); diff != "" {
+		t.Errorf("releases (-want +got):\n%s", diff)
+	}
+	if diff := cmp.Diff([]string{"", "2"}, asked); diff != "" {
+		t.Errorf("pages asked (-want +got):\n%s", diff)
+	}
+}
+
+func TestTheReleasesReportAFailure(t *testing.T) {
+	ci := githubAt(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	})
+
+	_, err := ci.Releases(t.Context())
+
+	if err == nil || !strings.Contains(err.Error(), "listing the releases") {
+		t.Errorf("want the error of the listing, got %v", err)
+	}
+}

@@ -42,6 +42,15 @@
 // resolves in a release, so a fixed digest reference takes its place first:
 // https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/cmd/clusterctl/client/repository/components.go#L217-L223
 // https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/util/container/image.go#L44-L48
+//
+// With the arguments upgrade DIR it reads the render instead, and the components
+// of the release that test/pin names, which it downloads into DIR once, and
+// fails on an object of the release that clusterctl's upgrade keeps, a
+// cluster-scoped one or a custom resource of a CRD that carries the provider
+// label, and the render drops or renames, on a ClusterRoleBinding whose roleRef
+// the render changes, on a CRD version that the release serves and the render
+// does not serve, and on the release's storage version that the render does not
+// list.
 package main
 
 import (
@@ -121,10 +130,24 @@ var clusterScoped = []string{
 }
 
 func main() {
-	if err := check(os.Stdin); err != nil {
+	if err := run(os.Args[1:], os.Stdin, fromThePin); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
+}
+
+func run(args []string, r io.Reader, previous previousRelease) error {
+	switch {
+	case len(args) == 0:
+		return check(r)
+	case len(args) == 2 && args[0] == "upgrade":
+		release, components, err := previous(args[1])
+		if err != nil {
+			return err
+		}
+		return upgrade(context.Background(), r, release, components)
+	}
+	return errors.New("usage: components [upgrade DIR]")
 }
 
 func check(r io.Reader) error {

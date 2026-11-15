@@ -14,11 +14,14 @@ import (
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
+
+	"go.lodia.io/cluster-api-provider-lodia/test/pin"
 )
 
 const (
 	apiVersion = "apiVersion: clusterctl.cluster.x-k8s.io/v1alpha3\nkind: Metadata\n"
 	green      = "https://example.test/runs/1"
+	upgradePin = pin.File
 )
 
 func series(entries ...string) string {
@@ -95,6 +98,17 @@ func (r *repository) commit(metadata string) string {
 	return r.git("rev-parse", "HEAD")
 }
 
+func upgradePinOf(version string) string {
+	return fmt.Sprintf("version: %s\ncomponents: %s\nmetadata: %s\n", version, strings.Repeat("a", 64), strings.Repeat("b", 64))
+}
+
+func (r *repository) commitWithPin(metadata, pin string) string {
+	r.t.Helper()
+	r.write(upgradePin, pin)
+	r.git("add", upgradePin)
+	return r.commit(metadata)
+}
+
 func (r *repository) tagRelease(tag, sha string) {
 	r.t.Helper()
 	r.git("tag", "--annotate", "--message", tag, tag, sha)
@@ -111,14 +125,20 @@ func (r *repository) originMain(sha string) {
 }
 
 type fakeCI struct {
-	runs  []Run
-	err   error
-	asked []string
+	runs        []Run
+	err         error
+	asked       []string
+	releases    []string
+	releasesErr error
 }
 
 func (f *fakeCI) Runs(_ context.Context, sha string) ([]Run, error) {
 	f.asked = append(f.asked, sha)
 	return f.runs, f.err
+}
+
+func (f *fakeCI) Releases(context.Context) ([]string, error) {
+	return f.releases, f.releasesErr
 }
 
 func greenRuns() []Run {
@@ -465,5 +485,115 @@ func TestTheMetadataCheckAcceptsTheRepositoryItself(t *testing.T) {
 
 	if err := checkMetadata(t.Context(), r.dir); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestTheTagCheckWantsTheUpgradePinAtTheNewestPublishedReleaseBelowTheTag(t *testing.T) {
+	tests := []struct {
+		name      string
+		tag       string
+		pin       string
+		published []string
+		gitTags   []string
+		want      string
+	}{
+		{name: "the pin is the newest release below the tag", tag: "v0.1.0-alpha.3", pin: "v0.1.0-alpha.2", published: []string{"v0.1.0-alpha.1", "v0.1.0-alpha.2"}},
+		{name: "the pin is the first release, the only one", tag: "v0.1.0-alpha.2", pin: "v0.1.0-alpha.1", published: []string{"v0.1.0-alpha.1"}},
+		{name: "the pin is older than the newest release below the tag", tag: "v0.1.0-alpha.3", pin: "v0.1.0-alpha.1", published: []string{"v0.1.0-alpha.1", "v0.1.0-alpha.2"}, want: "names v0.1.0-alpha.1, and the newest published release below v0.1.0-alpha.3 is v0.1.0-alpha.2"},
+		{name: "the pin names a release that is not published", tag: "v0.1.0-alpha.3", pin: "v0.1.0-alpha.2", published: []string{"v0.1.0-alpha.1"}, want: "names v0.1.0-alpha.2, and the newest published release below v0.1.0-alpha.3 is v0.1.0-alpha.1"},
+		{name: "a tag without a release is not the newest", tag: "v0.1.0-alpha.3", pin: "v0.1.0-alpha.1", published: []string{"v0.1.0-alpha.1"}, gitTags: []string{"v0.1.0-alpha.2"}},
+		{name: "a tag without a release is not accepted as the pin", tag: "v0.1.0-alpha.3", pin: "v0.1.0-alpha.2", published: []string{"v0.1.0-alpha.1"}, gitTags: []string{"v0.1.0-alpha.2"}, want: "newest published release below v0.1.0-alpha.3 is v0.1.0-alpha.1"},
+		{name: "a release above the tag is not below it", tag: "v0.1.0-alpha.3", pin: "v0.1.0-alpha.2", published: []string{"v0.1.0-alpha.2", "v0.1.0-alpha.4", "v0.1.0"}},
+		{name: "a pin that names a release above the tag", tag: "v0.1.0-alpha.3", pin: "v0.1.0-alpha.4", published: []string{"v0.1.0-alpha.2", "v0.1.0-alpha.4"}, want: "names v0.1.0-alpha.4, and the newest published release below v0.1.0-alpha.3 is v0.1.0-alpha.2"},
+		{name: "the release of the tag itself is not below it", tag: "v0.1.0-alpha.3", pin: "v0.1.0-alpha.2", published: []string{"v0.1.0-alpha.2", "v0.1.0-alpha.3"}},
+		{name: "a stable release is above its pre-releases", tag: "v0.1.0", pin: "v0.1.0-alpha.2", published: []string{"v0.1.0-alpha.1", "v0.1.0-alpha.2"}},
+		{name: "a pre-release is below the stable release of its version", tag: "v0.1.1", pin: "v0.1.0-alpha.2", published: []string{"v0.1.0-alpha.2", "v0.1.0"}, want: "newest published release below v0.1.1 is v0.1.0"},
+		{name: "the stable release is the pin of the next patch", tag: "v0.1.1", pin: "v0.1.0", published: []string{"v0.1.0-alpha.2", "v0.1.0"}},
+		{name: "the newest of ten releases is the numeric one", tag: "v0.1.0-alpha.11", pin: "v0.1.0-alpha.10", published: []string{"v0.1.0-alpha.9", "v0.1.0-alpha.10", "v0.1.0-alpha.2"}},
+		{name: "a name that is not a version is not a release", tag: "v0.1.0-alpha.3", pin: "v0.1.0-alpha.2", published: []string{"nightly", "v0.1.0-alpha.2", "latest"}},
+		{name: "no release below the tag asks for no pin", tag: "v0.1.0-alpha.1", published: nil},
+		{name: "releases only above the tag ask for no pin", tag: "v0.1.0-alpha.1", published: []string{"v0.1.0-alpha.2"}},
+		{name: "a pin that is not written as a release", tag: "v0.1.0-alpha.3", pin: "main", published: []string{"v0.1.0-alpha.2"}, want: "test/pin/previous-release.yaml at"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := newRepository(t)
+			base := r.commit(series("0.1.v1beta2"))
+			r.originMain(base)
+			for _, tag := range tt.gitTags {
+				r.git("tag", tag, base)
+			}
+			content := upgradePinOf(tt.pin)
+			if tt.pin == "" {
+				content = "not a pin: ["
+			}
+			sha := r.commitWithPin(series("0.1.v1beta2"), content)
+			r.originMain(sha)
+			r.tagRelease(tt.tag, sha)
+			r.tagAPI(tt.tag, sha)
+			ci := &fakeCI{runs: greenRuns(), releases: tt.published}
+
+			got, err := checkTag(t.Context(), r.dir, ci, tt.tag, "HEAD")
+
+			if tt.want == "" {
+				if err != nil || got != sha {
+					t.Fatalf("want the tag accepted on %s, got %s and %v", sha, got, err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("want an error containing %q, got %v", tt.want, err)
+			}
+			if len(ci.asked) != 0 {
+				t.Errorf("asked CI about %v after the pin was refused", ci.asked)
+			}
+		})
+	}
+}
+
+func TestTheTagCheckReadsThePinAtTheCommit(t *testing.T) {
+	r := newRepository(t)
+	older := r.commitWithPin(series("0.1.v1beta2"), upgradePinOf("v0.1.0-alpha.1"))
+	newer := r.commitWithPin(series("0.1.v1beta2"), upgradePinOf("v0.1.0-alpha.2"))
+	r.originMain(newer)
+	r.tagRelease("v0.1.0-alpha.3", older)
+	r.tagAPI("v0.1.0-alpha.3", older)
+	published := []string{"v0.1.0-alpha.1", "v0.1.0-alpha.2"}
+
+	if _, err := checkTag(t.Context(), r.dir, &fakeCI{runs: greenRuns(), releases: published}, "v0.1.0-alpha.3", older); err == nil || !strings.Contains(err.Error(), "names v0.1.0-alpha.1") {
+		t.Errorf("the commit before the pin moved: want its refusal, got %v", err)
+	}
+	r.git("tag", "--delete", "v0.1.0-alpha.3", "api/v0.1.0-alpha.3")
+	r.tagRelease("v0.1.0-alpha.3", newer)
+	r.tagAPI("v0.1.0-alpha.3", newer)
+	if _, err := checkTag(t.Context(), r.dir, &fakeCI{runs: greenRuns(), releases: published}, "v0.1.0-alpha.3", newer); err != nil {
+		t.Errorf("the commit that moved the pin: %v", err)
+	}
+}
+
+func TestTheTagCheckRefusesACommitWithoutThePinWhenAReleaseIsBelowTheTag(t *testing.T) {
+	r := newRepository(t)
+	sha := r.commit(series("0.1.v1beta2"))
+	r.originMain(sha)
+	r.tagRelease("v0.1.0-alpha.2", sha)
+	r.tagAPI("v0.1.0-alpha.2", sha)
+
+	_, err := checkTag(t.Context(), r.dir, &fakeCI{runs: greenRuns(), releases: []string{"v0.1.0-alpha.1"}}, "v0.1.0-alpha.2", "HEAD")
+
+	if err == nil || !strings.Contains(err.Error(), pin.File) {
+		t.Errorf("want the refusal to name %s, got %v", pin.File, err)
+	}
+}
+
+func TestTheTagCheckFailsWhenThePublishedReleasesCannotBeRead(t *testing.T) {
+	r := newRepository(t)
+	sha := r.commitWithPin(series("0.1.v1beta2"), upgradePinOf("v0.1.0-alpha.1"))
+	r.originMain(sha)
+	r.tagRelease("v0.1.0-alpha.2", sha)
+	r.tagAPI("v0.1.0-alpha.2", sha)
+	ci := &fakeCI{runs: greenRuns(), releasesErr: errors.New("listing the releases: 500")}
+
+	if _, err := checkTag(t.Context(), r.dir, ci, "v0.1.0-alpha.2", "HEAD"); err == nil || !strings.Contains(err.Error(), "listing the releases: 500") {
+		t.Errorf("want the failure of the listing, got %v", err)
 	}
 }

@@ -64,7 +64,7 @@ func until(ctx context.Context, t testing.TB, timeout time.Duration, what string
 	t.Logf("%s, after %s", what, time.Since(start).Round(time.Second))
 }
 
-func readBoth(ctx context.Context, c client.Client, key client.ObjectKey) (*clusterv1.Cluster, *v1alpha1.LodiaControlPlane, error) {
+func readBoth(ctx context.Context, c client.Reader, key client.ObjectKey) (*clusterv1.Cluster, *v1alpha1.LodiaControlPlane, error) {
 	cluster, lcp := &clusterv1.Cluster{}, &v1alpha1.LodiaControlPlane{}
 	return cluster, lcp, errors.Join(c.Get(ctx, key, cluster), c.Get(ctx, key, lcp))
 }

@@ -11,8 +11,9 @@ Every other tool runs through `go tool` or `go run`; `make e2e` also needs what 
 | command | does |
 |---|---|
 | `make generate` | deepcopy functions, the CRDs in `api/crds` with their copy in `config/crd/bases`, and the controller's ClusterRole in `config/rbac/role.yaml`; commit the result |
-| `make verify` | the check that says a change is done: generated files current, both modules tidy, `config/default` rendered and checked for a non-empty default on every variable, one Namespace holding every namespaced object, the provider label on every object and a `manager` container as rendered, and for the roles that reach the manager's ServiceAccount on what clusterctl installs with the defaults and with explicit values, `metadata.yaml` against the CRDs' contract label and the merge base with `origin/main` (fetch it first), the release's render with no push, lint and unit and envtest tests of both modules; the render has ko build both platforms and pull the base image from gcr.io, which takes minutes when the Go caches are cold |
+| `make verify` | the check that says a change is done: generated files current, both modules tidy, `config/default` rendered and checked for a non-empty default on every variable, one Namespace holding every namespaced object, the provider label on every object and a `manager` container as rendered, and for the roles that reach the manager's ServiceAccount on what clusterctl installs with the defaults and with explicit values, the render against the components of the release that [`test/pin`](test/pin/previous-release.yaml) names (a cluster-scoped object that clusterctl's upgrade would leave behind, a `roleRef` it would fail on, a CRD version it would stop serving; the first run downloads them into `work/pin`), `metadata.yaml` against the CRDs' contract label and the merge base with `origin/main` (fetch it first), the release's render with no push, lint and unit and envtest tests of both modules; the render has ko build both platforms and pull the base image from gcr.io, which takes minutes when the Go caches are cold |
 | `make e2e` | the [end-to-end suite](test/e2e/README.md) on a kind cluster of its own |
+| `make e2e-upgrade` | the [upgrade test](test/e2e/README.md#the-upgrade-test): the release that [`test/pin/previous-release.yaml`](test/pin/previous-release.yaml) names, installed through clusterctl and upgraded to the tree's build, on a kind cluster of its own |
 | `make release-components` | `config/default` with the manager's image built by ko for `PLATFORMS`, pushed to `IMAGE_REPOSITORY` unless `KO_PUSH=false` and named by digest, written to `out/control-plane-components.yaml`; the release and the e2e use it |
 | `make release-image` | prints the image that `out/control-plane-components.yaml` names, after requiring it to be the only one and to read `IMAGE_REPOSITORY:IMAGE_TAG@sha256:<digest>` |
 | `make release-check TAG=vX.Y.Z` | refuses a tag before it is pushed, as [the release steps](#release-a-version) say |
@@ -20,7 +21,7 @@ Every other tool runs through `go tool` or `go run`; `make e2e` also needs what 
 The repository holds two Go modules, the manager at the root and the API in `api/` ([project-home](docs/decisions/project-home.md)).
 `make lint`, `make test` and `make verify` run both; `go test ./...` from the root does not reach `api/`, so run it there too.
 
-CI runs `make verify` and `make e2e` on every pull request and every push to `main`.
+CI runs `make verify`, `make e2e` and `make e2e-upgrade` on every pull request and every push to `main`.
 
 The envtest suite starts its own API server and etcd; nothing in it reads a kubeconfig.
 
@@ -54,7 +55,8 @@ What a release holds and why it is cut this way: [releases-through-clusterctl](d
    - a tag whose minor has no series in `metadata.yaml` at the commit, and any tag of the repository whose minor has none there;
    - a commit that is not on `origin/main`;
    - a local tag `vX.Y.Z` or `api/vX.Y.Z` that is missing or is not at the commit;
-   - a commit whose runs of `ci.yml` for the push to `main` are missing, unfinished or not green.
+   - a commit whose runs of `ci.yml` for the push to `main` are missing, unfinished or not green;
+   - a commit whose pin of the upgrade e2e, [`test/pin/previous-release.yaml`](test/pin/previous-release.yaml), is not the newest published release below the tag, which it reads from GitHub's releases and not from the tags, since a failed run leaves a tag without a release.
    It reads GitHub with `GITHUB_TOKEN`, or with `gh auth token`.
    A refusal leaves both tags local: delete them, fix the cause and tag again.
 5. Push both tags by name in one atomic push: `git push --atomic origin vX.Y.Z api/vX.Y.Z`.
@@ -62,6 +64,10 @@ What a release holds and why it is cut this way: [releases-through-clusterctl](d
    The workflow runs the same check again before it builds anything, and its checkout fetches every tag, so it finds `api/vX.Y.Z`.
 6. The workflow pushes the image for both platforms, renders `control-plane-components.yaml` with it, pulls the image by its digest without credentials, signs it and both files, verifies the signatures, attests the image and both files, verifies the attestations ([Signing](#signing)), and then creates the release with `gh release create --verify-tag`, with generated notes, the two bundles and, for a pre-release tag, the pre-release flag.
    If the release job does not succeed, the `cleanup` job deletes the draft releases of the tag.
+7. Once the release is published, move the pin of the upgrade e2e to it in a pull request, so that the next tag is upgrade-tested from this one:
+   - download `control-plane-components.yaml` and `metadata.yaml` with their two bundles from the release, and run `cosign verify-blob` of both files first, with the tag's identity, as [Verifying a release](docs/README.md#verifying-a-release) says;
+   - set `version`, `components` and `metadata` of [`test/pin/previous-release.yaml`](test/pin/previous-release.yaml) to the tag and to the sha256 of the two files, `shasum -a 256` of each, which the release's page also shows.
+   `make verify` then downloads the new release's components into `work/pin`, and `make e2e-upgrade` installs the release and upgrades it to the tree.
 
 Between the push of a tag and the publication of its release, `clusterctl upgrade plan` fails for every management cluster that has the provider: clusterctl takes the versions from proxy.golang.org, which lists a tag whether or not it has a release, and then asks for the files of the newest one ([versions](https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/cmd/clusterctl/client/repository/repository_github.go#L104-L146), [proxy](https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/internal/goproxy/goproxy.go#L59-L143), [upgrade info](https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/cmd/clusterctl/client/cluster/upgrader_info.go#L51-L123)).
 The window is the run of the release job, which builds and publishes nothing before the tag.
