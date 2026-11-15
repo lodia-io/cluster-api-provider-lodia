@@ -24,6 +24,8 @@ The repository holds two Go modules, the manager at the root and the API in `api
 
 CI runs `make verify`, `make e2e`, `make e2e-upgrade` and `make e2e-minor` on every pull request and every push to `main`.
 The three e2e targets are the entries of one matrix job of `ci.yml`, whose checks are named `e2e`, `e2e-upgrade` and `e2e-minor`, as `main`'s ruleset requires ([how GitHub names a check](https://github.com/github/docs/blob/d59b2631959db46d71ca5f7748ec04311c6d0870/content/repositories/configuring-branches-and-merges-in-your-repository/managing-rulesets/troubleshooting-rules.md?plain=1#L34-L40)).
+A superseded run of a pull request is cancelled and a run of `main` never is, since `release-check` refuses a cancelled run.
+Every job has a `timeout-minutes`, and every action is pinned to a commit with its version in a comment, as `release.yml`'s are; `test/build` holds each.
 After `make verify`, its `verify` job runs `make verify ENVTEST_K8S_VERSION=not-a-version`, which `setup-envtest` rejects, and fails when that exits 0, since a `Makefile` that makes `make` ignore errors would pass `make verify`.
 The tests of the `Makefile`, of the `go.mod` files and of that workflow are in [`test/build`](test/build), which `make test` runs; the end-to-end jobs run only [`test/e2e`](test/e2e), which keeps what reads the suite.
 `make test`, which `make verify` runs, takes the variable from `setup-envtest` and stops when that fails, and `TestMakeVerifyRunsTheTestsOfTheModuleWithTheAssetsOfEnvtest` holds in the output of `make -n verify ENVTEST_K8S_VERSION=not-a-version` the line that does both for that version, so that a line that writes the version out is refused.

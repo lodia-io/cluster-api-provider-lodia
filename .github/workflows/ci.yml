@@ -8,9 +8,16 @@ on:
 permissions:
   contents: read
 
+# The next run of a group replaces its pending one, and release-check refuses a cancelled run, so a push to main has a group of its own.
+# https://github.com/github/docs/blob/d59b2631959db46d71ca5f7748ec04311c6d0870/data/reusables/actions/actions-group-concurrency.md?plain=1#L3-L7
+concurrency:
+  group: ci-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   verify:
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
