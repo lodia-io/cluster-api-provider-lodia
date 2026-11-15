@@ -28,8 +28,8 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes"
-	"k8s.io/client-go/tools/clientcmd"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
+	"sigs.k8s.io/cluster-api/util/secret"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/yaml"
@@ -676,11 +676,12 @@ func TestTheLogsAreReadThroughTheTenantsAPIServerAndHoldAgnhostsStartLine(t *tes
 				}
 				respond(t, w, c.body)
 			}))
-			cfg, err := clientcmd.RESTConfigFromKubeConfig(serverKubeconfig(t, url, "tenant"))
-			if err != nil {
-				t.Fatal(err)
-			}
-			requireFailure(t, requireLogs(t.Context(), &tenantAccess{cfg: cfg}, pod), c.failure)
+			key := client.ObjectKey{Namespace: namespace, Name: "c-w"}
+			k8s := fake.NewClientBuilder().WithObjects(&corev1.Secret{
+				ObjectMeta: metav1.ObjectMeta{Namespace: key.Namespace, Name: secret.Name(key.Name, secret.Kubeconfig)},
+				Data:       map[string][]byte{secret.KubeconfigDataName: serverKubeconfig(t, url, "tenant")},
+			}).Build()
+			requireFailure(t, requireLogs(t.Context(), openTenant(t.Context(), t, k8s, key, tenantRequestTimeout), pod), c.failure)
 			if got := asked(); len(got) != 1 || got[0].path != "/api/v1/namespaces/default/pods/"+pod.Name+"/log" {
 				t.Errorf("the tenant was asked %v, want the log of pod %s alone", got, pod.Name)
 			}

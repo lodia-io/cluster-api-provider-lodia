@@ -35,6 +35,7 @@ import (
 	apiextensionsv1beta1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1beta1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	addonsv1 "sigs.k8s.io/cluster-api/api/addons/v1beta2"
 	controlplanev1 "sigs.k8s.io/cluster-api/api/controlplane/kubeadm/v1beta2"
@@ -237,6 +238,45 @@ func TestEveryClusterClientTheFactoryMakesReachesTheClusterOfTheRestConfig(t *te
 				t.Errorf("the client reaches %s with the request timeout %s, want %s and %s", got.Host, got.Timeout, s.url, request)
 			}
 		})
+	}
+}
+
+func hasARateLimiter(t *testing.T, cfg *rest.Config) bool {
+	t.Helper()
+	clientset, err := kubernetes.NewForConfig(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return clientset.CoreV1().RESTClient().GetRateLimiter() != nil
+}
+
+func TestAConfigThatSetsNoQPSKeepsClientGosRateLimiter(t *testing.T) {
+	if !hasARateLimiter(t, &rest.Config{Host: "https://unused.invalid"}) {
+		t.Fatal("a client of a config with no QPS has no rate limiter, so the tests that none is there see nothing")
+	}
+}
+
+func TestTheConfigsOfTheProxyHaveNoRateLimiter(t *testing.T) {
+	p := newProxy(&rest.Config{Host: "https://unused.invalid"}, request, discovery)
+	if hasARateLimiter(t, p.cfg) {
+		t.Error("the config that the proxy lists, discovers and checks the version with has a rate limiter")
+	}
+	got, err := p.GetConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hasARateLimiter(t, got) {
+		t.Error("the config that the proxy gives clusterctl has a rate limiter")
+	}
+}
+
+func TestTheConfigsOfNewClientHaveNoRateLimiter(t *testing.T) {
+	requests, discovered := clientConfigs(&rest.Config{Host: "https://unused.invalid"}, request, discovery)
+	if hasARateLimiter(t, requests) {
+		t.Error("the config of the client's requests has a rate limiter")
+	}
+	if hasARateLimiter(t, discovered) {
+		t.Error("the config of the client's discovery has a rate limiter")
 	}
 }
 

@@ -36,6 +36,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/e2e-framework/pkg/envconf"
 	"sigs.k8s.io/yaml"
+
+	"go.lodia.io/cluster-api-provider-lodia/test/clusterctlproxy"
 )
 
 var (
@@ -88,6 +90,7 @@ var metadataKinds = []struct {
 func dumpRESTConfig(cfg *envconf.Config) *rest.Config {
 	restCfg := rest.CopyConfig(cfg.Client().RESTConfig())
 	restCfg.Timeout = dumpRequestTimeout
+	restCfg.QPS = clusterctlproxy.NoRateLimit
 	return restCfg
 }
 

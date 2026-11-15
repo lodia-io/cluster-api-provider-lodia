@@ -28,6 +28,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 	"sigs.k8s.io/e2e-framework/klient/k8s/resources"
+
+	"go.lodia.io/cluster-api-provider-lodia/test/clusterctlproxy"
 )
 
 type tenantAccess struct {
@@ -46,6 +48,7 @@ func tenantRESTConfig(ctx context.Context, k8s client.Reader, key client.ObjectK
 		return nil, err
 	}
 	cfg.Timeout = timeout
+	cfg.QPS = clusterctlproxy.NoRateLimit
 	return cfg, nil
 }
 
