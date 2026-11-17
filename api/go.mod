@@ -6,7 +6,7 @@ toolchain go1.26.11
 
 require (
 	github.com/google/go-cmp v0.7.0
-	go.lodia.io/lodia/api v0.0.0-20261117040924-790c05bbc9d9
+	go.lodia.io/lodia/api v0.0.0-20261117082424-4a3a2a4acf70
 	k8s.io/apiextensions-apiserver v0.37.2
 	k8s.io/apimachinery v0.37.2
 	sigs.k8s.io/cluster-api/api v1.15.0-beta.0

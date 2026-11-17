@@ -207,8 +207,8 @@ github.com/vladimirvivien/gexe v0.5.0 h1:AWBVaYnrTsGYBktXvcO0DfWPeSiZxn6mnQ5nvL+
 github.com/vladimirvivien/gexe v0.5.0/go.mod h1:3gjgTqE2c0VyHnU5UOIwk7gyNzZDGulPb/DJPgcw64E=
 github.com/x448/float16 v0.8.4 h1:qLwI1I70+NjRFUR3zs1JPUCgaCXSh3SW62uAKT1mSBM=
 github.com/x448/float16 v0.8.4/go.mod h1:14CWIYCyZA/cWjXOioeEpHeN/83MdbZDRQHoFcYsOfg=
-go.lodia.io/lodia/api v0.0.0-20261117040924-790c05bbc9d9 h1:IbXtiBZ1UpKggmluwzB6yMFJPt1PYtbJRkqJQdWo2Ww=
-go.lodia.io/lodia/api v0.0.0-20261117040924-790c05bbc9d9/go.mod h1:o6ZvjnfZSuMQ7cHzwIwpKtXQnyQTwo9lT4f3OQw0BMo=
+go.lodia.io/lodia/api v0.0.0-20261117082424-4a3a2a4acf70 h1:kaC9z6FyMLNWgzQkd1B6EHd8C6tPXIG9WNXS536eVVA=
+go.lodia.io/lodia/api v0.0.0-20261117082424-4a3a2a4acf70/go.mod h1:o6ZvjnfZSuMQ7cHzwIwpKtXQnyQTwo9lT4f3OQw0BMo=
 go.opentelemetry.io/auto/sdk v1.2.1 h1:jXsnJ4Lmnqd11kwkBV2LgLoFMZKizbCi5fNZ/ipaZ64=
 go.opentelemetry.io/auto/sdk v1.2.1/go.mod h1:KRTj+aOaElaLi+wW1kO/DZRXwkF4C5xPbEe3ZiIhN7Y=
 go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.70.0 h1:LMuyCAyfalSjDyjdC65nK6N0zoTT63+E/u95X0JovZI=
