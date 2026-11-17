@@ -6,7 +6,7 @@ E2E_DIR = $(CURDIR)/work/e2e/$(E2E_CLUSTER)
 LODIA_DIR = $(CURDIR)/work/lodia
 PIN_DIR = $(CURDIR)/work/pin
 RENDER = $(CURDIR)/work/default.yaml
-LODIA_COMMIT = 0b8960701dc1c9d0375ab28cd7462fafc21d0145
+LODIA_COMMIT = 790c05bbc9d90d8fd45186d85baf7d2c538cbfab
 REMOVE_WORKERS = docker ps --all --quiet --filter label=io.x-k8s.kind.cluster=$(E2E_CLUSTER)-w | xargs -r docker rm --force --volumes
 KUSTOMIZE = sigs.k8s.io/kustomize/kustomize/v5@v5.7.0
 KO = github.com/google/ko@v0.19.1
