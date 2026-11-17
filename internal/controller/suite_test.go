@@ -236,7 +236,7 @@ func spec() v1alpha1.LodiaControlPlaneSpec {
 	return v1alpha1.LodiaControlPlaneSpec{
 		Version: "v1.35.8",
 		LodiaControlPlaneTemplateResourceSpec: v1alpha1.LodiaControlPlaneTemplateResourceSpec{
-			Datastore: lodiav1alpha1.DatastoreChoice{Dedicated: lodiav1alpha1.DedicatedDatastore{ClassName: "fast"}},
+			Datastore: lodiav1alpha1.DatastoreSettings{ClassName: "fast"},
 			Endpoint: lodiav1alpha1.Endpoint{
 				NodePort: &lodiav1alpha1.NodePortEndpoint{},
 				CertSANs: []lodiav1alpha1.Hostname{"api.alpha.example.com"},

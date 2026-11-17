@@ -232,7 +232,7 @@ func (s *minorStep) verdict() error {
 func TestRaisingTheVersionPatchesTheVersionOfTheLodiaControlPlaneAlone(t *testing.T) {
 	lcp := &v1alpha1.LodiaControlPlane{ObjectMeta: metav1.ObjectMeta{Namespace: scaleKey.Namespace, Name: scaleKey.Name}}
 	lcp.Spec.Version = "v1.36.4"
-	lcp.Spec.Datastore.Dedicated = lodiav1alpha1.DedicatedDatastore{ClassName: "e2e-capi"}
+	lcp.Spec.Datastore.ClassName = "e2e-capi"
 	other := &v1alpha1.LodiaControlPlane{ObjectMeta: metav1.ObjectMeta{Namespace: scaleKey.Namespace, Name: "other"}}
 	other.Spec.Version = "v1.36.4"
 	k8s := managementOf(lcp, other)
@@ -252,7 +252,7 @@ func TestRaisingTheVersionPatchesTheVersionOfTheLodiaControlPlaneAlone(t *testin
 	if err := k8s.Get(t.Context(), scaleKey, got); err != nil {
 		t.Fatal(err)
 	}
-	if got.Spec.Datastore.Dedicated.ClassName != "e2e-capi" {
+	if got.Spec.Datastore.ClassName != "e2e-capi" {
 		t.Errorf("the patch changed the rest of the spec: %+v", got.Spec.Datastore)
 	}
 	if err := raiseTheVersion(t.Context(), managementOf(), scaleKey, "v1.37.0"); err == nil {

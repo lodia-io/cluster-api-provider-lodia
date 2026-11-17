@@ -55,16 +55,17 @@ type LodiaControlPlaneTemplateResource struct {
 // +kubebuilder:validation:XValidation:rule="!has(self.highAvailability) || !has(self.apiServer) || !has(self.apiServer.replicas) || self.apiServer.replicas >= 2",message="highAvailability runs at least two API servers"
 // +kubebuilder:validation:XValidation:rule="!has(self.apiServer) || !has(self.apiServer.advertiseAddress) || has(self.endpoint.gateway)",message="apiServer.advertiseAddress is set only with endpoint.gateway"
 // +kubebuilder:validation:XValidation:rule="!has(self.endpoint.gateway) || (has(self.apiServer) && has(self.apiServer.advertiseAddress) ? has(oldSelf.apiServer) && has(oldSelf.apiServer.advertiseAddress) && oldSelf.apiServer.advertiseAddress == self.apiServer.advertiseAddress : !has(oldSelf.apiServer) || !has(oldSelf.apiServer.advertiseAddress))",message="apiServer.advertiseAddress is immutable"
+// +kubebuilder:validation:XValidation:rule="has(self.datastore) && has(self.datastore.className) && size(self.datastore.className) > 0 ? has(oldSelf.datastore) && has(oldSelf.datastore.className) && oldSelf.datastore.className == self.datastore.className : !has(oldSelf.datastore) || !has(oldSelf.datastore.className) || size(oldSelf.datastore.className) == 0",message="datastore.className is immutable in v1alpha1"
 type LodiaControlPlaneTemplateResourceSpec struct {
 	// HighAvailability runs every component with more than one replica,
 	// spread by FailureTolerance, and etcd with three members.
 	// +optional
 	HighAvailability *lodiav1alpha1.HighAvailability `json:"highAvailability,omitempty"`
 
-	// Datastore is where the cluster's data lives.
-	// +required
-	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="datastore is immutable in v1alpha1"
-	Datastore lodiav1alpha1.DatastoreChoice `json:"datastore"`
+	// Datastore is where the cluster's data lives: an etcd of the tenant's
+	// own.
+	// +optional
+	Datastore lodiav1alpha1.DatastoreSettings `json:"datastore,omitzero"`
 
 	// Endpoint is how nodes, people and pods reach the API server.
 	// +required

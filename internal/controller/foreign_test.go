@@ -51,7 +51,7 @@ func leftoverOfAnotherOwner(t *testing.T, ns, name string) (*corev1.ConfigMap, *
 		},
 		Spec: lodiav1alpha1.ControlPlaneSpec{
 			Version:   "v1.35.0",
-			Datastore: lodiav1alpha1.DatastoreChoice{Dedicated: lodiav1alpha1.DedicatedDatastore{ClassName: "another"}},
+			Datastore: lodiav1alpha1.DatastoreSettings{ClassName: "another"},
 			Endpoint:  lodiav1alpha1.Endpoint{LoadBalancer: &lodiav1alpha1.LoadBalancerEndpoint{}},
 			Network:   lodiav1alpha1.Network{ServiceCIDRs: []lodiav1alpha1.CIDR{"10.96.0.0/12"}, PodCIDRs: []lodiav1alpha1.CIDR{"10.244.0.0/16"}},
 		},

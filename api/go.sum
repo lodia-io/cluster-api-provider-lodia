@@ -28,8 +28,8 @@ github.com/stretchr/testify v1.11.1 h1:7s2iGBzp5EwR7/aIZr8ao5+dra3wiQyKjjFuvgVKu
 github.com/stretchr/testify v1.11.1/go.mod h1:wZwfW3scLgRK+23gO65QZefKpKQRnfz6sD981Nm4B6U=
 github.com/x448/float16 v0.8.4 h1:qLwI1I70+NjRFUR3zs1JPUCgaCXSh3SW62uAKT1mSBM=
 github.com/x448/float16 v0.8.4/go.mod h1:14CWIYCyZA/cWjXOioeEpHeN/83MdbZDRQHoFcYsOfg=
-go.lodia.io/lodia/api v0.0.0-20261116235948-1cea7ce4bdac h1:p2QdwO/G+3SRCw4/l854vktCa1n/1ny3OjfN6tR/2ao=
-go.lodia.io/lodia/api v0.0.0-20261116235948-1cea7ce4bdac/go.mod h1:o6ZvjnfZSuMQ7cHzwIwpKtXQnyQTwo9lT4f3OQw0BMo=
+go.lodia.io/lodia/api v0.0.0-20261117024737-b4c65abc7979 h1:cUEnCeTtu46I9zWf7Tg0UPqBsNKWVo8zIOe+zETQ/wQ=
+go.lodia.io/lodia/api v0.0.0-20261117024737-b4c65abc7979/go.mod h1:o6ZvjnfZSuMQ7cHzwIwpKtXQnyQTwo9lT4f3OQw0BMo=
 go.yaml.in/yaml/v2 v2.4.4 h1:tuyd0P+2Ont/d6e2rl3be67goVK4R6deVxCUX5vyPaQ=
 go.yaml.in/yaml/v2 v2.4.4/go.mod h1:gMZqIpDtDqOfM0uNfy0SkpRhvUryYH0Z6wdMYcacYXQ=
 go.yaml.in/yaml/v3 v3.0.4 h1:tfq32ie2Jv2UxXFdLJdh3jXuOzWiL1fo0bu/FbuKpbc=
