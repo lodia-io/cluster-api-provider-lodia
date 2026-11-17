@@ -8,7 +8,7 @@ Workers join through Cluster API's kubeadm bootstrap provider (CABPK) with the b
 `LodiaControlPlaneTemplate` holds the same spec, but the version, `controlPlaneEndpoint` and `restoreFrom`, for ClusterClasses.
 
 Go, controller-runtime; the manager runs as a Deployment of one replica (`cluster-api-provider-lodia-system`, leader election) on a management cluster that runs Lodia and Cluster API.
-Pinned sources: Cluster API [v1.15.0-beta.0] (a3b7b6f); kubeadm and Kubernetes v1.37.2, as `k8s.io/*` v0.37.2 in `go.mod`; and Lodia's API module at [lodia-io/lodia@4a3a2a4](https://github.com/lodia-io/lodia/tree/4a3a2a4acf7073f4a1f8b0e5ad4caf4546097325).
+Pinned sources: Cluster API [v1.15.0-beta.0] (a3b7b6f); kubeadm and Kubernetes v1.37.2, as `k8s.io/*` v0.37.2 in `go.mod`; and Lodia's API module at [lodia-io/lodia@6706d74](https://github.com/lodia-io/lodia/tree/6706d74bcc61e2996a86f0b200c23516cd405305).
 
 ## What it owns
 
@@ -309,7 +309,7 @@ It never copies the key ([decision](decisions/the-ca-secret-holds-no-key.md)).
 
 What a release holds and how releases are numbered: [releases-through-clusterctl](decisions/releases-through-clusterctl.md); how to verify one: [Verifying a release](#verifying-a-release).
 The provider's watches need Lodia's CRDs, so install Lodia before the provider.
-A release of the provider is built and tested against [Lodia at 4a3a2a4acf70](https://github.com/lodia-io/lodia/tree/4a3a2a4acf7073f4a1f8b0e5ad4caf4546097325), the `LODIA_COMMIT` of the [`Makefile`](../Makefile) and the pseudo-version of `go.lodia.io/lodia/api` in [`go.mod`](../go.mod) and in [`api/go.mod`](../api/go.mod).
+A release of the provider is built and tested against [Lodia at 6706d74bcc61](https://github.com/lodia-io/lodia/tree/6706d74bcc61e2996a86f0b200c23516cd405305), the `LODIA_COMMIT` of the [`Makefile`](../Makefile) and the pseudo-version of `go.lodia.io/lodia/api` in [`go.mod`](../go.mod) and in [`api/go.mod`](../api/go.mod).
 Lodia has no release yet, so that commit is the requirement of every release.
 
 ### The Cluster API version
@@ -683,4 +683,4 @@ To give the copy a new, empty control plane, remove its annotation `controlplane
 [lo-admin]: https://github.com/lodia-io/lodia/blob/f91168b1248dc18151a0c2d442fe2050593a0866/internal/controller/pki/secrets.go#L426-L427
 [lo-bootstrap-rbac]: https://github.com/lodia-io/lodia/blob/f91168b1248dc18151a0c2d442fe2050593a0866/internal/controller/tenant/manifests/bootstrap.yaml#L36-L47
 [lo-ref-nodeport]: https://github.com/lodia-io/lodia/blob/f91168b1248dc18151a0c2d442fe2050593a0866/docs/api/controlplane.md?plain=1#L30
-[lo-ref-pod-ranges]: https://github.com/lodia-io/lodia/blob/4a3a2a4acf7073f4a1f8b0e5ad4caf4546097325/docs/api/controlplane.md?plain=1#L40
+[lo-ref-pod-ranges]: https://github.com/lodia-io/lodia/blob/6706d74bcc61e2996a86f0b200c23516cd405305/docs/api/controlplane.md?plain=1#L40

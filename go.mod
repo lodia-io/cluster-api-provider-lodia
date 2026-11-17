@@ -11,7 +11,7 @@ require (
 	github.com/google/go-github/v92 v92.0.0
 	github.com/spf13/pflag v1.0.10
 	go.lodia.io/cluster-api-provider-lodia/api v0.0.0-00010101000000-000000000000
-	go.lodia.io/lodia/api v0.0.0-20261117082424-4a3a2a4acf70
+	go.lodia.io/lodia/api v0.0.0-20261117085327-6706d74bcc61
 	golang.org/x/mod v0.41.0
 	k8s.io/api v0.37.2
 	k8s.io/apiextensions-apiserver v0.37.2
