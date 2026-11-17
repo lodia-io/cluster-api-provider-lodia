@@ -8,7 +8,7 @@ Workers join through Cluster API's kubeadm bootstrap provider (CABPK) with the b
 `LodiaControlPlaneTemplate` holds the same spec, but the version, `controlPlaneEndpoint` and `restoreFrom`, for ClusterClasses.
 
 Go, controller-runtime; the manager runs as a Deployment of one replica (`cluster-api-provider-lodia-system`, leader election) on a management cluster that runs Lodia and Cluster API.
-Pinned sources: Cluster API [v1.15.0-beta.0] (a3b7b6f); kubeadm and Kubernetes v1.37.2, as `k8s.io/*` v0.37.2 in `go.mod`; and Lodia's API module at [lodia-io/lodia@b4c65ab](https://github.com/lodia-io/lodia/tree/b4c65abc79794743d99b653a4523216fb36eb15d).
+Pinned sources: Cluster API [v1.15.0-beta.0] (a3b7b6f); kubeadm and Kubernetes v1.37.2, as `k8s.io/*` v0.37.2 in `go.mod`; and Lodia's API module at [lodia-io/lodia@0b89607](https://github.com/lodia-io/lodia/tree/0b8960701dc1c9d0375ab28cd7462fafc21d0145).
 
 ## What it owns
 
@@ -309,7 +309,7 @@ It never copies the key ([decision](decisions/the-ca-secret-holds-no-key.md)).
 
 What a release holds and how releases are numbered: [releases-through-clusterctl](decisions/releases-through-clusterctl.md); how to verify one: [Verifying a release](#verifying-a-release).
 The provider's watches need Lodia's CRDs, so install Lodia before the provider.
-A release of the provider is built and tested against [Lodia at b4c65abc7979](https://github.com/lodia-io/lodia/tree/b4c65abc79794743d99b653a4523216fb36eb15d), the `LODIA_COMMIT` of the [`Makefile`](../Makefile) and the pseudo-version of `go.lodia.io/lodia/api` in [`go.mod`](../go.mod) and in [`api/go.mod`](../api/go.mod).
+A release of the provider is built and tested against [Lodia at 0b8960701dc1](https://github.com/lodia-io/lodia/tree/0b8960701dc1c9d0375ab28cd7462fafc21d0145), the `LODIA_COMMIT` of the [`Makefile`](../Makefile) and the pseudo-version of `go.lodia.io/lodia/api` in [`go.mod`](../go.mod) and in [`api/go.mod`](../api/go.mod).
 Lodia has no release yet, so that commit is the requirement of every release.
 
 ### The Cluster API version
