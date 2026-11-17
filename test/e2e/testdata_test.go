@@ -12,6 +12,9 @@ import (
 	"testing"
 
 	"sigs.k8s.io/cluster-api/cmd/clusterctl/client/yamlprocessor"
+	"sigs.k8s.io/yaml"
+
+	"go.lodia.io/cluster-api-provider-lodia/api/v1alpha1"
 )
 
 const (
@@ -75,6 +78,26 @@ func TestRenderGivesTheTestdataTheVariablesItIsGiven(t *testing.T) {
 		if !strings.Contains(string(rendered), want) {
 			t.Errorf("cluster.yaml lacks %q:\n%s", want, rendered)
 		}
+	}
+}
+
+func TestTheLodiaControlPlaneOfTheTestdataNamesOnlyFieldsTheAPIHas(t *testing.T) {
+	rendered, err := render("cluster.yaml", testdataVariables("capl-w", "v1.36.4"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var found int
+	for doc := range strings.SplitSeq(string(rendered), "\n---\n") {
+		if !strings.Contains(doc, "\nkind: LodiaControlPlane\n") {
+			continue
+		}
+		found++
+		if err := yaml.UnmarshalStrict([]byte(doc), &v1alpha1.LodiaControlPlane{}); err != nil {
+			t.Errorf("the LodiaControlPlane of cluster.yaml: %v", err)
+		}
+	}
+	if found != 1 {
+		t.Fatalf("cluster.yaml holds %d LodiaControlPlanes, want 1", found)
 	}
 }
 

@@ -43,8 +43,7 @@ metadata:
 spec:
   version: ${KUBERNETES_VERSION}
   datastore:
-    dedicated:
-      className: e2e-capi
+    className: e2e-capi
   endpoint:
     nodePort: {}
   addons:
