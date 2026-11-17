@@ -36,7 +36,6 @@ func TestAClusterGetsItsControlPlaneAndTheContract(t *testing.T) {
 	}
 	want := lodiav1alpha1.ControlPlaneSpec{
 		Version:     "v1.35.8",
-		Layout:      lodiav1alpha1.LayoutSplit,
 		Datastore:   lcp.Spec.Datastore,
 		Endpoint:    lcp.Spec.Endpoint,
 		Placement:   lcp.Spec.Placement,
@@ -142,7 +141,6 @@ func TestEveryOptionalFieldReachesTheControlPlane(t *testing.T) {
 			get(t, cp)
 			want := lodiav1alpha1.ControlPlaneSpec{
 				Version:           lcp.Spec.Version,
-				Layout:            lcp.Spec.Layout,
 				HighAvailability:  lcp.Spec.HighAvailability,
 				Datastore:         lcp.Spec.Datastore,
 				Endpoint:          lcp.Spec.Endpoint,

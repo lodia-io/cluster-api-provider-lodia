@@ -57,7 +57,7 @@ func TestAWorkerJoinsAClusterOfLodiasControlPlane(t *testing.T) {
 		Assess("the objects are applied, and the DevCluster, whose infrastructure the suite manages, is marked provisioned", func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
 			bounded, cancel := within(ctx, bounds.Apply)
 			defer cancel()
-			if err := applyTheCluster(bounded, cfg, k8s, key, newestKubernetes); err != nil {
+			if err := applyTheCluster(bounded, cfg, k8s, key, treeTestdata, newestKubernetes); err != nil {
 				t.Fatal(err)
 			}
 			return ctx

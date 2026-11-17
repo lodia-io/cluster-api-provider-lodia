@@ -47,10 +47,16 @@ type Release struct {
 	Version    string `json:"version"`
 	Components string `json:"components"`
 	Metadata   string `json:"metadata"`
+	// Upgrade false says that the next release has no upgrade path from this one.
+	Upgrade *bool `json:"upgrade,omitempty"`
 }
 
 func Previous() (Release, error) {
 	return Parse(previous)
+}
+
+func (r Release) Upgrades() bool {
+	return r.Upgrade == nil || *r.Upgrade
 }
 
 func Parse(raw []byte) (Release, error) {

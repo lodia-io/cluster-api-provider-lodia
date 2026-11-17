@@ -32,7 +32,14 @@ func TestMain(m *testing.M) {
 		os.Exit(1)
 	}
 	testenv = env.NewWithConfig(cfg)
-	testenv.Setup(install)
+	skip, err := skipReason()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	if skip == "" {
+		testenv.Setup(install)
+	}
 	os.Exit(testenv.Run(m))
 }
 

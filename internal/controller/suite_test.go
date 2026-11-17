@@ -236,7 +236,7 @@ func spec() v1alpha1.LodiaControlPlaneSpec {
 	return v1alpha1.LodiaControlPlaneSpec{
 		Version: "v1.35.8",
 		LodiaControlPlaneTemplateResourceSpec: v1alpha1.LodiaControlPlaneTemplateResourceSpec{
-			Datastore: lodiav1alpha1.DatastoreChoice{Dedicated: &lodiav1alpha1.DedicatedDatastore{ClassName: "fast"}},
+			Datastore: lodiav1alpha1.DatastoreSettings{ClassName: "fast"},
 			Endpoint: lodiav1alpha1.Endpoint{
 				NodePort: &lodiav1alpha1.NodePortEndpoint{},
 				CertSANs: []lodiav1alpha1.Hostname{"api.alpha.example.com"},
@@ -249,18 +249,15 @@ func spec() v1alpha1.LodiaControlPlaneSpec {
 }
 
 var everyOptionalField = map[string]func(*v1alpha1.LodiaControlPlaneTemplateResourceSpec){
-	"the Split layout with high availability": func(s *v1alpha1.LodiaControlPlaneTemplateResourceSpec) {
-		optionalFieldsOfEveryLayout(s)
+	"with high availability": func(s *v1alpha1.LodiaControlPlaneTemplateResourceSpec) {
+		optionalFields(s)
 		s.HighAvailability = &lodiav1alpha1.HighAvailability{FailureTolerance: "Node"}
 		s.APIServer = &lodiav1alpha1.APIServer{Replicas: new(int32(2))}
 	},
-	"the Compact layout": func(s *v1alpha1.LodiaControlPlaneTemplateResourceSpec) {
-		optionalFieldsOfEveryLayout(s)
-		s.Layout = lodiav1alpha1.LayoutCompact
-	},
+	"without high availability": optionalFields,
 }
 
-func optionalFieldsOfEveryLayout(s *v1alpha1.LodiaControlPlaneTemplateResourceSpec) {
+func optionalFields(s *v1alpha1.LodiaControlPlaneTemplateResourceSpec) {
 	s.ControllerManager = &lodiav1alpha1.Component{ExtraArgs: map[string]string{"concurrent-deployment-syncs": "3"}}
 	s.Scheduler = &lodiav1alpha1.Scheduler{ExtraArgs: map[string]string{"kube-api-qps": "100"}}
 	s.Addons = &lodiav1alpha1.Addons{CoreDNS: &lodiav1alpha1.CoreDNS{Enabled: new(false), Replicas: new(int32(3))}}

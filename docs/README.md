@@ -8,7 +8,7 @@ Workers join through Cluster API's kubeadm bootstrap provider (CABPK) with the b
 `LodiaControlPlaneTemplate` holds the same spec, but the version, `controlPlaneEndpoint` and `restoreFrom`, for ClusterClasses.
 
 Go, controller-runtime; the manager runs as a Deployment of one replica (`cluster-api-provider-lodia-system`, leader election) on a management cluster that runs Lodia and Cluster API.
-Pinned sources: Cluster API [v1.15.0-beta.0] (a3b7b6f); kubeadm and Kubernetes v1.37.2, as `k8s.io/*` v0.37.2 in `go.mod`; and Lodia's API module at [lodia-io/lodia@f91168b][lo].
+Pinned sources: Cluster API [v1.15.0-beta.0] (a3b7b6f); kubeadm and Kubernetes v1.37.2, as `k8s.io/*` v0.37.2 in `go.mod`; and Lodia's API module at [lodia-io/lodia@6706d74](https://github.com/lodia-io/lodia/tree/6706d74bcc61e2996a86f0b200c23516cd405305).
 
 ## What it owns
 
@@ -71,9 +71,9 @@ Validation is CEL in the CRD ([no-admission-webhooks](decisions/no-admission-web
 |---|---|---|
 | `version` | `spec.version` | required; Lodia's pattern `^v1\.(0\|[1-9][0-9]*)\.(0\|[1-9][0-9]*)$` and minor-never-decreases rule ([types][lo-version]); the topology controller writes it from `Cluster.spec.topology.version`, which CAPI only requires to start with `v` and be semver ([webhook][wh-topology-version]), so a pre-release or build suffix is refused here |
 | `controlPlaneEndpoint` | ← `status.endpoint.apiServer.{host,port}` | written by the provider alone; the topology controller leaves it alone while empty ([IgnorePaths][ct-ignore]) |
-| `layout`, `highAvailability`, `datastore`, `endpoint`, `apiServer`, `controllerManager`, `scheduler`, `addons`, `placement`, `maintenance`, `health`, `serviceAccount`, `restoreFrom` | same field | Lodia's types and rules |
+| `highAvailability`, `datastore`, `endpoint`, `apiServer`, `controllerManager`, `scheduler`, `addons`, `placement`, `maintenance`, `health`, `serviceAccount`, `restoreFrom` | same field | Lodia's types and rules |
 | — | `network.serviceCIDRs` ← `Cluster.spec.clusterNetwork.services.cidrBlocks` | optional on the Cluster ([ClusterNetwork][api-network]); Lodia requires one or two ([types][lo-network]) and never changes them ([rule][lo-network-immutable]), so a Cluster without them, or a change to them, is refused by Lodia's API server and reported as `Refused` |
-| — | `network.podCIDRs` ← `…pods.cidrBlocks` | the same |
+| — | `network.podCIDRs` ← `…pods.cidrBlocks` | the same; and so is a pod range narrower than the node mask of its family, 24 for IPv4 and 64 for IPv6 unless `controllerManager.extraArgs` sets it, or an IPv6 one more than 16 bits wider, a node mask size of a family the ranges lack, and `node-cidr-mask-size` with two ranges ([reference][lo-ref-pod-ranges]) |
 | — | `network.clusterDomain` ← `…serviceDomain` | Lodia's default `cluster.local` when unset |
 | — | `paused` | never written ([decision](decisions/one-lodia-controlplane-per-cluster.md)) |
 | (`Cluster.spec.clusterNetwork.apiServerPort`) | — | ignored: the port is the endpoint mode's ([api-exposure][lo-exposure]) |
@@ -309,7 +309,7 @@ It never copies the key ([decision](decisions/the-ca-secret-holds-no-key.md)).
 
 What a release holds and how releases are numbered: [releases-through-clusterctl](decisions/releases-through-clusterctl.md); how to verify one: [Verifying a release](#verifying-a-release).
 The provider's watches need Lodia's CRDs, so install Lodia before the provider.
-A release of the provider is built and tested against [Lodia at f91168b1248d](https://github.com/lodia-io/lodia/tree/f91168b1248dc18151a0c2d442fe2050593a0866), the `LODIA_COMMIT` of the [`Makefile`](../Makefile) and the pseudo-version of `go.lodia.io/lodia/api` in [`go.mod`](../go.mod) and in [`api/go.mod`](../api/go.mod).
+A release of the provider is built and tested against [Lodia at 6706d74bcc61](https://github.com/lodia-io/lodia/tree/6706d74bcc61e2996a86f0b200c23516cd405305), the `LODIA_COMMIT` of the [`Makefile`](../Makefile) and the pseudo-version of `go.lodia.io/lodia/api` in [`go.mod`](../go.mod) and in [`api/go.mod`](../api/go.mod).
 Lodia has no release yet, so that commit is the requirement of every release.
 
 ### The Cluster API version
@@ -652,7 +652,6 @@ To give the copy a new, empty control plane, remove its annotation `controlplane
 [k0-infra]: https://github.com/k0sproject/k0smotron/blob/v2.3.0/internal/controller/controlplane/k0smotron_controlplane_controller.go#L888-L959
 
 <!-- Lodia at f91168b -->
-[lo]: https://github.com/lodia-io/lodia/tree/f91168b1248dc18151a0c2d442fe2050593a0866
 [lo-name-cap]: https://github.com/lodia-io/lodia/blob/f91168b1248dc18151a0c2d442fe2050593a0866/api/v1alpha1/controlplane_types.go#L18
 [lo-ref-name]: https://github.com/lodia-io/lodia/blob/f91168b1248dc18151a0c2d442fe2050593a0866/docs/api/controlplane.md?plain=1#L8-L9
 [lo-ref-conditions]: https://github.com/lodia-io/lodia/blob/f91168b1248dc18151a0c2d442fe2050593a0866/docs/api/controlplane.md?plain=1#L126-L128
@@ -684,3 +683,4 @@ To give the copy a new, empty control plane, remove its annotation `controlplane
 [lo-admin]: https://github.com/lodia-io/lodia/blob/f91168b1248dc18151a0c2d442fe2050593a0866/internal/controller/pki/secrets.go#L426-L427
 [lo-bootstrap-rbac]: https://github.com/lodia-io/lodia/blob/f91168b1248dc18151a0c2d442fe2050593a0866/internal/controller/tenant/manifests/bootstrap.yaml#L36-L47
 [lo-ref-nodeport]: https://github.com/lodia-io/lodia/blob/f91168b1248dc18151a0c2d442fe2050593a0866/docs/api/controlplane.md?plain=1#L30
+[lo-ref-pod-ranges]: https://github.com/lodia-io/lodia/blob/6706d74bcc61e2996a86f0b200c23516cd405305/docs/api/controlplane.md?plain=1#L40

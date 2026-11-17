@@ -7,6 +7,7 @@ package e2e
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
 
 	clusterctlv1 "sigs.k8s.io/cluster-api/cmd/clusterctl/api/v1alpha3"
@@ -14,6 +15,14 @@ import (
 
 	"go.lodia.io/cluster-api-provider-lodia/test/pin"
 )
+
+func skipReason() (string, error) {
+	release, err := pin.Previous()
+	if err != nil || release.Upgrades() {
+		return "", err
+	}
+	return fmt.Sprintf("%s sets upgrade: false for %s: nothing is installed and the upgrade test is skipped", pin.File, release.Version), nil
+}
 
 func lodiaProviders(ctx context.Context, cfg *envconf.Config) ([]clusterctlProvider, string, error) {
 	tree, err := lodiaProvider(ctx, cfg)

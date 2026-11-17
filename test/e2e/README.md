@@ -270,7 +270,7 @@ The pin moves by hand, in a pull request after each release is published, since 
 The steps are numbered here apart from the join test's, which is named where one is meant.
 The first six are the join test's apply, its steps 1, 4 and 6, the `Machine` of its step 5 and its step 9, under the release, and the others follow:
 
-1. The objects of [`testdata`](testdata) are applied in `capi-join`, and the `DevCluster` is marked provisioned.
+1. The objects of `testdata` at the release's tag, which the job's checkout fetches with every tag, are applied in `capi-join`, and the `DevCluster` is marked provisioned.
 2. `Cluster` `ControlPlaneInitialized`.
 3. kindnet is applied in the tenant through `<cluster>-kubeconfig`.
 4. The `Machine` is `Running` with a `nodeRef`.

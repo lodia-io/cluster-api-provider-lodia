@@ -27,9 +27,13 @@ import (
 	"go.lodia.io/cluster-api-provider-lodia/api/v1alpha1"
 )
 
-func applyTheCluster(ctx context.Context, cfg *envconf.Config, k8s client.Client, key client.ObjectKey, kubernetes string) error {
+func applyTheCluster(ctx context.Context, cfg *envconf.Config, k8s client.Client, key client.ObjectKey, testdata testdataSource, kubernetes string) error {
 	for _, file := range []string{"cluster.yaml", "workers.yaml"} {
-		manifest, err := render(file, testdataVariables(key.Name, kubernetes))
+		raw, err := testdata(file)
+		if err != nil {
+			return errors.Join(err, context.Cause(ctx))
+		}
+		manifest, err := fill(raw, testdataVariables(key.Name, kubernetes))
 		if err != nil {
 			return err
 		}
@@ -84,7 +88,7 @@ func kindnetOf(ctx context.Context, cfg *envconf.Config, k8s client.Reader, key 
 }
 
 func deleteTheCluster(ctx context.Context, k8s client.Client, key client.ObjectKey, workers int) ([]client.Object, error) {
-	etcd := lodiav1alpha1.EtcdName(key.Name)
+	etcd := key.Name + "-etcd"
 	owned := []client.Object{
 		&corev1.PersistentVolumeClaim{ObjectMeta: metav1.ObjectMeta{Namespace: key.Namespace, Name: etcd + "-" + etcd + "-0"}},
 		&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: key.Namespace, Name: secret.Name(key.Name, secret.Kubeconfig)}},
