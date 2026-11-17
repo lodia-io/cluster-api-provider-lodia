@@ -73,7 +73,7 @@ Validation is CEL in the CRD ([no-admission-webhooks](decisions/no-admission-web
 | `controlPlaneEndpoint` | ← `status.endpoint.apiServer.{host,port}` | written by the provider alone; the topology controller leaves it alone while empty ([IgnorePaths][ct-ignore]) |
 | `highAvailability`, `datastore`, `endpoint`, `apiServer`, `controllerManager`, `scheduler`, `addons`, `placement`, `maintenance`, `health`, `serviceAccount`, `restoreFrom` | same field | Lodia's types and rules |
 | — | `network.serviceCIDRs` ← `Cluster.spec.clusterNetwork.services.cidrBlocks` | optional on the Cluster ([ClusterNetwork][api-network]); Lodia requires one or two ([types][lo-network]) and never changes them ([rule][lo-network-immutable]), so a Cluster without them, or a change to them, is refused by Lodia's API server and reported as `Refused` |
-| — | `network.podCIDRs` ← `…pods.cidrBlocks` | the same |
+| — | `network.podCIDRs` ← `…pods.cidrBlocks` | the same; and so is a pod range narrower than the node mask of its family, 24 for IPv4 and 64 for IPv6 unless `controllerManager.extraArgs` sets it, or an IPv6 one more than 16 bits wider, and a node mask size of a family the ranges lack ([reference][lo-ref-pod-ranges]) |
 | — | `network.clusterDomain` ← `…serviceDomain` | Lodia's default `cluster.local` when unset |
 | — | `paused` | never written ([decision](decisions/one-lodia-controlplane-per-cluster.md)) |
 | (`Cluster.spec.clusterNetwork.apiServerPort`) | — | ignored: the port is the endpoint mode's ([api-exposure][lo-exposure]) |
@@ -683,3 +683,4 @@ To give the copy a new, empty control plane, remove its annotation `controlplane
 [lo-admin]: https://github.com/lodia-io/lodia/blob/f91168b1248dc18151a0c2d442fe2050593a0866/internal/controller/pki/secrets.go#L426-L427
 [lo-bootstrap-rbac]: https://github.com/lodia-io/lodia/blob/f91168b1248dc18151a0c2d442fe2050593a0866/internal/controller/tenant/manifests/bootstrap.yaml#L36-L47
 [lo-ref-nodeport]: https://github.com/lodia-io/lodia/blob/f91168b1248dc18151a0c2d442fe2050593a0866/docs/api/controlplane.md?plain=1#L30
+[lo-ref-pod-ranges]: https://github.com/lodia-io/lodia/blob/790c05bbc9d90d8fd45186d85baf7d2c538cbfab/docs/api/controlplane.md?plain=1#L40
