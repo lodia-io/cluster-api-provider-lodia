@@ -99,7 +99,7 @@ func TestTheProviderUpgradesFromThePreviousRelease(t *testing.T) {
 		Assess("the objects are applied under the release, and the DevCluster, whose infrastructure the suite manages, is marked provisioned", func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
 			bounded, cancel := within(ctx, upgradeBounds.Apply)
 			defer cancel()
-			if err := applyTheCluster(bounded, cfg, k8s, key, newestKubernetes); err != nil {
+			if err := applyTheCluster(bounded, cfg, k8s, key, releaseTestdata(bounded, root, u.from), newestKubernetes); err != nil {
 				t.Fatal(err)
 			}
 			return ctx

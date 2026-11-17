@@ -42,7 +42,7 @@ func TestAMinorStepHoldsNewWorkersUntilLodiaRunsIt(t *testing.T) {
 		Assess("the objects are applied at "+previousKubernetes+", and the DevCluster, whose infrastructure the suite manages, is marked provisioned", func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
 			bounded, cancel := within(ctx, minorBounds.Apply)
 			defer cancel()
-			if err := applyTheCluster(bounded, cfg, k8s, key, previousKubernetes); err != nil {
+			if err := applyTheCluster(bounded, cfg, k8s, key, treeTestdata, previousKubernetes); err != nil {
 				t.Fatal(err)
 			}
 			return ctx
