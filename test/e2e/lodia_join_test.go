@@ -11,6 +11,10 @@ import (
 	"sigs.k8s.io/e2e-framework/pkg/envconf"
 )
 
+func skipReason() (string, error) {
+	return "", nil
+}
+
 func lodiaProviders(ctx context.Context, cfg *envconf.Config) ([]clusterctlProvider, string, error) {
 	lodia, err := lodiaProvider(ctx, cfg)
 	return []clusterctlProvider{lodia}, "lodia", err

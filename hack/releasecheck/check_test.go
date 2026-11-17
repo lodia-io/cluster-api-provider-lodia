@@ -520,9 +520,12 @@ func TestTheTagCheckWantsTheUpgradePinAtTheNewestPublishedReleaseBelowTheTag(t *
 		pin       string
 		published []string
 		gitTags   []string
+		noUpgrade bool
 		want      string
 	}{
 		{name: "the pin is the newest release below the tag", tag: "v0.1.0-alpha.3", pin: "v0.1.0-alpha.2", published: []string{"v0.1.0-alpha.1", "v0.1.0-alpha.2"}},
+		{name: "the pin with upgrade false is the newest release below the tag", tag: "v0.1.0-alpha.3", pin: "v0.1.0-alpha.2", published: []string{"v0.1.0-alpha.1", "v0.1.0-alpha.2"}, noUpgrade: true},
+		{name: "the pin with upgrade false is older than the newest release below the tag", tag: "v0.1.0-alpha.3", pin: "v0.1.0-alpha.1", published: []string{"v0.1.0-alpha.1", "v0.1.0-alpha.2"}, noUpgrade: true, want: "names v0.1.0-alpha.1, and the newest published release below v0.1.0-alpha.3 is v0.1.0-alpha.2"},
 		{name: "the pin is the first release, the only one", tag: "v0.1.0-alpha.2", pin: "v0.1.0-alpha.1", published: []string{"v0.1.0-alpha.1"}},
 		{name: "the pin is older than the newest release below the tag", tag: "v0.1.0-alpha.3", pin: "v0.1.0-alpha.1", published: []string{"v0.1.0-alpha.1", "v0.1.0-alpha.2"}, want: "names v0.1.0-alpha.1, and the newest published release below v0.1.0-alpha.3 is v0.1.0-alpha.2"},
 		{name: "the pin names a release that is not published", tag: "v0.1.0-alpha.3", pin: "v0.1.0-alpha.2", published: []string{"v0.1.0-alpha.1"}, want: "names v0.1.0-alpha.2, and the newest published release below v0.1.0-alpha.3 is v0.1.0-alpha.1"},
@@ -548,6 +551,9 @@ func TestTheTagCheckWantsTheUpgradePinAtTheNewestPublishedReleaseBelowTheTag(t *
 				r.git("tag", tag, base)
 			}
 			content := upgradePinOf(tt.pin)
+			if tt.noUpgrade {
+				content += "upgrade: false\n"
+			}
 			if tt.pin == "" {
 				content = "not a pin: ["
 			}

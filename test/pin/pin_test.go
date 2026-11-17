@@ -97,6 +97,35 @@ func TestAPinThatIsNotWrittenAsAReleaseIsRefused(t *testing.T) {
 	}
 }
 
+func TestTheNextReleaseUpgradesFromThePinUnlessItSetsUpgradeToFalse(t *testing.T) {
+	const pin = "version: v0.1.0-alpha.2\ncomponents: " + sumA + "\nmetadata: " + sumB + "\n"
+	cases := []struct {
+		name, pin string
+		want      bool
+		failure   string
+	}{
+		{"no field", pin, true, ""},
+		{"upgrade false", pin + "upgrade: false\n", false, ""},
+		{"upgrade true", pin + "upgrade: true\n", true, ""},
+		{"upgrade that is not a boolean", pin + "upgrade: \"no\"\n", false, "the pin of the previous release"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			release, err := Parse([]byte(c.pin))
+			switch {
+			case c.failure != "":
+				if err == nil || !strings.Contains(err.Error(), c.failure) {
+					t.Fatalf("want an error with %q, got %v", c.failure, err)
+				}
+			case err != nil:
+				t.Fatal(err)
+			case release.Upgrades() != c.want:
+				t.Errorf("Upgrades is %t, want %t", release.Upgrades(), c.want)
+			}
+		})
+	}
+}
+
 func TestTheAssetsAreTheReleasesOwn(t *testing.T) {
 	release := Release{Version: "v0.1.0-alpha.2"}
 	for got, want := range map[string]string{

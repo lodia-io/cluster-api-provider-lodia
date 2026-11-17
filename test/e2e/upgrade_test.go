@@ -71,6 +71,11 @@ func theUpgrade(cfg *envconf.Config) (upgrade, error) {
 }
 
 func TestTheProviderUpgradesFromThePreviousRelease(t *testing.T) {
+	if skip, err := skipReason(); err != nil {
+		t.Fatal(err)
+	} else if skip != "" {
+		t.Skip(skip)
+	}
 	var (
 		k8s     client.Client
 		key     client.ObjectKey
