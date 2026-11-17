@@ -52,19 +52,10 @@ type LodiaControlPlaneTemplateResource struct {
 // LodiaControlPlaneTemplateResourceSpec is the part of a LodiaControlPlane's
 // spec clusters can share: all but the version, which the Cluster's topology
 // sets, controlPlaneEndpoint and restoreFrom.
-// +kubebuilder:validation:XValidation:rule="self.layout != 'Compact' || !has(self.highAvailability)",message="the Compact layout runs one replica of everything: remove highAvailability"
-// +kubebuilder:validation:XValidation:rule="self.layout != 'Compact' || !has(self.apiServer) || !has(self.apiServer.replicas) || self.apiServer.replicas == 1",message="the Compact layout runs one API server"
 // +kubebuilder:validation:XValidation:rule="!has(self.highAvailability) || !has(self.apiServer) || !has(self.apiServer.replicas) || self.apiServer.replicas >= 2",message="highAvailability runs at least two API servers"
 // +kubebuilder:validation:XValidation:rule="!has(self.apiServer) || !has(self.apiServer.advertiseAddress) || has(self.endpoint.gateway)",message="apiServer.advertiseAddress is set only with endpoint.gateway"
 // +kubebuilder:validation:XValidation:rule="!has(self.endpoint.gateway) || (has(self.apiServer) && has(self.apiServer.advertiseAddress) ? has(oldSelf.apiServer) && has(oldSelf.apiServer.advertiseAddress) && oldSelf.apiServer.advertiseAddress == self.apiServer.advertiseAddress : !has(oldSelf.apiServer) || !has(oldSelf.apiServer.advertiseAddress))",message="apiServer.advertiseAddress is immutable"
 type LodiaControlPlaneTemplateResourceSpec struct {
-	// Layout is Split, a Deployment per component, or Compact, every
-	// component in one pod.
-	// +optional
-	// +kubebuilder:default=Split
-	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="layout is immutable"
-	Layout lodiav1alpha1.Layout `json:"layout,omitempty"`
-
 	// HighAvailability runs every component with more than one replica,
 	// spread by FailureTolerance, and etcd with three members.
 	// +optional

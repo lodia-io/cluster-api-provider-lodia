@@ -26,9 +26,6 @@ func TestATemplateKeepsEveryFieldItIsGiven(t *testing.T) {
 			}
 			mutate(&template.Spec.Template.Spec)
 			want := template.Spec.Template.Spec.DeepCopy()
-			if want.Layout == "" {
-				want.Layout = lodiav1alpha1.LayoutSplit
-			}
 
 			if err := k8s.Create(t.Context(), template); err != nil {
 				t.Fatal(err)
@@ -40,18 +37,18 @@ func TestATemplateKeepsEveryFieldItIsGiven(t *testing.T) {
 	}
 }
 
-func TestATemplateWithCompactAndHighAvailabilityIsRefused(t *testing.T) {
+func TestATemplateWithHighAvailabilityAndOneAPIServerIsRefused(t *testing.T) {
 	template := &v1alpha1.LodiaControlPlaneTemplate{
-		ObjectMeta: metav1.ObjectMeta{Namespace: namespace(t), Name: "compact-ha"},
+		ObjectMeta: metav1.ObjectMeta{Namespace: namespace(t), Name: "ha-one"},
 		Spec: v1alpha1.LodiaControlPlaneTemplateSpec{Template: v1alpha1.LodiaControlPlaneTemplateResource{
 			Spec: spec().LodiaControlPlaneTemplateResourceSpec,
 		}},
 	}
-	template.Spec.Template.Spec.Layout = lodiav1alpha1.LayoutCompact
 	template.Spec.Template.Spec.HighAvailability = &lodiav1alpha1.HighAvailability{FailureTolerance: "Node"}
+	template.Spec.Template.Spec.APIServer = &lodiav1alpha1.APIServer{Replicas: new(int32(1))}
 
 	err := k8s.Create(t.Context(), template)
-	if !apierrors.IsInvalid(err) || !strings.Contains(err.Error(), "the Compact layout runs one replica of everything: remove highAvailability") {
-		t.Errorf("creating a Compact template with highAvailability returned %v", err)
+	if !apierrors.IsInvalid(err) || !strings.Contains(err.Error(), "highAvailability runs at least two API servers") {
+		t.Errorf("creating a template with highAvailability and one API server returned %v", err)
 	}
 }

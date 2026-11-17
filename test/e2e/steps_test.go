@@ -84,7 +84,7 @@ func kindnetOf(ctx context.Context, cfg *envconf.Config, k8s client.Reader, key 
 }
 
 func deleteTheCluster(ctx context.Context, k8s client.Client, key client.ObjectKey, workers int) ([]client.Object, error) {
-	etcd := lodiav1alpha1.EtcdName(key.Name)
+	etcd := key.Name + "-etcd"
 	owned := []client.Object{
 		&corev1.PersistentVolumeClaim{ObjectMeta: metav1.ObjectMeta{Namespace: key.Namespace, Name: etcd + "-" + etcd + "-0"}},
 		&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: key.Namespace, Name: secret.Name(key.Name, secret.Kubeconfig)}},

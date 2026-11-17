@@ -231,7 +231,7 @@ func (in *LodiaControlPlaneTemplateResourceSpec) DeepCopyInto(out *LodiaControlP
 		*out = new(apiv1alpha1.HighAvailability)
 		**out = **in
 	}
-	in.Datastore.DeepCopyInto(&out.Datastore)
+	out.Datastore = in.Datastore
 	in.Endpoint.DeepCopyInto(&out.Endpoint)
 	if in.APIServer != nil {
 		in, out := &in.APIServer, &out.APIServer

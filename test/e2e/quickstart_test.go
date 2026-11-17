@@ -102,14 +102,14 @@ func newQuickStartNamespace() *quickStartNamespace {
 	machine := ownerRef(clusterAPIKind("Machine"), name+"-md-0-abc-1", true)
 	lcp := ownerRef(v1alpha1.GroupVersion.WithKind("LodiaControlPlane"), name, true)
 	lodiaCP := ownerRef(controlPlaneKind, name, true)
-	etcd := ownerRef(etcdKind, lodiav1alpha1.EtcdName(name), true)
+	etcd := ownerRef(etcdKind, name+"-etcd", true)
 	certificates := []string{name + "-etcd-ca-1", name + "-etcd-server-1"}
 	controlPlane := withFinalizers(object(controlPlaneKind, name, lcp), lodiav1alpha1.DatastoreFinalizer)
 	controlPlane.SetManagedFields([]metav1.ManagedFieldsEntry{
 		{Manager: controller.FieldManager, Operation: metav1.ManagedFieldsOperationApply, APIVersion: controlPlaneKind.GroupVersion().String(), FieldsType: "FieldsV1", Time: &metav1.Time{Time: time.Unix(1000, 0)}, FieldsV1: metav1.NewFieldsV1(`{"f:spec":{"f:version":{}}}`)},
 		{Manager: "lodia", Operation: metav1.ManagedFieldsOperationUpdate, APIVersion: controlPlaneKind.GroupVersion().String(), FieldsType: "FieldsV1", Subresource: "status", Time: &metav1.Time{Time: time.Unix(1000, 0)}, FieldsV1: metav1.NewFieldsV1(`{"f:status":{}}`)},
 	})
-	druidEtcd := withFinalizers(object(etcdKind, lodiav1alpha1.EtcdName(name), lodiaCP), druidFinalizer)
+	druidEtcd := withFinalizers(object(etcdKind, name+"-etcd", lodiaCP), druidFinalizer)
 	if err := unstructured.SetNestedField(druidEtcd.Object, map[string]any{
 		"etcd": map[string]any{
 			"clientUrlTls": map[string]any{
