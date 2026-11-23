@@ -262,7 +262,7 @@ sequenceDiagram
 
 **Upgrade.**
 Lodia rolls its target towards `spec.version` one minor at a time, through the newest patch of each minor between ([target][lo-upgrade-target]).
-A minor step passes a preflight and waits for a `Backup`, which a class without a backup store does not hold up; a patch step has neither ([the steps][lo-upgrade-steps]).
+A minor step passes a preflight, is rehearsed on a copy of the API server at the next minor, and waits for a `Backup`, which a class without a backup store does not hold up; a patch step has none of them ([the steps][lo-upgrade-steps], [the rehearsal][lo-rehearsal]).
 What writes `spec.version` decides how far ahead of Lodia it is.
 Under a ClusterClass the topology controller writes one step of its upgrade plan at a time, and only once the control plane is no longer upgrading ([stable][topo-cp-stable], [the step][topo-cp-next]).
 A plan skips no minor ([plan][topo-plan-minors]): without `kubernetesVersions` in the ClusterClass or an upgrade-plan extension it is the next minor alone ([one minor][topo-plan-one]), and the Cluster webhook refuses a `topology.version` two minors ahead ([when][wh-ceiling-when], [the refusal][wh-ceiling]); with `kubernetesVersions` the control plane goes through the newest listed version of each minor ([versions][topo-plan-versions]).
@@ -311,7 +311,7 @@ It never copies the key ([decision](decisions/the-ca-secret-holds-no-key.md)).
 What a release holds and how releases are numbered: [releases-through-clusterctl](decisions/releases-through-clusterctl.md); how to verify one: [Verifying a release](#verifying-a-release).
 The provider's watches need Lodia's CRDs, so install Lodia before the provider.
 A release of the provider is built and tested against [Lodia at 4bb6047b2c82](https://github.com/lodia-io/lodia/tree/4bb6047b2c8222d7566f8fd64e96214a4ce2c838), the `LODIA_COMMIT` of the [`Makefile`](../Makefile) and the pseudo-version of `go.lodia.io/lodia/api` in [`go.mod`](../go.mod) and in [`api/go.mod`](../api/go.mod).
-Lodia has no release yet, so that commit is the requirement of every release.
+No release of Lodia holds that commit's API yet, since its one release, `v0.1.0-alpha.1`, predates `endpoint.loadBalancer.host` ([releases](https://github.com/lodia-io/lodia/releases), [lodia-io/lodia#108](https://github.com/lodia-io/lodia/pull/108)), so that commit is the requirement of every release.
 
 ### The Cluster API version
 
@@ -666,7 +666,6 @@ To give the copy a new, empty control plane, remove its annotation `controlplane
 [lo-names-ca]: https://github.com/lodia-io/lodia/blob/f91168b1248dc18151a0c2d442fe2050593a0866/api/v1alpha1/names.go#L23-L31
 [lo-names-kubeconfig]: https://github.com/lodia-io/lodia/blob/f91168b1248dc18151a0c2d442fe2050593a0866/api/v1alpha1/names.go#L59-L71
 [lo-upgrade-target]: https://github.com/lodia-io/lodia/blob/f91168b1248dc18151a0c2d442fe2050593a0866/docs/decisions/upgrades-and-maintenance-windows.md?plain=1#L10-L17
-[lo-upgrade-steps]: https://github.com/lodia-io/lodia/blob/f91168b1248dc18151a0c2d442fe2050593a0866/docs/decisions/upgrades-and-maintenance-windows.md?plain=1#L19-L32
 [lo-upgrade-progressing]: https://github.com/lodia-io/lodia/blob/f91168b1248dc18151a0c2d442fe2050593a0866/docs/decisions/upgrades-and-maintenance-windows.md?plain=1#L117
 [lo-upgrade-patch]: https://github.com/lodia-io/lodia/blob/f91168b1248dc18151a0c2d442fe2050593a0866/docs/decisions/upgrades-and-maintenance-windows.md?plain=1#L37-L41
 [lo-upgrade-when]: https://github.com/lodia-io/lodia/blob/f91168b1248dc18151a0c2d442fe2050593a0866/docs/decisions/upgrades-and-maintenance-windows.md?plain=1#L87-L96
@@ -692,4 +691,6 @@ To give the copy a new, empty control plane, remove its annotation `controlplane
 [lo-endpoint]: https://github.com/lodia-io/lodia/blob/4bb6047b2c8222d7566f8fd64e96214a4ce2c838/api/v1alpha1/controlplane_types.go#L159-L162
 [lo-host-network]: https://github.com/lodia-io/lodia/blob/4bb6047b2c8222d7566f8fd64e96214a4ce2c838/api/v1alpha1/controlplane_types.go#L52-L53
 [lo-exposure]: https://github.com/lodia-io/lodia/blob/4bb6047b2c8222d7566f8fd64e96214a4ce2c838/docs/decisions/api-exposure.md?plain=1#L11-L15
+[lo-upgrade-steps]: https://github.com/lodia-io/lodia/blob/4bb6047b2c8222d7566f8fd64e96214a4ce2c838/docs/decisions/upgrades-and-maintenance-windows.md?plain=1#L18-L36
+[lo-rehearsal]: https://github.com/lodia-io/lodia/blob/4bb6047b2c8222d7566f8fd64e96214a4ce2c838/docs/decisions/rehearse-a-minor-step.md?plain=1#L8-L12
 [lo-ops-sources]: https://github.com/lodia-io/lodia/blob/4bb6047b2c8222d7566f8fd64e96214a4ce2c838/docs/operations.md?plain=1#L257-L263

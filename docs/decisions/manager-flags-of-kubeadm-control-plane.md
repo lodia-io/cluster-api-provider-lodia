@@ -22,7 +22,7 @@ Decided 2026-11-11.
 - Every object the controller reads or writes is in the `LodiaControlPlane`'s namespace, Lodia's Secrets included, and nothing it reads is cluster-scoped, so `--namespace` holds for all of it.
   The shipped RBAC stays a ClusterRole, since clusterctl installs every provider watching all namespaces ([contract][cc-components]).
 - A cache with the filter would hide Lodia's objects.
-- Lodia's controllers run ten passes at once ([workers][lo-workers]), so one tenant's blocked write does not hold up another's.
+- Lodia's controllers run ten passes at once by default, Health's a hundred ([workers][lo-workers]), so one tenant's blocked write does not hold up another's.
 - Cluster API's kubeadm control plane provider gives its passes [three minutes][kcp-timeout] because they connect to every etcd member; a pass of this provider has the [`ReconciliationTimeout`][cr-timeout] of one minute.
 
 ## Rejected
@@ -55,5 +55,5 @@ Decided 2026-11-11.
 <!-- controller-runtime, kubeadm, Kubernetes -->
 [cr-timeout]: https://github.com/kubernetes-sigs/controller-runtime/blob/v0.25.2/pkg/config/controller.go#L96-L98
 
-<!-- Lodia at f91168b -->
-[lo-workers]: https://github.com/lodia-io/lodia/blob/f91168b1248dc18151a0c2d442fe2050593a0866/internal/operator/operator.go#L41-L43
+<!-- Lodia at 4bb6047 -->
+[lo-workers]: https://github.com/lodia-io/lodia/blob/4bb6047b2c8222d7566f8fd64e96214a4ce2c838/docs/README.md?plain=1#L552

@@ -20,7 +20,7 @@ Every release but `v0.1.0-alpha.1` is signed and attested.
   It also attests the build provenance of the image and of both files with GitHub artifact attestations.
   Right after it signs it runs what a user runs, `cosign verify` of the index and of each image the index lists and `cosign verify-blob` of both files, and right after it attests, `gh attestation verify` of the image and of both files, each pinned to the tag of the run, so that a signature or an attestation that a user's command would refuse stops the release before it is published ([verifying a release](../README.md#verifying-a-release)).
   `v0.1.0-alpha.1` is the one release without them.
-- While Lodia has no release, the requirement on Lodia is a commit: the `LODIA_COMMIT` of the `Makefile` that a release is built and tested against ([installation](../README.md#installation)).
+- While no release of Lodia holds the API the provider is built against, the requirement on Lodia is a commit: the `LODIA_COMMIT` of the `Makefile` that a release is built and tested against ([installation](../README.md#installation)).
 - The repository is public.
 
 ## Why
@@ -30,7 +30,7 @@ Every release but `v0.1.0-alpha.1` is signed and attested.
 - A refused tag must not reach the remote, and the release job builds and publishes nothing that it could have done before the tag, so that the window in which a tag is listed without its release stays the run of one job ([the window](../../CONTRIBUTING.md#release-a-version)).
 - The repository is public for anonymous installs, the Go proxy and, later, a place in clusterctl's built-in list ([`todo.md`](../../todo.md)).
 - Signatures are keyless and the releases carry GitHub artifact attestations, from the release workflow's OIDC identity, as Lodia's ([releases-and-support](https://github.com/lodia-io/lodia/blob/f91168b1248dc18151a0c2d442fe2050593a0866/docs/decisions/releases-and-support.md)).
-- The provider builds on Cluster API v1.15.0-beta.0 until v1.15.0 is released, and on a Lodia that has no release.
+- The provider builds on Cluster API v1.15.0-beta.0 until v1.15.0 is released, and on a commit of Lodia that no release of Lodia holds yet.
 - The types change only with the provider, so one version answers which release serves which API.
 - The Go proxy keeps the first content it served for a version ([the proxy's FAQ](https://proxy.golang.org/)) and the checksum database its hash, so a moved `api/` tag fails every fetch that is not cached ([checksum database](https://go.dev/ref/mod#checksum-database)).
   A deleted tag is no better: a version tag "should not be deleted or changed to a different revision", and its content may remain available on module proxies after it is deleted ([version tags](https://go.dev/ref/mod#vcs-version)).
@@ -40,7 +40,7 @@ Every release but `v0.1.0-alpha.1` is signed and attested.
 ## Rejected
 
 - A Helm chart, as Lodia's ([releases-and-support](https://github.com/lodia-io/lodia/blob/f91168b1248dc18151a0c2d442fe2050593a0866/docs/decisions/releases-and-support.md)) — what clusterctl reads is a components YAML, which Cluster API's kubeadm bootstrap provider renders with kustomize ([contract][cc-components], [kustomization](https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/bootstrap/kubeadm/config/default/kustomization.yaml#L1-L4)).
-- release-please, as Lodia's ([releases-and-support](https://github.com/lodia-io/lodia/blob/f91168b1248dc18151a0c2d442fe2050593a0866/docs/decisions/releases-and-support.md)) — a minor's series in `metadata.yaml` is a hand edit either way.
+- release-please — a minor's series in `metadata.yaml` is a hand edit either way, and Lodia cuts its tags by hand too ([releases-and-support](https://github.com/lodia-io/lodia/blob/4bb6047b2c8222d7566f8fd64e96214a4ce2c838/docs/decisions/releases-and-support.md?plain=1#L31-L33)).
 - A private repository with a public package until the first stable release — clusterctl would need a token and the operator a `github-token` to read a release, for every `clusterctl upgrade` of any management cluster that has the provider.
 
 ## Consequences
