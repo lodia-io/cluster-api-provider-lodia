@@ -12,6 +12,7 @@ import (
 	lodiav1alpha1 "go.lodia.io/lodia/api/v1alpha1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
@@ -391,4 +392,42 @@ func TestNoOwnerReferenceAndNoDeletionWaits(t *testing.T) {
 		t.Errorf("finalizers %v, want none before an owner reference", lcp.Finalizers)
 	}
 	absent(t, controlPlaneOf(cluster))
+}
+
+func TestAForbiddenDeleteWhileTheClusterIsDeletedIsReturnedForARetry(t *testing.T) {
+	cluster, lcp, _, _, _ := readyControlPlane(t, "forbidden-deleting")
+	startDeletingTheCluster(t, cluster)
+	if err := k8s.Delete(t.Context(), lcp); err != nil {
+		t.Fatal(err)
+	}
+	forbidden := direct(t, interceptor.Funcs{
+		Delete: func(context.Context, client.WithWatch, client.Object, ...client.DeleteOption) error {
+			return apierrors.NewForbidden(schema.GroupResource{Group: "lodia.io", Resource: "controlplanes"}, cluster.Name, nil)
+		},
+	})
+	if err := pass(t.Context(), forbidden, lcp); !apierrors.IsForbidden(err) {
+		t.Fatalf("the pass returned %v, want the refusal returned for a retry", err)
+	}
+}
+
+func TestAGoneClusterLeavesAControlPlaneOfAnotherOwnerUnconfirmedAndReleasesTheFinalizer(t *testing.T) {
+	ns := namespace(t)
+	_, foreign := leftoverOfAnotherOwner(t, ns, "foreign-gone")
+	cluster, lcp := create(t, ns, "foreign-gone")
+	r := direct(t, interceptor.Funcs{})
+	untilBlockMove(t, r, lcp)
+	get(t, lcp)
+	if !controllerutil.ContainsFinalizer(lcp, v1alpha1.Finalizer) {
+		t.Fatalf("finalizers %v", lcp.Finalizers)
+	}
+	deleteTheCluster(t, cluster)
+	if err := k8s.Delete(t.Context(), lcp); err != nil {
+		t.Fatal(err)
+	}
+	passes(t, r, lcp)
+	absent(t, lcp)
+	get(t, foreign)
+	if _, ok := foreign.Annotations[lodiav1alpha1.DeletionConfirmedAnnotation]; ok {
+		t.Error("the ControlPlane of another owner was confirmed")
+	}
 }

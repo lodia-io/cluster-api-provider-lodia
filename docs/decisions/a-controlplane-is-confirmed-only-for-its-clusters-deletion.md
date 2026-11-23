@@ -37,6 +37,7 @@ Decided 2026-11-23.
 
 - The deletion of a `Cluster` passes the gate, as Lodia's decision has the provider confirm it ([who-is-trusted][lo-trusted]): a prune that takes the `Cluster` takes its tenant.
 - A `LodiaControlPlane` deleted alone does not go while its `Cluster` lives: it waits with `Deleting` and the remedy in its message ([what breaks](../README.md#what-breaks-and-how-it-shows)).
+  Deleted with foreground propagation, it loses `<cluster>-kubeconfig` and `<cluster>-ca` meanwhile, which nothing writes again until the `Cluster` is deleted too ([what breaks](../README.md#what-breaks-and-how-it-shows)).
 - A deleting `LodiaControlPlane` with neither the owner reference nor a `Cluster` waits for a person, who confirms the `ControlPlane` and removes the finalizer by hand.
 - A live `clusterctl move` with `block-move` removed by hand leaves Lodia's `ControlPlane` in the source management cluster ([hosted-control-planes-do-not-move](hosted-control-planes-do-not-move.md#why)).
 - Lodia admits a delete while the `ControlPlane`'s namespace is being deleted ([who-is-trusted][lo-trusted]), so deleting a `Cluster`'s namespace deletes its `ControlPlane` whatever the provider confirms.
