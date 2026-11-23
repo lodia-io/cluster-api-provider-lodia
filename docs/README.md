@@ -8,14 +8,14 @@ Workers join through Cluster API's kubeadm bootstrap provider (CABPK) with the b
 `LodiaControlPlaneTemplate` holds the same spec, but the version, `controlPlaneEndpoint` and `restoreFrom`, for ClusterClasses.
 
 Go, controller-runtime; the manager runs as a Deployment of one replica (`cluster-api-provider-lodia-system`, leader election) on a management cluster that runs Lodia and Cluster API.
-Pinned sources: Cluster API [v1.15.0-beta.0] (a3b7b6f); kubeadm and Kubernetes v1.37.2, as `k8s.io/*` v0.37.2 in `go.mod`; and Lodia's API module at [lodia-io/lodia@4bb6047](https://github.com/lodia-io/lodia/tree/4bb6047b2c8222d7566f8fd64e96214a4ce2c838).
+Pinned sources: Cluster API [v1.15.0-beta.0] (a3b7b6f); kubeadm and Kubernetes v1.37.2, as `k8s.io/*` v0.37.2 in `go.mod`; and Lodia's API module at [lodia-io/lodia@2ab640f](https://github.com/lodia-io/lodia/tree/2ab640f60e9148515823748adf5fdb28690fe286).
 
 ## What it owns
 
 | owns | meaning |
 |---|---|
 | `LodiaControlPlane`, `LodiaControlPlaneTemplate` | the Cluster API control plane of a `Cluster`, and the template that a ClusterClass takes it from ([the objects](#the-objects)) |
-| Lodia's `ControlPlane` of the `Cluster` | one, named after the `Cluster` and in its namespace, built from the spec and the `Cluster`'s network and deleted with its owner |
+| Lodia's `ControlPlane` of the `Cluster` | one, named after the `Cluster` and in its namespace, built from the spec and the `Cluster`'s network, and confirmed for deletion only when the `Cluster` is deleted ([decision](decisions/a-controlplane-is-confirmed-only-for-its-clusters-deletion.md)) |
 | `<cluster>-kubeconfig` and `<cluster>-ca` | the copies of Lodia's admin kubeconfig and cluster CA that Cluster API reads |
 | the finalizer `controlplane.lodia.io/lodiacontrolplane` and two annotations | `clusterctl.cluster.x-k8s.io/block-move` and `controlplane.lodia.io/uid`, on the `LodiaControlPlane` |
 | the contract's endpoint and status | `spec.controlPlaneEndpoint`, and the initialization, versions, `Available` and `Ready` of the `LodiaControlPlane`, from Lodia's; `Paused` is Cluster API's pause |
@@ -87,8 +87,8 @@ Validation is CEL in the CRD ([no-admission-webhooks](decisions/no-admission-web
 
 | condition | written as |
 |---|---|
-| `Available` | a mirror of Lodia's `Reachable` at any generation: status, reason, message; `Unknown`, `NotYetReported` while the `ControlPlane` has none; `False`, `ControlPlaneNotFound` when an initialized `ControlPlane` is gone, `False`, `Deleting` while the provider waits for the `ControlPlane` to go, unless paused, and `False`, `CopyOfAnotherObject` for a copy of another object ([decision](decisions/hosted-control-planes-do-not-move.md)) |
-| `Ready` | a mirror of Lodia's `Ready` at the `ControlPlane`'s current generation, otherwise `Unknown`, `LatestGenerationNotObserved`, unless the provider cannot write: `Refused` (the API server refuses the `ControlPlane` or a Secret; the message is the server's), `ObjectsControlledElsewhere` (the `ControlPlane`, `<cluster>-kubeconfig` or `<cluster>-ca` exists with another controller, or none, which the message names), `ControlPlaneNotFound` (an initialized `ControlPlane` is gone), `Deleting` (waiting for the `ControlPlane` to go, unless paused), `CopyOfAnotherObject` (the object carries the UID of another in `controlplane.lodia.io/uid`) |
+| `Available` | a mirror of Lodia's `Reachable` at any generation: status, reason, message; `Unknown`, `NotYetReported` while the `ControlPlane` has none; `False`, `ControlPlaneNotFound` when an initialized `ControlPlane` is gone, `False`, `Deleting` while the provider waits for the `ControlPlane` to go, or while Lodia refuses its delete since the `Cluster` is not being deleted, unless paused, and `False`, `CopyOfAnotherObject` for a copy of another object ([decision](decisions/hosted-control-planes-do-not-move.md)) |
+| `Ready` | a mirror of Lodia's `Ready` at the `ControlPlane`'s current generation, otherwise `Unknown`, `LatestGenerationNotObserved`, unless the provider cannot write: `Refused` (the API server refuses the `ControlPlane` or a Secret; the message is the server's), `ObjectsControlledElsewhere` (the `ControlPlane`, `<cluster>-kubeconfig` or `<cluster>-ca` exists with another controller, or none, which the message names), `ControlPlaneNotFound` (an initialized `ControlPlane` is gone), `Deleting` (waiting for the `ControlPlane` to go, unless paused, or, while the `Cluster` is not being deleted, the delete refused: the message names the remedy and holds the server's answer), `CopyOfAnotherObject` (the object carries the UID of another in `controlplane.lodia.io/uid`) |
 | `Paused` | CAPI's pause |
 
 The mirroring is [status-mirrors-lodia](decisions/status-mirrors-lodia.md); the other objects' reasons are [objects-of-another-controller-are-left-alone](decisions/objects-of-another-controller-are-left-alone.md) and [hosted-control-planes-do-not-move](decisions/hosted-control-planes-do-not-move.md).
@@ -105,6 +105,7 @@ The mirroring is [status-mirrors-lodia](decisions/status-mirrors-lodia.md); the 
 | Secret `<cluster>-kubeconfig` | | the same | the same | `value` = key `kubeconfig` of `<cp>-admin-kubeconfig` ([names.go][lo-names-kubeconfig]) |
 | Secret `<cluster>-ca` | | the same | the same | `tls.crt` = key `ca.crt` of `<cp>-ca-bundle` ([names.go][lo-names-ca]); no `tls.key` ([decision](decisions/the-ca-secret-holds-no-key.md)) |
 | annotations `clusterctl.cluster.x-k8s.io/block-move` and `controlplane.lodia.io/uid` | on the `LodiaControlPlane` | | | `"true"` and the object's own UID, each written when absent, in one patch before the `ControlPlane` is created ([decision](decisions/hosted-control-planes-do-not-move.md)) |
+| annotation `lodia.io/deletion-confirmed` ([labels.go][lo-confirmed]) | on Lodia's `ControlPlane` | | | `"true"`, in a merge patch that carries the UID the pass read, before the delete while the `Cluster` is being deleted, and before the finalizer goes once the `Cluster` is gone ([decision](decisions/a-controlplane-is-confirmed-only-for-its-clusters-deletion.md)) |
 
 All three objects are applied server-side as `cluster-api-provider-lodia`, both Secrets with `type: cluster.x-k8s.io/secret` ([common_types.go][api-consts]).
 What another controller owns is left alone ([decision](decisions/objects-of-another-controller-are-left-alone.md)).
@@ -115,7 +116,7 @@ The cache holds no Secret data.
 It fails a typed read of a type it has no informer for ([`ReaderFailOnMissingInformer`][cr-fail-on-missing]) instead of starting one, which for a Secret would hold the data of every Secret labelled `lodia.io/control-plane`.
 The provider watches the metadata of Secrets labelled `lodia.io/control-plane` ([labels][lo-labels]), maps `<cp>-admin-kubeconfig` and `<cp>-ca-bundle` to the `LodiaControlPlane` of the Cluster of that name, and reads both, and its own two, from the API server on every pass.
 `ControlPlane` and `Cluster` events map the same way, through the Cluster's `controlPlaneRef`, so a leftover `ControlPlane` of another owner wakes the provider when it goes.
-A `Cluster` update passes only when the Cluster's generation changed ([`GenerationChangedPredicate`][cr-generation-changed]), so an update of its metadata or status starts no pass.
+A `Cluster` update passes only when the Cluster's generation changed ([`GenerationChangedPredicate`][cr-generation-changed]), so an update of its metadata or status starts no pass; the start of its deletion changes it ([markAsDeleting][k8s-generation]), so that one passes.
 The cache resyncs every 10 minutes by default, Cluster API's default ([--sync-period][capi-sync]), which repairs the provider's own Secrets, which no watch covers, and a missed delete event.
 
 ### RBAC
@@ -127,7 +128,7 @@ RBAC is generated from markers into [`config/rbac/role.yaml`](../config/rbac/rol
 
 Before its first step, a pass refuses a copy of another object ([decision](decisions/hosted-control-planes-do-not-move.md)).
 
-1. Wait for the owner reference the Cluster controller writes ([ensureOwnerRefAndLabel][cl-ownerref]), as both reference providers do.
+1. Wait for the owner reference the Cluster controller writes ([ensureOwnerRefAndLabel][cl-ownerref]), as both reference providers do; a deleting `LodiaControlPlane` waits for it too.
 2. Add the finalizer `controlplane.lodia.io/lodiacontrolplane` ([EnsureFinalizer][finalizers]); then pause ([EnsurePausedCondition][paused-cond]).
 3. Write the annotations `clusterctl.cluster.x-k8s.io/block-move` and `controlplane.lodia.io/uid`, each when absent, in one patch that is locked on the resourceVersion the pass read, and end the pass, so that both are stored before anything exists to move or to copy.
    A patch that does not land fails the pass before anything is applied, and the next pass writes the annotations again.
@@ -139,9 +140,13 @@ A refused or blocked write, like any other failed one, makes the pass return its
 While the `ControlPlane` exists and is the provider's, the pass still copies the Secrets and reports the status, and a failure on one Secret does not stop the other.
 
 Deletion: CAPI deletes workers first, then the control plane object, and waits for it ([deletion order][cl-delete]).
-The provider deletes the `ControlPlane` and keeps its finalizer until a read past the cache finds the `ControlPlane` gone, which Lodia's `lodia.io/datastore` finalizer decides once the etcd is released (a paused `ControlPlane` waits for unpause); the Secrets go with their owner.
-Once the `Cluster` or the owner reference is gone, nothing is left to wait for: the provider removes its finalizer, and the garbage collector deletes the `ControlPlane` and the copies, which the `LodiaControlPlane` owns.
-The `cluster.x-k8s.io/paused` annotation on the `LodiaControlPlane` holds this removal too; with the owner reference gone the `Cluster`'s `spec.paused` cannot be read, so it does not hold it.
+Lodia admits the delete of a `ControlPlane` only once it carries `lodia.io/deletion-confirmed: "true"` ([Delete a cluster][lo-delete]), and the provider confirms it only for the deletion of the `Cluster` ([decision](decisions/a-controlplane-is-confirmed-only-for-its-clusters-deletion.md)).
+While the `Cluster` is being deleted, the provider confirms the `ControlPlane`, deletes it and keeps its finalizer until a read past the cache finds the `ControlPlane` gone, which Lodia's `lodia.io/datastore` finalizer decides once the etcd is released (a paused `ControlPlane` waits for unpause); the Secrets go with their owner.
+A `LodiaControlPlane` deleted while its `Cluster` is not being deleted keeps its finalizer and its `ControlPlane`, whose delete Lodia refuses; `Ready` and `Available` say so and name the remedy, deleting the `Cluster` or confirming the `ControlPlane` by hand.
+Unlike another refused write, that refusal ends the pass without an error, so it is not retried with backoff: the event of either remedy starts the pass that deletes the `ControlPlane`.
+Once the `Cluster` is gone, nothing is left to wait for: the provider confirms the `ControlPlane` and then removes its finalizer, and the garbage collector deletes the `ControlPlane` and the copies, which the `LodiaControlPlane` owns.
+A deleting `LodiaControlPlane` without the owner reference waits for it and confirms nothing.
+The `cluster.x-k8s.io/paused` annotation on the `LodiaControlPlane` holds the confirmation and the removal too; with the `Cluster` gone its `spec.paused` cannot be read, so it does not hold them.
 
 ## The manager
 
@@ -310,7 +315,7 @@ It never copies the key ([decision](decisions/the-ca-secret-holds-no-key.md)).
 
 What a release holds and how releases are numbered: [releases-through-clusterctl](decisions/releases-through-clusterctl.md); how to verify one: [Verifying a release](#verifying-a-release).
 The provider's watches need Lodia's CRDs, so install Lodia before the provider.
-A release of the provider is built and tested against [Lodia at 4bb6047b2c82](https://github.com/lodia-io/lodia/tree/4bb6047b2c8222d7566f8fd64e96214a4ce2c838), the `LODIA_COMMIT` of the [`Makefile`](../Makefile) and the pseudo-version of `go.lodia.io/lodia/api` in [`go.mod`](../go.mod) and in [`api/go.mod`](../api/go.mod).
+A release of the provider is built and tested against [Lodia at 2ab640f60e91](https://github.com/lodia-io/lodia/tree/2ab640f60e9148515823748adf5fdb28690fe286), the `LODIA_COMMIT` of the [`Makefile`](../Makefile) and the pseudo-version of `go.lodia.io/lodia/api` in [`go.mod`](../go.mod) and in [`api/go.mod`](../api/go.mod).
 No release of Lodia holds that commit's API yet, since its one release, `v0.1.0-alpha.1` ([the tag](https://github.com/lodia-io/lodia/tree/v0.1.0-alpha.1), at `ec154e9`), predates `endpoint.loadBalancer.host` ([5231800](https://github.com/lodia-io/lodia/commit/52318007b5003d514f58cfd1a61cbe506b9c95b5), #108), so that commit is the requirement of every release.
 
 ### The Cluster API version
@@ -498,6 +503,9 @@ To give the copy a new, empty control plane, remove its annotation `controlplane
   A tenant whose endpoint must outlive its load balancer names it in `endpoint.loadBalancer.host`, which Lodia publishes from the spec and which cannot change ([field reference][lo-ref-host]).
 - *A value Lodia refuses that cannot change.*
   An IP `endpoint.loadBalancer.host` that does not fit the `Cluster`'s ranges, or an IPv6 `Cluster` in `loadBalancer` mode without an IP `host` and without `apiServer.advertiseAddress`, is refused by Lodia's API server and reported as `Refused`, and the `LodiaControlPlane`'s own rules keep `host` and `advertiseAddress` once set ([no-admission-webhooks](decisions/no-admission-webhooks.md)): the `LodiaControlPlane`, or its `Cluster`, is deleted and created again with the corrected value.
+- *A `LodiaControlPlane` deleted alone stays.*
+  While its `Cluster` is not being deleted, the provider does not confirm the `ControlPlane`, Lodia refuses its delete, and the `LodiaControlPlane` keeps its finalizer with `Ready` and `Available` `False`, `Deleting`, and the remedy in the message: delete the `Cluster`, or confirm the `ControlPlane` by hand with the `kubectl annotate` that Lodia's answer holds ([decision](decisions/a-controlplane-is-confirmed-only-for-its-clusters-deletion.md)).
+  A delete with foreground propagation (`--cascade=foreground`, or a tool that prunes that way) has the garbage collector delete the `LodiaControlPlane`'s other dependents first: `<cluster>-kubeconfig` and `<cluster>-ca` go while the `ControlPlane` stays, and nothing writes them again, since Cluster API leaves the kubeconfig of a `Cluster` with a control plane to its provider ([cluster_controller_phases.go](https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/core/reconcilers/cluster/cluster_controller_phases.go#L360-L365)); deleting the `Cluster` still goes through, since a Machine of a deleting `Cluster` skips its drain and its Node's delete ([machine_controller.go](https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/core/reconcilers/machine/machine_controller.go#L790-L795)).
 - *MachineHealthCheck against the controller manager hold.*
   When nodes are cut off from the control plane, Lodia holds the controller manager so nothing evicts their pods ([README][lo-readme-health]); an MHC sees the same nodes NotReady and replaces the Machines.
   Recommend `remediation.triggerIf.unhealthyLessThanOrEqualTo` below Lodia's hold fraction, 0.6 ([MHC][mhc], [configuration][lo-readme-config]).
@@ -550,15 +558,17 @@ To give the copy a new, empty control plane, remove its annotation `controlplane
 - [least-privilege-rbac](decisions/least-privilege-rbac.md) — RBAC from markers, leader election in the manager's namespace on its own Lease.
 - [releases-through-clusterctl](decisions/releases-through-clusterctl.md) — a GitHub release with the two files clusterctl reads, the image on ghcr.io by digest, keyless signatures and attestations of the image and both files, signed tags by hand with the API module's beside them, pre-releases until Cluster API v1.15.0.
 - [e2e-on-a-named-cluster](decisions/e2e-on-a-named-cluster.md) — the suite's own kind cluster, installed through clusterctl, a worker that joins, an upgrade from the previous release, a minor step through Lodia, every wait bounded.
+- [a-controlplane-is-confirmed-only-for-its-clusters-deletion](decisions/a-controlplane-is-confirmed-only-for-its-clusters-deletion.md) — Lodia's `lodia.io/deletion-confirmed` written only while the `Cluster` is being deleted or once it is gone, in a patch that carries the UID; a refusal reported with its remedy; no confirmation without the owner reference.
 
 ## Contracts this provider implements
 
 - Cluster API's [control plane contract][contract] v1beta2 at v1.15.0-beta.0, which [the contract, as built](#the-contract-as-built) answers rule by rule, and its [provider contract for clusterctl](https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/docs/book/src/developer/providers/contracts/clusterctl.md), which [Installation](#installation) and [the releases decision](decisions/releases-through-clusterctl.md) follow.
-- Lodia's decisions, at Lodia's commit 4bb6047:
-  - [nodes-join-with-kubeadm](https://github.com/lodia-io/lodia/blob/4bb6047b2c8222d7566f8fd64e96214a4ce2c838/docs/decisions/nodes-join-with-kubeadm.md) — workers join with `kubeadm join`, and Lodia writes the bootstrap objects.
-  - [one-controlplane-per-cluster](https://github.com/lodia-io/lodia/blob/4bb6047b2c8222d7566f8fd64e96214a4ce2c838/docs/decisions/one-controlplane-per-cluster.md) — a `ControlPlane` is the whole tenant cluster, with one `Ready` to watch.
-  - [api-exposure](https://github.com/lodia-io/lodia/blob/4bb6047b2c8222d7566f8fd64e96214a4ce2c838/docs/decisions/api-exposure.md) — the endpoint mode owns the API server's port and address.
-  - [short-lived-kubeconfigs](https://github.com/lodia-io/lodia/blob/4bb6047b2c8222d7566f8fd64e96214a4ce2c838/docs/decisions/short-lived-kubeconfigs.md) — the admin kubeconfig that the provider copies is a standing credential.
+- Lodia's decisions, at Lodia's commit 2ab640f:
+  - [nodes-join-with-kubeadm](https://github.com/lodia-io/lodia/blob/2ab640f60e9148515823748adf5fdb28690fe286/docs/decisions/nodes-join-with-kubeadm.md) — workers join with `kubeadm join`, and Lodia writes the bootstrap objects.
+  - [one-controlplane-per-cluster](https://github.com/lodia-io/lodia/blob/2ab640f60e9148515823748adf5fdb28690fe286/docs/decisions/one-controlplane-per-cluster.md) — a `ControlPlane` is the whole tenant cluster, with one `Ready` to watch.
+  - [api-exposure](https://github.com/lodia-io/lodia/blob/2ab640f60e9148515823748adf5fdb28690fe286/docs/decisions/api-exposure.md) — the endpoint mode owns the API server's port and address.
+  - [short-lived-kubeconfigs](https://github.com/lodia-io/lodia/blob/2ab640f60e9148515823748adf5fdb28690fe286/docs/decisions/short-lived-kubeconfigs.md) — the admin kubeconfig that the provider copies is a standing credential.
+  - [who-is-trusted](https://github.com/lodia-io/lodia/blob/2ab640f60e9148515823748adf5fdb28690fe286/docs/decisions/who-is-trusted.md) — the delete of a `ControlPlane` needs Lodia's confirmation, which the provider writes for the deletion of its `Cluster`.
 
 <!-- Cluster API v1.15.0-beta.0 -->
 [v1.15.0-beta.0]: https://github.com/kubernetes-sigs/cluster-api/tree/v1.15.0-beta.0
@@ -650,6 +660,7 @@ To give the copy a new, empty control plane, remove its annotation `controlplane
 [kubeadm-discovery]: https://github.com/kubernetes/kubernetes/blob/v1.37.2/cmd/kubeadm/app/discovery/token/token.go#L59-L152
 [kubeadm-pins]: https://github.com/kubernetes/kubernetes/blob/v1.37.2/cmd/kubeadm/app/discovery/token/token.go#L191-L209
 [kubeadm-jws]: https://github.com/kubernetes/kubernetes/blob/v1.37.2/cmd/kubeadm/app/discovery/token/token.go#L211-L259
+[k8s-generation]: https://github.com/kubernetes/kubernetes/blob/v1.37.2/staging/src/k8s.io/apiserver/pkg/registry/generic/registry/store.go#L1083-L1093
 
 <!-- the reference providers -->
 [kp-patchcluster]: https://github.com/clastix/cluster-api-control-plane-provider-kamaji/blob/v0.21.0/controllers/kamajicontrolplane_controller_cluster_patch.go#L104-L151
@@ -697,3 +708,7 @@ To give the copy a new, empty control plane, remove its annotation `controlplane
 [lo-upgrade-steps]: https://github.com/lodia-io/lodia/blob/4bb6047b2c8222d7566f8fd64e96214a4ce2c838/docs/decisions/upgrades-and-maintenance-windows.md?plain=1#L18-L36
 [lo-rehearsal]: https://github.com/lodia-io/lodia/blob/4bb6047b2c8222d7566f8fd64e96214a4ce2c838/docs/decisions/rehearse-a-minor-step.md?plain=1#L8-L12
 [lo-ops-sources]: https://github.com/lodia-io/lodia/blob/4bb6047b2c8222d7566f8fd64e96214a4ce2c838/docs/operations.md?plain=1#L257-L263
+
+<!-- Lodia at 2ab640f -->
+[lo-confirmed]: https://github.com/lodia-io/lodia/blob/2ab640f60e9148515823748adf5fdb28690fe286/api/v1alpha1/labels.go#L83-L88
+[lo-delete]: https://github.com/lodia-io/lodia/blob/2ab640f60e9148515823748adf5fdb28690fe286/docs/operations.md?plain=1#L92-L109

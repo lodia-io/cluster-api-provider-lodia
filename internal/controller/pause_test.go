@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	lodiav1alpha1 "go.lodia.io/lodia/api/v1alpha1"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
@@ -28,6 +29,7 @@ func TestDeletionWaitsWhilePaused(t *testing.T) {
 	if err := k8s.Patch(t.Context(), cluster, client.MergeFrom(unpaused)); err != nil {
 		t.Fatal(err)
 	}
+	startDeletingTheCluster(t, cluster)
 	if err := k8s.Delete(t.Context(), lcp); err != nil {
 		t.Fatal(err)
 	}
@@ -51,7 +53,7 @@ func TestDeletionWaitsWhilePaused(t *testing.T) {
 }
 
 func TestThePausedAnnotationHoldsDeletionOnceTheClusterIsGone(t *testing.T) {
-	cluster, lcp, _, r, _ := readyControlPlane(t, "phi-paused")
+	cluster, lcp, cp, r, _ := readyControlPlane(t, "phi-paused")
 	updateSpec(t, lcp, func(l *v1alpha1.LodiaControlPlane) {
 		metav1.SetMetaDataAnnotation(&l.ObjectMeta, clusterv1.PausedAnnotation, "")
 	})
@@ -63,32 +65,15 @@ func TestThePausedAnnotationHoldsDeletionOnceTheClusterIsGone(t *testing.T) {
 	for range 2 {
 		passes(t, r, lcp)
 		heldByThePause(t, lcp)
+		get(t, cp)
+		if got, ok := cp.Annotations[lodiav1alpha1.DeletionConfirmedAnnotation]; ok {
+			t.Fatalf("the ControlPlane was confirmed while paused: %q", got)
+		}
 	}
 
 	updateSpec(t, lcp, func(l *v1alpha1.LodiaControlPlane) { delete(l.Annotations, clusterv1.PausedAnnotation) })
 	passes(t, r, lcp)
 	passes(t, direct(t, interceptor.Funcs{}), lcp)
-	absent(t, lcp)
-}
-
-func TestThePausedAnnotationHoldsDeletionOnceTheOwnerReferenceIsGone(t *testing.T) {
-	_, lcp, _, r, _ := readyControlPlane(t, "phi-ref-paused")
-	updateSpec(t, lcp, func(l *v1alpha1.LodiaControlPlane) {
-		metav1.SetMetaDataAnnotation(&l.ObjectMeta, clusterv1.PausedAnnotation, "")
-		l.OwnerReferences = nil
-	})
-	if err := k8s.Delete(t.Context(), lcp); err != nil {
-		t.Fatal(err)
-	}
-
-	for range 2 {
-		passes(t, r, lcp)
-		heldByThePause(t, lcp)
-	}
-
-	updateSpec(t, lcp, func(l *v1alpha1.LodiaControlPlane) { delete(l.Annotations, clusterv1.PausedAnnotation) })
-	passes(t, r, lcp)
-	passes(t, r, lcp)
 	absent(t, lcp)
 }
 

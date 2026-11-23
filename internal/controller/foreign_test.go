@@ -90,7 +90,7 @@ func TestTheProviderTakesOverOnceALeftoverControlPlaneIsGone(t *testing.T) {
 		return ready(lcp, metav1.ConditionFalse, v1alpha1.ObjectsControlledElsewhereReason, "")
 	})
 
-	if err := k8s.Delete(t.Context(), leftover); err != nil {
+	if err := confirmedDelete(t.Context(), leftover); err != nil {
 		t.Fatal(err)
 	}
 	cp := controlPlaneOf(cluster)

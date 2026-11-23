@@ -26,7 +26,7 @@ In this order:
 | component | source | installed by |
 |---|---|---|
 | cert-manager v1.21.3 | its release YAML | the suite, each Deployment waited on until `Available` |
-| Lodia and etcd-druid | the chart of the [Lodia commit](https://github.com/lodia-io/lodia/tree/4bb6047b2c8222d7566f8fd64e96214a4ce2c838) that `go.mod` pins, fetched by `make e2e-lodia` into `work/lodia`, with images built by ko into the kind cluster | helm, with `--wait` |
+| Lodia and etcd-druid | the chart of the [Lodia commit](https://github.com/lodia-io/lodia/tree/2ab640f60e9148515823748adf5fdb28690fe286) that `go.mod` pins, fetched by `make e2e-lodia` into `work/lodia`, with images built by ko into the kind cluster | helm, with `--wait` |
 | Cluster API and its kubeadm bootstrap provider v1.15.0-beta.0 | their release YAMLs | clusterctl's `Init` |
 | Cluster API provider Docker v1.15.0-beta.0 | the release's `infrastructure-components-development.yaml`, whose image is built for the [staging registry](https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/Makefile#L1071-L1074) | clusterctl's `Init` |
 | this provider | `make release-components`, the target that renders the release's components YAML, with the image repository `kind.local/cluster-api-provider-lodia` and the host's one platform, so that ko loads the image into the kind cluster, and the render of `config/default` in the target's own directory, which two targets on one host do not share | clusterctl's `Init` |
@@ -101,6 +101,7 @@ Each waits within a bound of its own, but the third and the seventh, which read 
 22. The objects of the graph stop changing: four reads of their resourceVersions, 15 seconds apart, each agree with the one before, within 2 minutes.
 23. They stay as they are for 2 minutes, read every 5 seconds, but for what Lodia and etcd-druid write.
 24. Deleting the `Cluster`, once the etcd claim and the two copied Secrets exist and exactly one container is labelled for the `Cluster`, removes the `LodiaControlPlane`, Lodia's `ControlPlane`, the etcd claim, the two Secrets and the worker's container.
+    Lodia's chart refuses the delete of a `ControlPlane` that is not confirmed, so the step fails for a provider that does not confirm it while the `Cluster` is being deleted ([decision](../../docs/decisions/a-controlplane-is-confirmed-only-for-its-clusters-deletion.md)).
 
 The move is the only way the suite tests that the provider refuses `clusterctl move`.
 The provider writes `block-move` on every `LodiaControlPlane`, so clusterctl pauses the `Cluster`, finds the annotation and waits for it to go, which with its [backoff](https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/cmd/clusterctl/client/cluster/mover.go#L366-L377), 5 seconds growing by 1.5 for ten steps, takes about six minutes before it fails.

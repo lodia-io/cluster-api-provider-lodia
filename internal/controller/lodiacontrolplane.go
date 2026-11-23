@@ -7,6 +7,7 @@ package controller
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -19,7 +20,9 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/selection"
+	"k8s.io/apimachinery/pkg/types"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	corev1ac "k8s.io/client-go/applyconfigurations/core/v1"
 	metav1ac "k8s.io/client-go/applyconfigurations/meta/v1"
@@ -233,16 +236,23 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (_ ctrl.Re
 		return ctrl.Result{}, r.refuseCopy(ctx, lcp, uid)
 	}
 	cluster, err := util.GetOwnerCluster(ctx, r.Client, lcp.ObjectMeta)
-	if !lcp.DeletionTimestamp.IsZero() && (apierrors.IsNotFound(err) || err == nil && cluster == nil) {
+	if !lcp.DeletionTimestamp.IsZero() && apierrors.IsNotFound(err) {
 		if isPaused, requeue, err := paused.EnsurePausedCondition(ctx, r.Client, nil, lcp); err != nil || isPaused || requeue {
 			return ctrl.Result{}, err
 		}
 		// Nothing is left to wait for: the garbage collector deletes the
-		// ControlPlane and the copies, which this object owns.
+		// ControlPlane and the copies, which this object owns. Lodia admits its
+		// delete of the ControlPlane only once confirmed, and a confirmation
+		// written after the collector's refusal does not wake it.
+		if err := r.confirmTheGoneClustersControlPlane(ctx, lcp); err != nil {
+			return ctrl.Result{}, err
+		}
 		before := lcp.DeepCopy()
 		controllerutil.RemoveFinalizer(lcp, v1alpha1.Finalizer)
 		return ctrl.Result{}, r.Patch(ctx, lcp, client.MergeFrom(before))
 	}
+	// Without the owner reference, deleting or not, the pass waits for the one
+	// Cluster API writes, and confirms nothing.
 	if err != nil || cluster == nil {
 		return ctrl.Result{}, err
 	}
@@ -280,7 +290,7 @@ func (r *Reconciler) reconcileNormal(ctx context.Context, cluster *clusterv1.Clu
 	}
 	lcp.Status.ExternalManagedControlPlane = new(true)
 
-	current, err := r.currentControlPlane(ctx, cluster, lcp)
+	current, err := r.currentControlPlane(ctx, lcp, cluster.Name)
 	if err != nil {
 		return reportWriteError(lcp, err)
 	}
@@ -321,10 +331,10 @@ func (r *Reconciler) annotate(ctx context.Context, lcp *v1alpha1.LodiaControlPla
 }
 
 // currentControlPlane returns nil when the ControlPlane does not exist.
-func (r *Reconciler) currentControlPlane(ctx context.Context, cluster *clusterv1.Cluster, lcp *v1alpha1.LodiaControlPlane) (*unstructured.Unstructured, error) {
+func (r *Reconciler) currentControlPlane(ctx context.Context, lcp *v1alpha1.LodiaControlPlane, name string) (*unstructured.Unstructured, error) {
 	current := &unstructured.Unstructured{}
 	current.SetGroupVersionKind(lodiav1alpha1.GroupVersion.WithKind("ControlPlane"))
-	switch err := r.APIReader.Get(ctx, client.ObjectKey{Namespace: cluster.Namespace, Name: cluster.Name}, current); {
+	switch err := r.APIReader.Get(ctx, client.ObjectKey{Namespace: lcp.Namespace, Name: name}, current); {
 	case apierrors.IsNotFound(err):
 		return nil, nil
 	case err != nil:
@@ -525,9 +535,12 @@ func (e *controlledElsewhereError) Error() string {
 }
 
 // reconcileDelete keeps the finalizer until the ControlPlane is gone, which
-// Lodia's own finalizer decides.
+// Lodia's own finalizer decides. Lodia admits the delete only once confirmed,
+// and the provider confirms it only while the Cluster is being deleted; a
+// refusal waits, as the other waits do, for an event of the Cluster or of the
+// ControlPlane.
 func (r *Reconciler) reconcileDelete(ctx context.Context, cluster *clusterv1.Cluster, lcp *v1alpha1.LodiaControlPlane) error {
-	cp, err := r.currentControlPlane(ctx, cluster, lcp)
+	cp, err := r.currentControlPlane(ctx, lcp, cluster.Name)
 	var elsewhere *controlledElsewhereError
 	switch {
 	case cp == nil && (err == nil || errors.As(err, &elsewhere)):
@@ -538,10 +551,60 @@ func (r *Reconciler) reconcileDelete(ctx context.Context, cluster *clusterv1.Clu
 	}
 	if cp.GetDeletionTimestamp().IsZero() {
 		uid := cp.GetUID()
-		if err := r.Delete(ctx, cp, client.Preconditions{UID: &uid}); err != nil && !apierrors.IsNotFound(err) {
+		if !cluster.DeletionTimestamp.IsZero() {
+			if err := r.confirm(ctx, cp); err != nil {
+				return err
+			}
+		}
+		switch err := r.Delete(ctx, cp, client.Preconditions{UID: &uid}); {
+		case apierrors.IsForbidden(err) && cluster.DeletionTimestamp.IsZero():
+			setDown(lcp, clusterv1.DeletingReason, fmt.Sprintf(
+				"ControlPlane %s is not deleted, since the provider confirms its delete only while Cluster %s is being deleted: delete the Cluster, or confirm the ControlPlane by hand; the API server answered: %v",
+				cp.GetName(), cluster.Name, err))
+			return nil
+		case err != nil && !apierrors.IsNotFound(err):
 			return err
 		}
 	}
 	setDown(lcp, clusterv1.DeletingReason, fmt.Sprintf("waiting for ControlPlane %s to be deleted", cp.GetName()))
 	return nil
+}
+
+func (r *Reconciler) confirmTheGoneClustersControlPlane(ctx context.Context, lcp *v1alpha1.LodiaControlPlane) error {
+	cp, err := r.currentControlPlane(ctx, lcp, ownerClusterName(lcp))
+	var elsewhere *controlledElsewhereError
+	switch {
+	case errors.As(err, &elsewhere):
+		return nil
+	case err != nil:
+		return err
+	case cp == nil || !cp.GetDeletionTimestamp().IsZero():
+		return nil
+	}
+	return r.confirm(ctx, cp)
+}
+
+// ownerClusterName is the name that util.GetOwnerCluster looks the Cluster up
+// by.
+func ownerClusterName(lcp *v1alpha1.LodiaControlPlane) string {
+	for _, ref := range lcp.OwnerReferences {
+		if gv, err := schema.ParseGroupVersion(ref.APIVersion); err == nil && ref.Kind == "Cluster" && gv.Group == clusterv1.GroupVersion.Group {
+			return ref.Name
+		}
+	}
+	return ""
+}
+
+// confirm writes Lodia's lodia.io/deletion-confirmed on the ControlPlane in a
+// patch that carries the UID the pass read, which a ControlPlane created since
+// under the same name refuses as a change of its UID.
+func (r *Reconciler) confirm(ctx context.Context, cp *unstructured.Unstructured) error {
+	confirmation, err := json.Marshal(map[string]any{"metadata": map[string]any{
+		"uid":         cp.GetUID(),
+		"annotations": map[string]string{lodiav1alpha1.DeletionConfirmedAnnotation: "true"},
+	}})
+	if err != nil {
+		return err
+	}
+	return r.Patch(ctx, cp, client.RawPatch(types.MergePatchType, confirmation))
 }

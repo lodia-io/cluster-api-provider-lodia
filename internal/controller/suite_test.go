@@ -4,8 +4,12 @@
 package controller_test
 
 import (
+	"bufio"
+	"bytes"
 	"context"
+	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"os/exec"
@@ -15,6 +19,7 @@ import (
 	"time"
 
 	"go.lodia.io/lodia/api/crds"
+	"go.lodia.io/lodia/api/policies"
 	lodiav1alpha1 "go.lodia.io/lodia/api/v1alpha1"
 	authorizationv1 "k8s.io/api/authorization/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -23,8 +28,11 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/wait"
+	utilyaml "k8s.io/apimachinery/pkg/util/yaml"
 	corev1ac "k8s.io/client-go/applyconfigurations/core/v1"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
@@ -90,6 +98,9 @@ func TestMain(m *testing.M) {
 	if k8s, err = client.New(cfg, client.Options{Scheme: controller.Scheme()}); err != nil {
 		stop("client", err)
 	}
+	if err := installLodiasPolicies(); err != nil {
+		stop("Lodia's policies", err)
+	}
 	ctrl.SetLogger(zap.New(zap.UseDevMode(true)))
 	if asController, err = boundToTheClusterRole(cfg); err != nil {
 		stop("the controller's ClusterRole", err)
@@ -119,6 +130,64 @@ func lodiaCRDs() ([]*apiextensionsv1.CustomResourceDefinition, error) {
 		out = append(out, crd)
 	}
 	return out, nil
+}
+
+func installLodiasPolicies() error {
+	ctx := context.Background()
+	files, err := fs.Glob(policies.FS, "*.yaml")
+	if err != nil {
+		return err
+	}
+	for _, f := range files {
+		raw, err := policies.FS.ReadFile(f)
+		if err != nil {
+			return err
+		}
+		docs := utilyaml.NewYAMLReader(bufio.NewReader(bytes.NewReader(raw)))
+		for {
+			doc, err := docs.Read()
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			if err != nil {
+				return fmt.Errorf("%s: %w", f, err)
+			}
+			obj := &unstructured.Unstructured{}
+			if err := yaml.Unmarshal(doc, &obj.Object); err != nil {
+				return fmt.Errorf("%s: %w", f, err)
+			}
+			if err := k8s.Create(ctx, obj); err != nil {
+				return fmt.Errorf("%s: %w", f, err)
+			}
+		}
+	}
+	ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{GenerateName: "policy-"}}
+	if err := k8s.Create(ctx, ns); err != nil {
+		return err
+	}
+	probe := &lodiav1alpha1.ControlPlane{
+		ObjectMeta: metav1.ObjectMeta{Namespace: ns.Name, Name: "probe"},
+		Spec: lodiav1alpha1.ControlPlaneSpec{
+			Version:   "v1.35.0",
+			Datastore: lodiav1alpha1.DatastoreSettings{ClassName: "probe"},
+			Endpoint:  lodiav1alpha1.Endpoint{NodePort: &lodiav1alpha1.NodePortEndpoint{}},
+			Network:   lodiav1alpha1.Network{ServiceCIDRs: []lodiav1alpha1.CIDR{"10.96.0.0/12"}, PodCIDRs: []lodiav1alpha1.CIDR{"10.244.0.0/16"}},
+		},
+	}
+	if err := k8s.Create(ctx, probe); err != nil {
+		return err
+	}
+	return wait.PollUntilContextTimeout(ctx, 100*time.Millisecond, 30*time.Second, true, func(ctx context.Context) (bool, error) {
+		return apierrors.IsForbidden(k8s.Delete(ctx, probe, client.DryRunAll)), nil
+	})
+}
+
+func confirmedDelete(ctx context.Context, cp *lodiav1alpha1.ControlPlane) error {
+	confirmation := fmt.Sprintf(`{"metadata":{"annotations":{%q:"true"}}}`, lodiav1alpha1.DeletionConfirmedAnnotation)
+	if err := k8s.Patch(ctx, cp, client.RawPatch(types.MergePatchType, []byte(confirmation))); err != nil {
+		return err
+	}
+	return k8s.Delete(ctx, cp)
 }
 
 func boundToTheClusterRole(cfg *rest.Config) (*rest.Config, error) {
