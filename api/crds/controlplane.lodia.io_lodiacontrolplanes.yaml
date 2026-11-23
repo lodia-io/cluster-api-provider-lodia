@@ -888,8 +888,6 @@ spec:
                     type: object
                 type: object
                 x-kubernetes-validations:
-                - message: endpoint is immutable in v1alpha1
-                  rule: self == oldSelf
                 - message: set exactly one of gateway, loadBalancer and nodePort
                   rule: '[has(self.gateway), has(self.loadBalancer), has(self.nodePort)].filter(x,
                     x).size() == 1'
@@ -1198,12 +1196,17 @@ spec:
             - message: highAvailability runs at least two API servers
               rule: '!has(self.highAvailability) || !has(self.apiServer) || !has(self.apiServer.replicas)
                 || self.apiServer.replicas >= 2'
-            - message: apiServer.advertiseAddress is set only with endpoint.gateway
+            - message: 'apiServer.advertiseAddress is set only where apiserver-proxy
+                runs: with endpoint.gateway, or with endpoint.loadBalancer unless
+                its host is an IP address'
               rule: '!has(self.apiServer) || !has(self.apiServer.advertiseAddress)
-                || has(self.endpoint.gateway)'
+                || (has(self.endpoint.gateway) || has(self.endpoint.loadBalancer)
+                && (!has(self.endpoint.loadBalancer.host) || !isIP(self.endpoint.loadBalancer.host)))'
             - message: apiServer.advertiseAddress is immutable
-              rule: '!has(self.endpoint.gateway) || (has(self.apiServer) && has(self.apiServer.advertiseAddress)
-                ? has(oldSelf.apiServer) && has(oldSelf.apiServer.advertiseAddress)
+              rule: '!(has(self.endpoint.gateway) || has(self.endpoint.loadBalancer)
+                && (!has(self.endpoint.loadBalancer.host) || !isIP(self.endpoint.loadBalancer.host)))
+                || (has(self.apiServer) && has(self.apiServer.advertiseAddress) ?
+                has(oldSelf.apiServer) && has(oldSelf.apiServer.advertiseAddress)
                 && oldSelf.apiServer.advertiseAddress == self.apiServer.advertiseAddress
                 : !has(oldSelf.apiServer) || !has(oldSelf.apiServer.advertiseAddress))'
             - message: datastore.className is immutable in v1alpha1
@@ -1212,6 +1215,11 @@ spec:
                 oldSelf.datastore.className == self.datastore.className : !has(oldSelf.datastore)
                 || !has(oldSelf.datastore.className) || size(oldSelf.datastore.className)
                 == 0'
+            - message: kube-apiserver refuses a JWT issuer.url equal to serviceAccount.issuer
+              rule: '!has(self.serviceAccount) || !has(self.serviceAccount.issuer)
+                || !has(self.apiServer) || !has(self.apiServer.authentication) ||
+                !has(self.apiServer.authentication.jwt) || !self.apiServer.authentication.jwt.exists(a,
+                a.issuer.url == self.serviceAccount.issuer)'
           status:
             description: LodiaControlPlaneStatus is what the provider reports to Cluster
               API.
