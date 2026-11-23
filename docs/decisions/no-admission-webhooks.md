@@ -13,6 +13,8 @@ Decided 2026-10-26.
 
 - What a webhook costs, and what CEL in the schema replaces, is Lodia's reasoning, which this decision shares ([Lodia's decision](https://github.com/lodia-io/lodia/blob/f91168b1248dc18151a0c2d442fe2050593a0866/docs/decisions/no-admission-webhooks.md)).
 - A rule that names `spec.network` could not be repeated in the provider's CRD, which has no `network`: the `Cluster` supplies it.
+- The rules that keep `endpoint.loadBalancer.host` and `apiServer.advertiseAddress` stay repeated though they keep a value Lodia refuses (decided 2026-11-23): Lodia keeps `network`, so such a value is refused at the first apply, before any tenant exists, and creating the `LodiaControlPlane` again loses nothing.
+  Holding them only once Lodia's `ControlPlane` exists would rest on a fact the CRD's CEL cannot see, and `api/v1alpha1/crd_test.go` would allow it as an exception, so the provider would accept a change Lodia does not keep.
 
 ## Consequences
 
