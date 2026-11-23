@@ -17,6 +17,7 @@ Decided 2026-10-26.
 ## Consequences
 
 - A network or a name that Lodia refuses, or an IP `endpoint.loadBalancer.host` or an advertise address that does not fit the network, is accepted by the `LodiaControlPlane` and refused when the provider applies the `ControlPlane`; the condition `Refused` carries the server's message.
+  The provider's CRD repeats Lodia's rules that keep `endpoint.loadBalancer.host` and `apiServer.advertiseAddress` once set, so such a value cannot be corrected in place: the `LodiaControlPlane`, or its `Cluster`, is deleted and created again with the corrected value.
 - A move of the pin of `go.lodia.io/lodia/api` that changes Lodia's spec changes the provider's CRDs: `make generate` writes them, and `make verify` fails until the result is committed.
 
 ## Code

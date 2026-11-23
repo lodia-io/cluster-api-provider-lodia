@@ -72,7 +72,7 @@ Validation is CEL in the CRD ([no-admission-webhooks](decisions/no-admission-web
 | `version` | `spec.version` | required; Lodia's pattern `^v1\.(0\|[1-9][0-9]*)\.(0\|[1-9][0-9]*)$` and minor-never-decreases rule ([types][lo-version]); the topology controller writes it from `Cluster.spec.topology.version`, which CAPI only requires to start with `v` and be semver ([webhook][wh-topology-version]), so a pre-release or build suffix is refused here |
 | `controlPlaneEndpoint` | ← `status.endpoint.apiServer.{host,port}` | written by the provider alone; the topology controller leaves it alone while empty ([IgnorePaths][ct-ignore]) |
 | `highAvailability`, `datastore`, `endpoint`, `apiServer`, `controllerManager`, `scheduler`, `addons`, `placement`, `maintenance`, `health`, `serviceAccount`, `restoreFrom` | same field | Lodia's types and rules |
-| `endpoint.loadBalancer.host` | same field | Lodia's: the address the tenant is reached at, an IP address or a DNS name that the platform points at the load balancer, and immutable, while `endpoint.loadBalancer.annotations` and `sourceRanges` change on a living tenant and the rest of `endpoint` does not ([field reference][lo-ref-host], [types][lo-endpoint]); Lodia publishes it as `status.endpoint.apiServer` from its first pass, so `controlPlaneEndpoint` is set before the load balancer has an address ([field reference][lo-ref-endpoint]); an IP address of another family than the Cluster's first service range, or inside its service or pod ranges, is refused by Lodia's API server and reported as `Refused` ([types][lo-host-network]) |
+| `endpoint.loadBalancer.host` | same field | Lodia's: the address the tenant is reached at, an IP address or a DNS name that the platform points at the load balancer, and immutable, while `endpoint.loadBalancer.annotations` and `sourceRanges` change on a living tenant and the rest of `endpoint` does not ([field reference][lo-ref-host], [types][lo-endpoint]); Lodia publishes it as `status.endpoint.apiServer` from its first pass, so the `LodiaControlPlane`'s `controlPlaneEndpoint` is set before the load balancer has an address ([field reference][lo-ref-endpoint]), while the `Cluster` takes it only once the control plane is initialized ([Cluster controller][cl-cp-endpoint]), which waits for Lodia's `Ready`, `LoadBalancerReady` among its causes ([field reference][lo-ref-ready]); an IP address of another family than the Cluster's first service range, or inside its service or pod ranges, is refused by Lodia's API server and reported as `Refused` ([types][lo-host-network]) |
 | — | `network.serviceCIDRs` ← `Cluster.spec.clusterNetwork.services.cidrBlocks` | optional on the Cluster ([ClusterNetwork][api-network]); Lodia requires one or two ([types][lo-network]) and never changes them ([rule][lo-network-immutable]), so a Cluster without them, or a change to them, is refused by Lodia's API server and reported as `Refused` |
 | — | `network.podCIDRs` ← `…pods.cidrBlocks` | the same; and so is a pod range narrower than the node mask of its family, 24 for IPv4 and 64 for IPv6 unless `controllerManager.extraArgs` sets it, or an IPv6 one more than 16 bits wider, a node mask size of a family the ranges lack, and `node-cidr-mask-size` with two ranges ([reference][lo-ref-pod-ranges]) |
 | — | `network.clusterDomain` ← `…serviceDomain` | Lodia's default `cluster.local` when unset |
@@ -95,7 +95,7 @@ The mirroring is [status-mirrors-lodia](decisions/status-mirrors-lodia.md); the 
 
 ### LodiaControlPlaneTemplate
 
-`spec.template.{metadata, spec}`, where `spec` holds the pass-through fields without `version`, `controlPlaneEndpoint` and `restoreFrom`, with the same rules; per-cluster values such as `endpoint.gateway.hostnames` and `endpoint.loadBalancer.host` come from ClusterClass variables and patches.
+`spec.template.{metadata, spec}`, where `spec` holds the pass-through fields without `version`, `controlPlaneEndpoint` and `restoreFrom`, with the same rules; per-cluster values such as `endpoint.gateway.hostnames`, `endpoint.loadBalancer.host` and the `endpoint.loadBalancer.annotations` that ask the load balancer for that address come from ClusterClass variables and patches.
 
 ## What the provider writes
 
@@ -311,7 +311,7 @@ It never copies the key ([decision](decisions/the-ca-secret-holds-no-key.md)).
 What a release holds and how releases are numbered: [releases-through-clusterctl](decisions/releases-through-clusterctl.md); how to verify one: [Verifying a release](#verifying-a-release).
 The provider's watches need Lodia's CRDs, so install Lodia before the provider.
 A release of the provider is built and tested against [Lodia at 4bb6047b2c82](https://github.com/lodia-io/lodia/tree/4bb6047b2c8222d7566f8fd64e96214a4ce2c838), the `LODIA_COMMIT` of the [`Makefile`](../Makefile) and the pseudo-version of `go.lodia.io/lodia/api` in [`go.mod`](../go.mod) and in [`api/go.mod`](../api/go.mod).
-No release of Lodia holds that commit's API yet, since its one release, `v0.1.0-alpha.1`, predates `endpoint.loadBalancer.host` ([releases](https://github.com/lodia-io/lodia/releases), [lodia-io/lodia#108](https://github.com/lodia-io/lodia/pull/108)), so that commit is the requirement of every release.
+No release of Lodia holds that commit's API yet, since its one release, `v0.1.0-alpha.1` ([the tag](https://github.com/lodia-io/lodia/tree/v0.1.0-alpha.1), at `ec154e9`), predates `endpoint.loadBalancer.host` ([5231800](https://github.com/lodia-io/lodia/commit/52318007b5003d514f58cfd1a61cbe506b9c95b5), #108), so that commit is the requirement of every release.
 
 ### The Cluster API version
 
@@ -496,6 +496,8 @@ To give the copy a new, empty control plane, remove its annotation `controlplane
 
 - *The endpoint is copied once* ([Cluster controller][cl-cp-endpoint]): in `loadBalancer` mode without `endpoint.loadBalancer.host`, a load balancer made again with another address, or given one by a change of `endpoint.loadBalancer.annotations`, moves Lodia's endpoint, and so does in `nodePort` mode the loss of the node the endpoint names ([field reference][lo-ref-endpoint], [annotations][lo-ref-host]), which leaves the Cluster, and every later join, on the old address.
   A tenant whose endpoint must outlive its load balancer names it in `endpoint.loadBalancer.host`, which Lodia publishes from the spec and which cannot change ([field reference][lo-ref-host]).
+- *A value Lodia refuses that cannot change.*
+  An IP `endpoint.loadBalancer.host` that does not fit the `Cluster`'s ranges, or an IPv6 `Cluster` in `loadBalancer` mode without an IP `host` and without `apiServer.advertiseAddress`, is refused by Lodia's API server and reported as `Refused`, and the `LodiaControlPlane`'s own rules keep `host` and `advertiseAddress` once set ([no-admission-webhooks](decisions/no-admission-webhooks.md)): the `LodiaControlPlane`, or its `Cluster`, is deleted and created again with the corrected value.
 - *MachineHealthCheck against the controller manager hold.*
   When nodes are cut off from the control plane, Lodia holds the controller manager so nothing evicts their pods ([README][lo-readme-health]); an MHC sees the same nodes NotReady and replaces the Machines.
   Recommend `remediation.triggerIf.unhealthyLessThanOrEqualTo` below Lodia's hold fraction, 0.6 ([MHC][mhc], [configuration][lo-readme-config]).
@@ -509,6 +511,7 @@ To give the copy a new, empty control plane, remove its annotation `controlplane
   The topology controller builds each `LodiaControlPlane` from the template at its pass over the Cluster ([from the template][topo-cp-template]).
   A ClusterClass change enqueues every Cluster of the class at once ([class to Clusters][topo-class-clusters]), and an edit of a template in place waits for each Cluster's next pass, since the controller watches the ClusterClass and each Cluster's own control plane, not the templates ([watches][topo-watches], [the control plane's][topo-cp-watch]).
   Lodia rolls an owner's edit of `spec` at once, outside the tenant's window, with the pending operator revision ([when][lo-upgrade-when]), and an owner's change takes no slot of the fleet ([the fleet][lo-upgrade-fleet]), so the tenants of the class whose spec the change touches roll together.
+  A change of `endpoint.loadBalancer.annotations` in the class reaches every living tenant of it, and each tenant without `endpoint.loadBalancer.host` whose load balancer takes another address moves to it while its `Cluster` keeps the old one (*The endpoint is copied once*, above).
 - *Stricter skew for CAPI workers.*
   The kubeadm preflight creates workers only on the control plane's minor ([kubeadm skew][ms-kubeadm]), while Lodia lets nodes lag three minors; existing workers keep running.
 - *Contract window.*
@@ -675,7 +678,7 @@ To give the copy a new, empty control plane, remove its annotation `controlplane
 [lo-labels]: https://github.com/lodia-io/lodia/blob/f91168b1248dc18151a0c2d442fe2050593a0866/api/v1alpha1/labels.go#L17-L20
 [lo-readme-netpol]: https://github.com/lodia-io/lodia/blob/f91168b1248dc18151a0c2d442fe2050593a0866/docs/README.md?plain=1#L198
 [lo-readme-default-deny]: https://github.com/lodia-io/lodia/blob/f91168b1248dc18151a0c2d442fe2050593a0866/docs/README.md?plain=1#L317
-[lo-ref-ready]: https://github.com/lodia-io/lodia/blob/f91168b1248dc18151a0c2d442fe2050593a0866/docs/api/controlplane.md?plain=1#L132
+[lo-ref-ready]: https://github.com/lodia-io/lodia/blob/4bb6047b2c8222d7566f8fd64e96214a4ce2c838/docs/api/controlplane.md?plain=1#L133
 [lo-readme-health]: https://github.com/lodia-io/lodia/blob/f91168b1248dc18151a0c2d442fe2050593a0866/docs/README.md?plain=1#L460
 [lo-readme-config]: https://github.com/lodia-io/lodia/blob/f91168b1248dc18151a0c2d442fe2050593a0866/docs/README.md?plain=1#L540
 [lo-kubeadm]: https://github.com/lodia-io/lodia/blob/f91168b1248dc18151a0c2d442fe2050593a0866/docs/decisions/nodes-join-with-kubeadm.md?plain=1#L10

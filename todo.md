@@ -29,3 +29,5 @@
   Operator users take `fetchConfig.url` to the GitHub release until then.
 - Add an e2e that installs the provider through cluster-api-operator, the one test of `spec.manager` as users meet it, when a user reports an install through the operator or when the operator releases a customizer that differs from the copy of v0.30.0's in `cmd/cluster-api-provider-lodia/main_test.go`.
   That test holds the flag names meanwhile.
+- A value Lodia's API server refuses because of the `Cluster`'s network (an IP `endpoint.loadBalancer.host` of another family or inside a range, an IPv6 `Cluster` in `loadBalancer` mode without `apiServer.advertiseAddress`) cannot be corrected in place: the `LodiaControlPlane` repeats Lodia's rules that keep `host` and `advertiseAddress`, so the fix is refused too, and the `LodiaControlPlane` or its `Cluster` has to be created again.
+  The owner's call: keep the repeated transition rules (what is accepted is what Lodia keeps), or hold them only once Lodia's `ControlPlane` exists, which CEL cannot see and `api/v1alpha1/crd_test.go` would have to allow as an exception.
