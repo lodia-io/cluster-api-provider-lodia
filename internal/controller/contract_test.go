@@ -7,12 +7,14 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
 	lodiav1alpha1 "go.lodia.io/lodia/api/v1alpha1"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
@@ -170,6 +172,38 @@ func TestEveryOptionalFieldReachesTheControlPlane(t *testing.T) {
 				t.Errorf("removed fields stayed: placement %+v, service account %+v", cp.Spec.Placement, cp.Spec.ServiceAccount)
 			}
 		})
+	}
+}
+
+func TestALoadBalancersAnnotationsAndSourceRangesChangeOnALivingControlPlane(t *testing.T) {
+	cluster, lcp := create(t, namespace(t), "balanced", func(_ *clusterv1.Cluster, l *v1alpha1.LodiaControlPlane) {
+		l.Spec.Endpoint = lodiav1alpha1.Endpoint{LoadBalancer: &lodiav1alpha1.LoadBalancerEndpoint{
+			Host:         "203.0.113.20",
+			Class:        "example.com/balancer",
+			SourceRanges: []lodiav1alpha1.CIDR{"198.51.100.0/24", "192.0.2.0/24"},
+			Annotations:  map[string]string{"example.com/address": "203.0.113.21", "example.com/dropped": "yes"},
+		}}
+	})
+	r := direct(t, interceptor.Funcs{})
+	untilBlockMove(t, r, lcp)
+	passes(t, r, lcp)
+
+	updateSpec(t, lcp, func(l *v1alpha1.LodiaControlPlane) {
+		l.Spec.Endpoint.LoadBalancer.SourceRanges = []lodiav1alpha1.CIDR{"198.51.100.0/25"}
+		l.Spec.Endpoint.LoadBalancer.Annotations = map[string]string{"example.com/address": "203.0.113.20"}
+	})
+	passes(t, r, lcp)
+	cp := controlPlaneOf(cluster)
+	get(t, cp)
+	if diff := cmp.Diff(lcp.Spec.Endpoint, cp.Spec.Endpoint); diff != "" {
+		t.Errorf("ControlPlane endpoint (-LodiaControlPlane +ControlPlane):\n%s", diff)
+	}
+
+	moved := lcp.DeepCopy()
+	moved.Spec.Endpoint.LoadBalancer.Host = "203.0.113.30"
+	err := k8s.Patch(t.Context(), moved, client.MergeFrom(lcp))
+	if !apierrors.IsInvalid(err) || !strings.Contains(err.Error(), "endpoint is immutable in v1alpha1 but for loadBalancer.annotations and loadBalancer.sourceRanges") {
+		t.Errorf("changing endpoint.loadBalancer.host returned %v", err)
 	}
 }
 

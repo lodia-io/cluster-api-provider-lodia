@@ -53,9 +53,10 @@ type LodiaControlPlaneTemplateResource struct {
 // spec clusters can share: all but the version, which the Cluster's topology
 // sets, controlPlaneEndpoint and restoreFrom.
 // +kubebuilder:validation:XValidation:rule="!has(self.highAvailability) || !has(self.apiServer) || !has(self.apiServer.replicas) || self.apiServer.replicas >= 2",message="highAvailability runs at least two API servers"
-// +kubebuilder:validation:XValidation:rule="!has(self.apiServer) || !has(self.apiServer.advertiseAddress) || has(self.endpoint.gateway)",message="apiServer.advertiseAddress is set only with endpoint.gateway"
-// +kubebuilder:validation:XValidation:rule="!has(self.endpoint.gateway) || (has(self.apiServer) && has(self.apiServer.advertiseAddress) ? has(oldSelf.apiServer) && has(oldSelf.apiServer.advertiseAddress) && oldSelf.apiServer.advertiseAddress == self.apiServer.advertiseAddress : !has(oldSelf.apiServer) || !has(oldSelf.apiServer.advertiseAddress))",message="apiServer.advertiseAddress is immutable"
+// +kubebuilder:validation:XValidation:rule="!has(self.apiServer) || !has(self.apiServer.advertiseAddress) || (has(self.endpoint.gateway) || has(self.endpoint.loadBalancer) && (!has(self.endpoint.loadBalancer.host) || !isIP(self.endpoint.loadBalancer.host)))",message="apiServer.advertiseAddress is set only where apiserver-proxy runs: with endpoint.gateway, or with endpoint.loadBalancer unless its host is an IP address"
+// +kubebuilder:validation:XValidation:rule="!(has(self.endpoint.gateway) || has(self.endpoint.loadBalancer) && (!has(self.endpoint.loadBalancer.host) || !isIP(self.endpoint.loadBalancer.host))) || (has(self.apiServer) && has(self.apiServer.advertiseAddress) ? has(oldSelf.apiServer) && has(oldSelf.apiServer.advertiseAddress) && oldSelf.apiServer.advertiseAddress == self.apiServer.advertiseAddress : !has(oldSelf.apiServer) || !has(oldSelf.apiServer.advertiseAddress))",message="apiServer.advertiseAddress is immutable"
 // +kubebuilder:validation:XValidation:rule="has(self.datastore) && has(self.datastore.className) && size(self.datastore.className) > 0 ? has(oldSelf.datastore) && has(oldSelf.datastore.className) && oldSelf.datastore.className == self.datastore.className : !has(oldSelf.datastore) || !has(oldSelf.datastore.className) || size(oldSelf.datastore.className) == 0",message="datastore.className is immutable in v1alpha1"
+// +kubebuilder:validation:XValidation:rule="!has(self.serviceAccount) || !has(self.serviceAccount.issuer) || !has(self.apiServer) || !has(self.apiServer.authentication) || !has(self.apiServer.authentication.jwt) || !self.apiServer.authentication.jwt.exists(a, a.issuer.url == self.serviceAccount.issuer)",message="kube-apiserver refuses a JWT issuer.url equal to serviceAccount.issuer"
 type LodiaControlPlaneTemplateResourceSpec struct {
 	// HighAvailability runs every component with more than one replica,
 	// spread by FailureTolerance, and etcd with three members.
@@ -69,7 +70,6 @@ type LodiaControlPlaneTemplateResourceSpec struct {
 
 	// Endpoint is how nodes, people and pods reach the API server.
 	// +required
-	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="endpoint is immutable in v1alpha1"
 	Endpoint lodiav1alpha1.Endpoint `json:"endpoint"`
 
 	// APIServer configures kube-apiserver.

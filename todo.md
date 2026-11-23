@@ -20,11 +20,14 @@
   The binding that the render drops, `cluster-api-provider-lodia-capi-kubeadm-bootstrap-lodia-controlplane`, stays too: say in the release notes that it stays in every management cluster that clusterctl upgrades, and is to be deleted by hand.
   The comparison of `make verify` fails on a render that drops it, since clusterctl would leave it behind, so that change adds an allowance for it to `test/components/upgrade.go`, with the release note.
 - Ask for the provider's place in clusterctl's built-in list ([the contract's rules for names](https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/docs/book/src/developer/providers/contracts/clusterctl.md?plain=1#L34-L82)), once Lodia has its first release and the provider has `v0.1.0`.
-  Lodia has neither a release nor a tag today: `gh release list -R lodia-io/lodia` is empty.
+  Lodia's first release is the pre-release `v0.1.0-alpha.1`, which predates the API the provider pins (`gh release list -R lodia-io/lodia`, [lodia-io/lodia#108](https://github.com/lodia-io/lodia/pull/108)).
   The issue is the owner's to open, and the name the list takes is settled there; installations under `lodia` keep working through their `providers:` entry, and `clusterctl delete` and `init` align them with the list.
   A name other than `lodia` also needs the label in `config/default/kustomization.yaml` changed.
   Then the `providers:` entry and the operator's `fetchConfig.url` in `docs/README.md` go.
+- The open question in `docs/README.md` on the cut-over from Kamaji cites Lodia's roadmap at f91168b (`lo-roadmap-cutover`), whose lines on the cut-over Lodia's roadmap no longer has at 6706d74 or later: source the question elsewhere or drop it.
 - Publish `control-plane-components.yaml` and `metadata.yaml` as an OCI artifact for the operator's `fetchConfig.oci` once clusterctl reads OCI ([kubernetes-sigs/cluster-api#13729](https://github.com/kubernetes-sigs/cluster-api/issues/13729), open) or a user needs it.
   Operator users take `fetchConfig.url` to the GitHub release until then.
 - Add an e2e that installs the provider through cluster-api-operator, the one test of `spec.manager` as users meet it, when a user reports an install through the operator or when the operator releases a customizer that differs from the copy of v0.30.0's in `cmd/cluster-api-provider-lodia/main_test.go`.
   That test holds the flag names meanwhile.
+- A value Lodia's API server refuses because of the `Cluster`'s network (an IP `endpoint.loadBalancer.host` of another family or inside a range, an IPv6 `Cluster` in `loadBalancer` mode without `apiServer.advertiseAddress`) cannot be corrected in place: the `LodiaControlPlane` repeats Lodia's rules that keep `host` and `advertiseAddress`, so the fix is refused too, and the `LodiaControlPlane` or its `Cluster` has to be created again.
+  The owner's call: keep the repeated transition rules (what is accepted is what Lodia keeps), or hold them only once Lodia's `ControlPlane` exists, which CEL cannot see and `api/v1alpha1/crd_test.go` would have to allow as an exception.
