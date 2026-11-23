@@ -26,7 +26,7 @@ In this order:
 | component | source | installed by |
 |---|---|---|
 | cert-manager v1.21.3 | its release YAML | the suite, each Deployment waited on until `Available` |
-| Lodia and etcd-druid | the chart of the [Lodia commit](https://github.com/lodia-io/lodia/tree/f91168b1248dc18151a0c2d442fe2050593a0866) that `go.mod` pins, fetched by `make e2e-lodia` into `work/lodia`, with images built by ko into the kind cluster | helm, with `--wait` |
+| Lodia and etcd-druid | the chart of the [Lodia commit](https://github.com/lodia-io/lodia/tree/4bb6047b2c8222d7566f8fd64e96214a4ce2c838) that `go.mod` pins, fetched by `make e2e-lodia` into `work/lodia`, with images built by ko into the kind cluster | helm, with `--wait` |
 | Cluster API and its kubeadm bootstrap provider v1.15.0-beta.0 | their release YAMLs | clusterctl's `Init` |
 | Cluster API provider Docker v1.15.0-beta.0 | the release's `infrastructure-components-development.yaml`, whose image is built for the [staging registry](https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/Makefile#L1071-L1074) | clusterctl's `Init` |
 | this provider | `make release-components`, the target that renders the release's components YAML, with the image repository `kind.local/cluster-api-provider-lodia` and the host's one platform, so that ko loads the image into the kind cluster, and the render of `config/default` in the target's own directory, which two targets on one host do not share | clusterctl's `Init` |
