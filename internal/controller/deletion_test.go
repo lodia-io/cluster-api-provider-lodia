@@ -20,7 +20,7 @@ import (
 	"go.lodia.io/cluster-api-provider-lodia/api/v1alpha1"
 )
 
-func TestDeletingWaitsUntilTheControlPlaneIsGone(t *testing.T) {
+func TestDeletingTheClusterConfirmsAndDeletesTheControlPlaneAndWaitsUntilItIsGone(t *testing.T) {
 	ns := namespace(t)
 	startManager(t, ns)
 	cluster, lcp := create(t, ns, "gamma")
@@ -32,6 +32,7 @@ func TestDeletingWaitsUntilTheControlPlaneIsGone(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	startDeletingTheCluster(t, cluster)
 	if err := k8s.Delete(t.Context(), lcp); err != nil {
 		t.Fatal(err)
 	}
@@ -43,6 +44,9 @@ func TestDeletingWaitsUntilTheControlPlaneIsGone(t *testing.T) {
 		get(t, lcp)
 		return ready(lcp, metav1.ConditionFalse, clusterv1.DeletingReason, "waiting for ControlPlane gamma to be deleted")
 	})
+	if got := cp.Annotations[lodiav1alpha1.DeletionConfirmedAnnotation]; got != "true" {
+		t.Errorf("%s is %q", lodiav1alpha1.DeletionConfirmedAnnotation, got)
+	}
 	available(t, lcp, metav1.ConditionFalse, clusterv1.DeletingReason)
 	if !controllerutil.ContainsFinalizer(lcp, v1alpha1.Finalizer) {
 		t.Errorf("finalizers %v", lcp.Finalizers)
@@ -64,6 +68,100 @@ func TestDeletingWaitsUntilTheControlPlaneIsGone(t *testing.T) {
 	absent(t, cp)
 }
 
+func startDeletingTheCluster(t *testing.T, cluster *clusterv1.Cluster) {
+	t.Helper()
+	before := cluster.DeepCopy()
+	controllerutil.AddFinalizer(cluster, clusterv1.ClusterFinalizer)
+	if err := k8s.Patch(t.Context(), cluster, client.MergeFrom(before)); err != nil {
+		t.Fatal(err)
+	}
+	if err := k8s.Delete(t.Context(), cluster); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func refused(lcp *v1alpha1.LodiaControlPlane, cluster *clusterv1.Cluster) error {
+	if err := ready(lcp, metav1.ConditionFalse, clusterv1.DeletingReason, fmt.Sprintf(
+		"ControlPlane %s is not deleted, since the provider confirms its delete only while Cluster %s is being deleted: delete the Cluster, or confirm the ControlPlane by hand; the API server answered: ",
+		cluster.Name, cluster.Name)); err != nil {
+		return err
+	}
+	return ready(lcp, metav1.ConditionFalse, clusterv1.DeletingReason, fmt.Sprintf(
+		"kubectl annotate controlplane %s --namespace %s --overwrite %s=true", cluster.Name, cluster.Namespace, lodiav1alpha1.DeletionConfirmedAnnotation))
+}
+
+func TestALodiaControlPlaneDeletedAloneLeavesTheControlPlaneAndReportsTheRefusal(t *testing.T) {
+	cluster, lcp, cp, r, _ := readyControlPlane(t, "alone")
+	if err := k8s.Delete(t.Context(), lcp); err != nil {
+		t.Fatal(err)
+	}
+
+	for range 2 {
+		passes(t, r, lcp)
+		get(t, lcp)
+		if !controllerutil.ContainsFinalizer(lcp, v1alpha1.Finalizer) {
+			t.Fatalf("finalizers %v", lcp.Finalizers)
+		}
+		get(t, cp)
+		if !cp.DeletionTimestamp.IsZero() {
+			t.Fatal("the ControlPlane is being deleted")
+		}
+		if got, ok := cp.Annotations[lodiav1alpha1.DeletionConfirmedAnnotation]; ok {
+			t.Fatalf("the provider confirmed the ControlPlane: %q", got)
+		}
+	}
+	if err := refused(lcp, cluster); err != nil {
+		t.Error(err)
+	}
+	available(t, lcp, metav1.ConditionFalse, clusterv1.DeletingReason)
+}
+
+func TestARefusedDeleteGoesOnOnceTheClusterIsDeletedOrTheControlPlaneConfirmed(t *testing.T) {
+	for name, remedy := range map[string]func(*testing.T, *clusterv1.Cluster){
+		"the Cluster deleted": startDeletingTheCluster,
+		"the ControlPlane confirmed by hand": func(t *testing.T, cluster *clusterv1.Cluster) {
+			cp := controlPlaneOf(cluster)
+			get(t, cp)
+			before := cp.DeepCopy()
+			metav1.SetMetaDataAnnotation(&cp.ObjectMeta, lodiav1alpha1.DeletionConfirmedAnnotation, "true")
+			if err := k8s.Patch(t.Context(), cp, client.MergeFrom(before)); err != nil {
+				t.Fatal(err)
+			}
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			ns := namespace(t)
+			startManager(t, ns)
+			cluster, lcp := create(t, ns, "refused")
+			cp := controlPlaneOf(cluster)
+			eventually(t, func() error { return k8s.Get(t.Context(), client.ObjectKeyFromObject(cp), cp) })
+			before := cp.DeepCopy()
+			cp.Finalizers = append(cp.Finalizers, lodiav1alpha1.DatastoreFinalizer)
+			if err := k8s.Patch(t.Context(), cp, client.MergeFrom(before)); err != nil {
+				t.Fatal(err)
+			}
+			if err := k8s.Delete(t.Context(), lcp); err != nil {
+				t.Fatal(err)
+			}
+			eventually(t, func() error {
+				get(t, lcp)
+				return refused(lcp, cluster)
+			})
+			settled(t, lcp)
+
+			remedy(t, cluster)
+			eventually(t, func() error {
+				get(t, cp)
+				if cp.DeletionTimestamp.IsZero() {
+					return errors.New("the ControlPlane is not being deleted")
+				}
+				get(t, lcp)
+				return ready(lcp, metav1.ConditionFalse, clusterv1.DeletingReason, "waiting for ControlPlane refused to be deleted")
+			})
+		})
+	}
+}
+
 func deleteTheCluster(t *testing.T, cluster *clusterv1.Cluster) {
 	t.Helper()
 	if err := k8s.Delete(t.Context(), cluster); err != nil {
@@ -77,7 +175,7 @@ func deleteTheCluster(t *testing.T, cluster *clusterv1.Cluster) {
 	})
 }
 
-func TestDeletionCompletesOnceTheClusterIsGone(t *testing.T) {
+func TestTheControlPlaneIsConfirmedBeforeTheFinalizerGoesOnceTheClusterIsGone(t *testing.T) {
 	cluster, lcp, cp, r, _ := readyControlPlane(t, "phi")
 	deleteTheCluster(t, cluster)
 	if err := k8s.Delete(t.Context(), lcp); err != nil {
@@ -90,29 +188,27 @@ func TestDeletionCompletesOnceTheClusterIsGone(t *testing.T) {
 	if !cp.DeletionTimestamp.IsZero() {
 		t.Error("the provider deleted the ControlPlane the garbage collector owns")
 	}
-}
-
-func TestDeletionCompletesOnceTheOwnerReferenceIsGone(t *testing.T) {
-	_, lcp, _, r, _ := readyControlPlane(t, "phi-ref")
-	updateSpec(t, lcp, func(l *v1alpha1.LodiaControlPlane) { l.OwnerReferences = nil })
-	if err := k8s.Delete(t.Context(), lcp); err != nil {
-		t.Fatal(err)
+	if got := cp.Annotations[lodiav1alpha1.DeletionConfirmedAnnotation]; got != "true" {
+		t.Errorf("%s is %q", lodiav1alpha1.DeletionConfirmedAnnotation, got)
 	}
-
-	passes(t, r, lcp)
-	absent(t, lcp)
+	if err := k8s.Delete(t.Context(), cp, client.Preconditions{UID: &cp.UID}); err != nil {
+		t.Errorf("the garbage collector's delete: %v", err)
+	}
 }
 
-func TestAFailedFinalizerRemovalIsRetried(t *testing.T) {
-	cluster, lcp, _, r, _ := readyControlPlane(t, "phi-failed")
+func TestAFailedConfirmationKeepsTheFinalizerOnceTheClusterIsGone(t *testing.T) {
+	cluster, lcp, cp, r, _ := readyControlPlane(t, "phi-confirm")
 	deleteTheCluster(t, cluster)
 	if err := k8s.Delete(t.Context(), lcp); err != nil {
 		t.Fatal(err)
 	}
 	failure := errors.New("etcdserver: leader changed")
 	failing := direct(t, interceptor.Funcs{
-		Patch: func(context.Context, client.WithWatch, client.Object, client.Patch, ...client.PatchOption) error {
-			return failure
+		Patch: func(ctx context.Context, c client.WithWatch, obj client.Object, patch client.Patch, opts ...client.PatchOption) error {
+			if isControlPlane(obj) {
+				return failure
+			}
+			return c.Patch(ctx, obj, patch, opts...)
 		},
 	})
 
@@ -122,6 +218,67 @@ func TestAFailedFinalizerRemovalIsRetried(t *testing.T) {
 	get(t, lcp)
 	if !controllerutil.ContainsFinalizer(lcp, v1alpha1.Finalizer) {
 		t.Errorf("finalizers %v", lcp.Finalizers)
+	}
+	get(t, cp)
+	if got, ok := cp.Annotations[lodiav1alpha1.DeletionConfirmedAnnotation]; ok {
+		t.Errorf("%s is %q", lodiav1alpha1.DeletionConfirmedAnnotation, got)
+	}
+	passes(t, r, lcp)
+	absent(t, lcp)
+}
+
+func TestADeletedLodiaControlPlaneWithoutTheOwnerReferenceWaitsForIt(t *testing.T) {
+	cluster, lcp, cp, r, _ := readyControlPlane(t, "phi-ref")
+	startDeletingTheCluster(t, cluster)
+	owners := lcp.OwnerReferences
+	updateSpec(t, lcp, func(l *v1alpha1.LodiaControlPlane) { l.OwnerReferences = nil })
+	if err := k8s.Delete(t.Context(), lcp); err != nil {
+		t.Fatal(err)
+	}
+
+	for range 2 {
+		passes(t, r, lcp)
+		get(t, lcp)
+		if !controllerutil.ContainsFinalizer(lcp, v1alpha1.Finalizer) {
+			t.Fatalf("finalizers %v", lcp.Finalizers)
+		}
+		get(t, cp)
+		if _, ok := cp.Annotations[lodiav1alpha1.DeletionConfirmedAnnotation]; ok || !cp.DeletionTimestamp.IsZero() {
+			t.Fatalf("the ControlPlane was confirmed or deleted: annotations %v, deletion %v", cp.Annotations, cp.DeletionTimestamp)
+		}
+	}
+
+	updateSpec(t, lcp, func(l *v1alpha1.LodiaControlPlane) { l.OwnerReferences = owners })
+	passes(t, r, lcp)
+	absent(t, cp)
+}
+
+func TestAFailedFinalizerRemovalIsRetried(t *testing.T) {
+	cluster, lcp, cp, r, _ := readyControlPlane(t, "phi-failed")
+	deleteTheCluster(t, cluster)
+	if err := k8s.Delete(t.Context(), lcp); err != nil {
+		t.Fatal(err)
+	}
+	failure := errors.New("etcdserver: leader changed")
+	failing := direct(t, interceptor.Funcs{
+		Patch: func(ctx context.Context, c client.WithWatch, obj client.Object, patch client.Patch, opts ...client.PatchOption) error {
+			if _, ok := obj.(*v1alpha1.LodiaControlPlane); ok {
+				return failure
+			}
+			return c.Patch(ctx, obj, patch, opts...)
+		},
+	})
+
+	if err := pass(t.Context(), failing, lcp); !errors.Is(err, failure) {
+		t.Fatalf("the pass returned %v", err)
+	}
+	get(t, lcp)
+	if !controllerutil.ContainsFinalizer(lcp, v1alpha1.Finalizer) {
+		t.Errorf("finalizers %v", lcp.Finalizers)
+	}
+	get(t, cp)
+	if got := cp.Annotations[lodiav1alpha1.DeletionConfirmedAnnotation]; got != "true" {
+		t.Errorf("%s is %q", lodiav1alpha1.DeletionConfirmedAnnotation, got)
 	}
 	passes(t, r, lcp)
 	absent(t, lcp)
@@ -163,7 +320,8 @@ func TestAGoneClusterKeepsTheFinalizerUntilDeletion(t *testing.T) {
 }
 
 func TestAReadErrorWhileDeletingKeepsTheFinalizer(t *testing.T) {
-	_, lcp, cp, r, _ := readyControlPlane(t, "read-error")
+	cluster, lcp, cp, r, _ := readyControlPlane(t, "read-error")
+	startDeletingTheCluster(t, cluster)
 	if err := k8s.Delete(t.Context(), lcp); err != nil {
 		t.Fatal(err)
 	}

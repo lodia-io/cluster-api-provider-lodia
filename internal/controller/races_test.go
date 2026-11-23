@@ -26,7 +26,7 @@ import (
 
 func TestAnInitializedControlPlaneIsNotRecreated(t *testing.T) {
 	cluster, lcp, cp, r, issued := readyControlPlane(t, "xi")
-	if err := k8s.Delete(t.Context(), cp); err != nil {
+	if err := confirmedDelete(t.Context(), cp); err != nil {
 		t.Fatal(err)
 	}
 
@@ -62,7 +62,7 @@ func TestAControlPlaneVanishingBeforeTheApplyIsNotRecreated(t *testing.T) {
 	racing := direct(t, interceptor.Funcs{
 		Apply: func(ctx context.Context, c client.WithWatch, obj runtime.ApplyConfiguration, opts ...client.ApplyOption) error {
 			if isControlPlaneApply(obj) {
-				if err := k8s.Delete(ctx, controlPlaneOf(cluster)); err != nil {
+				if err := confirmedDelete(ctx, controlPlaneOf(cluster)); err != nil {
 					return err
 				}
 			}
@@ -90,7 +90,7 @@ func TestAControlPlaneReplacedBeforeTheApplyIsLeftAlone(t *testing.T) {
 	racing := direct(t, interceptor.Funcs{
 		Apply: func(ctx context.Context, c client.WithWatch, obj runtime.ApplyConfiguration, opts ...client.ApplyOption) error {
 			if isControlPlaneApply(obj) && replacement.UID == "" {
-				if err := k8s.Delete(ctx, controlPlaneOf(cluster)); err != nil {
+				if err := confirmedDelete(ctx, controlPlaneOf(cluster)); err != nil {
 					return err
 				}
 				if err := k8s.Create(ctx, replacement); err != nil {
@@ -112,6 +112,7 @@ func TestAControlPlaneReplacedBeforeTheApplyIsLeftAlone(t *testing.T) {
 
 func TestAControlPlaneReplacedBeforeTheDeleteIsLeftAlone(t *testing.T) {
 	cluster, lcp, cp, r, _ := readyControlPlane(t, "tau-delete")
+	startDeletingTheCluster(t, cluster)
 	if err := k8s.Delete(t.Context(), lcp); err != nil {
 		t.Fatal(err)
 	}
@@ -120,7 +121,7 @@ func TestAControlPlaneReplacedBeforeTheDeleteIsLeftAlone(t *testing.T) {
 	racing := direct(t, interceptor.Funcs{
 		Delete: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.DeleteOption) error {
 			if replacement.UID == "" {
-				if err := k8s.Delete(ctx, controlPlaneOf(cluster)); err != nil {
+				if err := confirmedDelete(ctx, controlPlaneOf(cluster)); err != nil {
 					return err
 				}
 				if err := k8s.Create(ctx, replacement); err != nil {
@@ -144,6 +145,44 @@ func TestAControlPlaneReplacedBeforeTheDeleteIsLeftAlone(t *testing.T) {
 	get(t, got)
 	if !got.DeletionTimestamp.IsZero() {
 		t.Error("the replacement is being deleted")
+	}
+}
+
+func TestAControlPlaneReplacedBeforeTheConfirmationIsLeftAlone(t *testing.T) {
+	cluster, lcp, cp, r, _ := readyControlPlane(t, "tau-confirm")
+	startDeletingTheCluster(t, cluster)
+	if err := k8s.Delete(t.Context(), lcp); err != nil {
+		t.Fatal(err)
+	}
+	replacement := cp.DeepCopy()
+	replacement.ObjectMeta = metav1.ObjectMeta{Namespace: cp.Namespace, Name: cp.Name, Finalizers: []string{lodiav1alpha1.DatastoreFinalizer}}
+	racing := direct(t, interceptor.Funcs{
+		Patch: func(ctx context.Context, c client.WithWatch, obj client.Object, patch client.Patch, opts ...client.PatchOption) error {
+			if isControlPlane(obj) && replacement.UID == "" {
+				if err := confirmedDelete(ctx, controlPlaneOf(cluster)); err != nil {
+					return err
+				}
+				if err := k8s.Create(ctx, replacement); err != nil {
+					return err
+				}
+			}
+			return c.Patch(ctx, obj, patch, opts...)
+		},
+	})
+	if err := pass(t.Context(), racing, lcp); !apierrors.IsInvalid(err) {
+		t.Fatalf("the pass returned %v, want the UID refused", err)
+	}
+	got := controlPlaneOf(cluster)
+	get(t, got)
+	if _, ok := got.Annotations[lodiav1alpha1.DeletionConfirmedAnnotation]; got.UID != replacement.UID || ok || !got.DeletionTimestamp.IsZero() {
+		t.Errorf("the replacement changed: uid %s, annotations %v, deletion %v", got.UID, got.Annotations, got.DeletionTimestamp)
+	}
+
+	passes(t, r, lcp)
+	absent(t, lcp)
+	get(t, got)
+	if _, ok := got.Annotations[lodiav1alpha1.DeletionConfirmedAnnotation]; ok || !got.DeletionTimestamp.IsZero() {
+		t.Errorf("the replacement changed: annotations %v, deletion %v", got.Annotations, got.DeletionTimestamp)
 	}
 }
 
@@ -203,7 +242,8 @@ func TestAStaleCacheDoesNotHideALeftoverControlPlane(t *testing.T) {
 }
 
 func TestAStaleCacheDoesNotLetDeletionForgetTheControlPlane(t *testing.T) {
-	_, lcp, cp, _, _ := readyControlPlane(t, "stale-delete")
+	cluster, lcp, cp, _, _ := readyControlPlane(t, "stale-delete")
+	startDeletingTheCluster(t, cluster)
 	held := cp.DeepCopy()
 	cp.Finalizers = append(cp.Finalizers, lodiav1alpha1.DatastoreFinalizer)
 	if err := k8s.Patch(t.Context(), cp, client.MergeFrom(held)); err != nil {

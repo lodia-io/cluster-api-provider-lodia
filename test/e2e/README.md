@@ -101,6 +101,7 @@ Each waits within a bound of its own, but the third and the seventh, which read 
 22. The objects of the graph stop changing: four reads of their resourceVersions, 15 seconds apart, each agree with the one before, within 2 minutes.
 23. They stay as they are for 2 minutes, read every 5 seconds, but for what Lodia and etcd-druid write.
 24. Deleting the `Cluster`, once the etcd claim and the two copied Secrets exist and exactly one container is labelled for the `Cluster`, removes the `LodiaControlPlane`, Lodia's `ControlPlane`, the etcd claim, the two Secrets and the worker's container.
+    Lodia's chart refuses the delete of a `ControlPlane` that is not confirmed, so the step fails for a provider that does not confirm it while the `Cluster` is being deleted ([decision](../../docs/decisions/a-controlplane-is-confirmed-only-for-its-clusters-deletion.md)).
 
 The move is the only way the suite tests that the provider refuses `clusterctl move`.
 The provider writes `block-move` on every `LodiaControlPlane`, so clusterctl pauses the `Cluster`, finds the annotation and waits for it to go, which with its [backoff](https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/cmd/clusterctl/client/cluster/mover.go#L366-L377), 5 seconds growing by 1.5 for ten steps, takes about six minutes before it fails.

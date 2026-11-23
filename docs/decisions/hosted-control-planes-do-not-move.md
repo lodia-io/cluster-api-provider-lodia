@@ -18,10 +18,10 @@ Decided 2026-10-26.
 ## Why
 
 - `clusterctl move` re-creates the objects elsewhere and deletes the source ones ([deleteSourceObject][move-delete]), and a hosted control plane is Lodia's pods, Services, etcd and Secrets in the source management cluster, under Lodia's `ControlPlane`, which move would not carry: it finds the kinds whose CRDs carry the label `clusterctl.cluster.x-k8s.io` ([discovery](https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/cmd/clusterctl/client/cluster/objectgraph.go#L344-L430)), and Lodia's CRDs carry none ([CRD](https://github.com/lodia-io/lodia/blob/f91168b1248dc18151a0c2d442fe2050593a0866/api/crds/lodia.io_controlplanes.yaml#L1-L8)).
-  The `ControlPlane` would follow its owner into garbage collection.
+  The `ControlPlane` would be left behind without its owner.
 - The annotation is permanent because a paused `LodiaControlPlane` is not reconciled, so the provider could not put it back during a move.
-  With it removed by hand, a live move deletes the source `LodiaControlPlane` ([delete](https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/cmd/clusterctl/client/cluster/mover.go#L1253-L1314)), the garbage collector deletes Lodia's `ControlPlane`, and its `lodia.io/datastore` finalizer ends with the etcd deleted ([finalizer][lo-finalizer]).
-  The refusal of a copy only keeps the target from building an empty control plane, so the `Cluster` has none in either management cluster.
+  With it removed by hand, a live move deletes the source `LodiaControlPlane` ([delete](https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/cmd/clusterctl/client/cluster/mover.go#L1253-L1314)) before the `Cluster` and while the `Cluster` is paused ([pause](https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/cmd/clusterctl/client/cluster/mover.go#L357), [order](https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/cmd/clusterctl/client/cluster/mover.go#L402-L408)), so the provider confirms nothing and Lodia refuses the garbage collector's delete of its `ControlPlane` ([confirmation](a-controlplane-is-confirmed-only-for-its-clusters-deletion.md)).
+  The `ControlPlane` stays in the source management cluster without an owner, and the refusal of a copy keeps the target from building an empty control plane, so the `Cluster` has none in the target.
 - `block-move` is not enough: `move --to-directory` followed by `--from-directory` never read the annotation ([to directory](https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/cmd/clusterctl/client/cluster/mover.go#L421-L473), [from directory](https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/cmd/clusterctl/client/cluster/mover.go#L475-L515)), and neither does a restore from a backup of the Cluster API objects.
   A move and a restore keep annotations and give the copy a new UID.
   Without a refusal the provider would find no `ControlPlane` for the copy, build a new one with a new CA and an empty etcd, and overwrite both Secrets, silently.
@@ -51,5 +51,4 @@ Decided 2026-10-26.
 [move-delete]: https://github.com/kubernetes-sigs/cluster-api/blob/v1.15.0-beta.0/cmd/clusterctl/client/cluster/mover.go#L1260-L1312
 
 <!-- Lodia at f91168b -->
-[lo-finalizer]: https://github.com/lodia-io/lodia/blob/f91168b1248dc18151a0c2d442fe2050593a0866/api/v1alpha1/labels.go#L92-L94
 [lo-sealed]: https://github.com/lodia-io/lodia/blob/f91168b1248dc18151a0c2d442fe2050593a0866/api/v1alpha1/labels.go#L96-L101
